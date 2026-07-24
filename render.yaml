@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: squadlive-backend
+    runtime: node
+    rootDir: Backend
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+    disk:
+      name: squadlive-data
+      mountPath: /var/data
+      sizeGB: 1

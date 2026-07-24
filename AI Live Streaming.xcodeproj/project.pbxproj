@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		5A8134443005E662002D3583 /* AI Live Streaming.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "AI Live Streaming.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A8134443005E662002D3583 /* SquadLive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SquadLive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,7 +40,7 @@
 		5A8134453005E662002D3583 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				5A8134443005E662002D3583 /* AI Live Streaming.app */,
+				5A8134443005E662002D3583 /* SquadLive.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		5A8134433005E662002D3583 /* AI Live Streaming */ = {
+		5A8134433005E662002D3583 /* SquadLive */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 5A81344F3005E664002D3583 /* Build configuration list for PBXNativeTarget "AI Live Streaming" */;
+			buildConfigurationList = 5A81344F3005E664002D3583 /* Build configuration list for PBXNativeTarget "SquadLive" */;
 			buildPhases = (
 				5A8134403005E662002D3583 /* Sources */,
 				5A8134413005E662002D3583 /* Frameworks */,
@@ -63,11 +63,11 @@
 			fileSystemSynchronizedGroups = (
 				5A8134463005E662002D3583 /* AI Live Streaming */,
 			);
-			name = "AI Live Streaming";
+			name = SquadLive;
 			packageProductDependencies = (
 			);
-			productName = "AI Live Streaming";
-			productReference = 5A8134443005E662002D3583 /* AI Live Streaming.app */;
+			productName = SquadLive;
+			productReference = 5A8134443005E662002D3583 /* SquadLive.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				5A8134433005E662002D3583 /* AI Live Streaming */,
+				5A8134433005E662002D3583 /* SquadLive */,
 			);
 		};
 /* End PBXProject section */
@@ -244,8 +244,10 @@
 		5A8134503005E664002D3583 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "SquadLiveIcon1 SquadLiveIcon2 SquadLiveIcon3";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D9QJA58T8W;
@@ -254,6 +256,13 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = SquadLive;
+				INFOPLIST_KEY_DEEPSEEK_API_KEY = "";
+				INFOPLIST_KEY_SQUADLIVE_API_BASE_URL = "http://127.0.0.1:8787";
+				INFOPLIST_KEY_NSCameraUsageDescription = "SquadLive uses the camera only for your private AI live session experience.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "SquadLive uses the microphone so you can talk naturally with your AI listeners.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "SquadLive saves watermarked live stream records to your photo library.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "SquadLive uses speech recognition to transcribe your words during AI sessions.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -264,10 +273,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.liuzhigang.AI-Live-Streaming";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -275,12 +284,13 @@
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,7";
 				XROS_DEPLOYMENT_TARGET = 26.4;
 			};
 			name = Debug;
@@ -288,8 +298,10 @@
 		5A8134513005E664002D3583 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "SquadLiveIcon1 SquadLiveIcon2 SquadLiveIcon3";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D9QJA58T8W;
@@ -298,6 +310,13 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = SquadLive;
+				INFOPLIST_KEY_DEEPSEEK_API_KEY = "";
+				INFOPLIST_KEY_SQUADLIVE_API_BASE_URL = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = "SquadLive uses the camera only for your private AI live session experience.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "SquadLive uses the microphone so you can talk naturally with your AI listeners.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "SquadLive saves watermarked live stream records to your photo library.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "SquadLive uses speech recognition to transcribe your words during AI sessions.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -308,10 +327,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.liuzhigang.AI-Live-Streaming";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -319,12 +338,13 @@
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,7";
 				XROS_DEPLOYMENT_TARGET = 26.4;
 			};
 			name = Release;
@@ -341,7 +361,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		5A81344F3005E664002D3583 /* Build configuration list for PBXNativeTarget "AI Live Streaming" */ = {
+		5A81344F3005E664002D3583 /* Build configuration list for PBXNativeTarget "SquadLive" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				5A8134503005E664002D3583 /* Debug */,

@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SquadLive 管理后台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090b10;
+      --side: #10131b;
+      --panel: #151922;
+      --panel2: #1c2230;
+      --line: #2a3141;
+      --text: #f6f7fb;
+      --muted: #9ca5b6;
+      --brand: #9d84ff;
+      --brand2: #ff7f62;
+      --gold: #ffd338;
+      --green: #53d184;
+      --red: #ff6161;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    .layout {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 236px 1fr;
+    }
+    aside {
+      background: var(--side);
+      border-right: 1px solid var(--line);
+      padding: 18px 14px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+    }
+    .brand {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px;
+      margin-bottom: 18px;
+      font-size: 19px;
+      font-weight: 900;
+    }
+    .mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--brand), var(--brand2));
+    }
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+    .nav button {
+      width: 100%;
+      height: 44px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 800;
+      cursor: pointer;
+      text-align: left;
+    }
+    .nav button.active {
+      background: rgba(157, 132, 255, 0.16);
+      color: white;
+    }
+    .nav i {
+      width: 20px;
+      text-align: center;
+      font-style: normal;
+    }
+    main {
+      min-width: 0;
+      padding: 22px;
+    }
+    .topbar {
+      height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+    }
+    .sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    input, button, select {
+      height: 38px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #0f1219;
+      color: var(--text);
+      padding: 0 12px;
+      font: inherit;
+    }
+    .primary {
+      border: 0;
+      background: linear-gradient(135deg, var(--brand), var(--brand2));
+      color: white;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .ghost {
+      background: var(--panel);
+      cursor: pointer;
+    }
+    .token-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .token-box input { width: 260px; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .card, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    .card {
+      padding: 16px;
+    }
+    .card .label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .card .value {
+      margin-top: 8px;
+      font-size: 28px;
+      font-weight: 950;
+    }
+    .panel {
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .panel-head {
+      min-height: 56px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel2);
+    }
+    .panel-head h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+    .tools {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      background: rgba(255,255,255,0.015);
+    }
+    tbody tr { cursor: default; }
+    tbody tr:hover td { background: rgba(255,255,255,0.025); }
+    code {
+      display: inline-block;
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: bottom;
+      padding: 3px 6px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #0d1017;
+      color: #dce3ff;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: #252b38;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .pill.vip { background: rgba(255,211,56,.16); color: var(--gold); }
+    .pill.active { background: rgba(83,209,132,.16); color: var(--green); }
+    .positive { color: var(--green); font-weight: 800; }
+    .negative { color: var(--red); font-weight: 800; }
+    .empty {
+      padding: 18px;
+      color: var(--muted);
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 16px;
+      padding: 14px;
+    }
+    .profile {
+      background: #10141d;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .profile h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    .kv {
+      display: grid;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .kv strong { color: var(--text); }
+    .section { display: none; }
+    .section.active { display: block; }
+    a { color: #c3b8ff; }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: static; height: auto; }
+      .cards, .detail-grid { grid-template-columns: 1fr; }
+      .topbar, .panel-head { align-items: stretch; flex-direction: column; }
+      .token-box, .tools { width: 100%; }
+      .token-box input, .tools input { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="brand"><span class="mark"></span>SquadLive</div>
+      <div class="nav">
+        <button class="active" data-section="overview"><i>📊</i>数据概览</button>
+        <button data-section="users"><i>👤</i>用户管理</button>
+        <button data-section="recharges"><i>🪙</i>充值记录</button>
+        <button data-section="vip"><i>💎</i>VIP 订阅</button>
+        <button data-section="rewards"><i>🎁</i>分享审核</button>
+        <button data-section="settings"><i>⚙️</i>系统设置</button>
+      </div>
+    </aside>
+
+    <main>
+      <div class="topbar">
+        <div>
+          <h1 id="pageTitle">数据概览</h1>
+          <div class="sub" id="pageSub">实时查看产品核心运营数据</div>
+        </div>
+        <div class="token-box">
+          <input id="tokenInput" placeholder="后台 ADMIN_TOKEN">
+          <button class="primary" id="saveToken">保存</button>
+          <button class="ghost" id="refresh">刷新</button>
+        </div>
+      </div>
+
+      <section class="section active" id="section-overview">
+        <div class="cards" id="overviewCards"></div>
+        <div class="panel">
+          <div class="panel-head"><h2>最近用户</h2></div>
+          <div id="recentUsers"></div>
+        </div>
+      </section>
+
+      <section class="section" id="section-users">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>用户列表</h2>
+            <div class="tools">
+              <input id="userQuery" placeholder="输入用户 ID 或设备 ID 查询">
+              <button class="primary" id="searchUsers">查询</button>
+            </div>
+          </div>
+          <div id="usersTable"></div>
+        </div>
+
+        <div class="panel" id="userDetailPanel" style="display:none">
+          <div class="panel-head">
+            <h2>用户详情</h2>
+            <span class="sub" id="selectedUserLabel"></span>
+          </div>
+          <div id="userDetail"></div>
+        </div>
+      </section>
+
+      <section class="section" id="section-recharges">
+        <div class="panel">
+          <div class="panel-head"><h2>全产品充值记录</h2></div>
+          <div id="rechargesTable"></div>
+        </div>
+      </section>
+
+      <section class="section" id="section-vip">
+        <div class="panel">
+          <div class="panel-head"><h2>VIP 订阅记录</h2></div>
+          <div id="vipTable"></div>
+        </div>
+      </section>
+
+      <section class="section" id="section-rewards">
+        <div class="panel">
+          <div class="panel-head"><h2>分享奖励审核记录</h2></div>
+          <div id="rewardTable"></div>
+        </div>
+      </section>
+
+      <section class="section" id="section-settings">
+        <div class="panel">
+          <div class="panel-head"><h2>系统设置</h2></div>
+          <div class="detail-grid">
+            <div class="profile">
+              <h3>部署配置</h3>
+              <div class="kv">
+                <div>后台地址：<strong>/admin</strong></div>
+                <div>API 前缀：<strong>/v1</strong></div>
+                <div>认证方式：<strong>ADMIN_TOKEN</strong></div>
+              </div>
+            </div>
+            <div class="profile">
+              <h3>上线前必须替换</h3>
+              <div class="kv">
+                <div>数据库：<strong>当前为 JSON，本地测试用</strong></div>
+                <div>支付：<strong>当前为 Mock，需要接 App Store 收据验证</strong></div>
+                <div>域名：<strong>SQUADLIVE_API_BASE_URL</strong></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      token: localStorage.getItem("squadlive.adminToken") || "",
+      users: []
+    };
+
+    const titles = {
+      overview: ["数据概览", "实时查看产品核心运营数据"],
+      users: ["用户管理", "查看用户信息、金币、设备 ID、充值记录和 VIP 状态"],
+      recharges: ["充值记录", "查看整个产品的金币充值流水"],
+      vip: ["VIP 订阅", "查看会员订阅记录和状态"],
+      rewards: ["分享审核", "查看用户提交的分享链接和奖励记录"],
+      settings: ["系统设置", "部署配置和上线前检查项"]
+    };
+
+    const tokenInput = document.getElementById("tokenInput");
+    tokenInput.value = state.token;
+
+    document.querySelectorAll(".nav button").forEach((button) => {
+      button.onclick = () => switchSection(button.dataset.section);
+    });
+    document.getElementById("saveToken").onclick = () => {
+      state.token = tokenInput.value.trim();
+      localStorage.setItem("squadlive.adminToken", state.token);
+      loadAll();
+    };
+    document.getElementById("refresh").onclick = () => loadAll();
+    document.getElementById("searchUsers").onclick = () => loadUsers(true);
+    document.getElementById("userQuery").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") loadUsers(true);
+    });
+
+    function switchSection(section) {
+      document.querySelectorAll(".nav button").forEach((item) => item.classList.toggle("active", item.dataset.section === section));
+      document.querySelectorAll(".section").forEach((item) => item.classList.toggle("active", item.id === `section-${section}`));
+      document.getElementById("pageTitle").textContent = titles[section][0];
+      document.getElementById("pageSub").textContent = titles[section][1];
+    }
+
+    function money(cents) {
+      return `$${(Number(cents || 0) / 100).toFixed(2)}`;
+    }
+
+    function time(value) {
+      if (!value) return "-";
+      return new Date(value).toLocaleString("zh-CN", { hour12: false });
+    }
+
+    async function api(path) {
+      const response = await fetch(path, {
+        headers: { authorization: `Bearer ${state.token}` }
+      });
+      if (!response.ok) {
+        let message = response.statusText;
+        try { message = (await response.json()).error || message; } catch {}
+        throw new Error(message);
+      }
+      return response.json();
+    }
+
+    function table(headers, rows, empty = "暂无数据") {
+      if (!rows.length) return `<div class="empty">${empty}</div>`;
+      return `<table><thead><tr>${headers.map((item) => `<th>${item}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    }
+
+    function renderOverview(overview) {
+      const items = [
+        ["总用户数", overview.totalUsers],
+        ["5 分钟活跃", overview.activeUsers5m],
+        ["今日新增", overview.newUsersToday],
+        ["VIP 用户", overview.premiumUsers],
+        ["充值订单", overview.rechargeCount],
+        ["充值金额", money(overview.rechargeAmountCents)],
+        ["VIP 订阅", overview.vipSubscriptionCount],
+        ["待审核分享", overview.pendingRewardSubmissions]
+      ];
+      document.getElementById("overviewCards").innerHTML = items.map(([label, value]) => `
+        <div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>
+      `).join("");
+    }
+
+    function renderUsers(targetId, users) {
+      document.getElementById(targetId).innerHTML = table(
+        ["用户 ID", "设备 ID", "金币", "VIP", "注册时间", "最后活跃"],
+        users.map((user) => `
+          <tr onclick="loadUserDetail('${user.id}')">
+            <td><code title="${user.id}">${user.id}</code></td>
+            <td><code title="${user.deviceId}">${user.deviceId}</code></td>
+            <td>${user.coins}</td>
+            <td>${user.isPremium ? '<span class="pill vip">VIP</span>' : '<span class="pill">普通</span>'}</td>
+            <td>${time(user.createdAt)}</td>
+            <td>${time(user.lastSeenAt)}</td>
+          </tr>
+        `)
+      );
+    }
+
+    async function loadUsers(fromSearch = false) {
+      const query = encodeURIComponent(document.getElementById("userQuery").value.trim());
+      const data = await api(`/v1/admin/users?query=${query}`);
+      state.users = data.users;
+      renderUsers("usersTable", data.users);
+      if (!fromSearch) {
+        renderUsers("recentUsers", data.users.slice(0, 8));
+      }
+    }
+
+    async function loadUserDetail(userId) {
+      switchSection("users");
+      const data = await api(`/v1/admin/users/${userId}`);
+      document.getElementById("userDetailPanel").style.display = "";
+      document.getElementById("selectedUserLabel").textContent = userId;
+      document.getElementById("userDetail").innerHTML = `
+        <div class="detail-grid">
+          <div class="profile">
+            <h3>基础信息</h3>
+            <div class="kv">
+              <div>用户 ID：<br><code title="${data.user.id}">${data.user.id}</code></div>
+              <div>设备 ID：<br><code title="${data.user.deviceId}">${data.user.deviceId}</code></div>
+              <div>金币数量：<strong>${data.user.coins}</strong></div>
+              <div>VIP 状态：<strong>${data.user.isPremium ? "VIP 用户" : "普通用户"}</strong></div>
+              <div>注册时间：<strong>${time(data.user.createdAt)}</strong></div>
+              <div>最后活跃：<strong>${time(data.user.lastSeenAt)}</strong></div>
+            </div>
+          </div>
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h2>该用户充值 / 金币记录</h2></div>
+              ${table(["类型", "金币", "金额", "备注", "时间"], data.coinTransactions.map((item) => `
+                <tr>
+                  <td>${item.type}</td>
+                  <td class="${item.coins >= 0 ? "positive" : "negative"}">${item.coins}</td>
+                  <td>${money(item.amountCents)}</td>
+                  <td>${item.note || "-"}</td>
+                  <td>${time(item.createdAt)}</td>
+                </tr>
+              `))}
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>该用户 VIP 订阅</h2></div>
+              ${table(["套餐", "状态", "金额", "交易 ID", "开始时间"], data.vipSubscriptions.map((item) => `
+                <tr>
+                  <td>${item.planId}</td>
+                  <td><span class="pill active">${item.status}</span></td>
+                  <td>${money(item.amountCents)}</td>
+                  <td><code title="${item.platformTransactionId || "-"}">${item.platformTransactionId || "-"}</code></td>
+                  <td>${time(item.startedAt)}</td>
+                </tr>
+              `))}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function loadRecharges() {
+      const data = await api("/v1/admin/recharges");
+      document.getElementById("rechargesTable").innerHTML = table(
+        ["用户 ID", "金币", "金额", "商品", "时间"],
+        data.transactions.map((item) => `
+          <tr onclick="loadUserDetail('${item.userId}')">
+            <td><code title="${item.userId}">${item.userId}</code></td>
+            <td class="positive">${item.coins}</td>
+            <td>${money(item.amountCents)}</td>
+            <td>${item.note}</td>
+            <td>${time(item.createdAt)}</td>
+          </tr>
+        `)
+      );
+    }
+
+    async function loadVip() {
+      const data = await api("/v1/admin/vip-subscriptions");
+      document.getElementById("vipTable").innerHTML = table(
+        ["用户 ID", "套餐", "状态", "金额", "交易 ID", "开始时间"],
+        data.subscriptions.map((item) => `
+          <tr onclick="loadUserDetail('${item.userId}')">
+            <td><code title="${item.userId}">${item.userId}</code></td>
+            <td>${item.planId}</td>
+            <td><span class="pill active">${item.status}</span></td>
+            <td>${money(item.amountCents)}</td>
+            <td><code title="${item.platformTransactionId || "-"}">${item.platformTransactionId || "-"}</code></td>
+            <td>${time(item.startedAt)}</td>
+          </tr>
+        `)
+      );
+    }
+
+    async function loadRewards() {
+      const data = await api("/v1/admin/reward-submissions");
+      document.getElementById("rewardTable").innerHTML = table(
+        ["提交 ID", "用户 ID", "平台", "状态", "基础奖励", "证明链接", "时间"],
+        data.submissions.map((item) => `
+          <tr onclick="loadUserDetail('${item.userId}')">
+            <td><code title="${item.id}">${item.id}</code></td>
+            <td><code title="${item.userId}">${item.userId}</code></td>
+            <td>${item.platform}</td>
+            <td>${item.status}</td>
+            <td>${item.baseRewardCoins}</td>
+            <td>${item.proofLink ? `<a href="${item.proofLink}" target="_blank">打开</a>` : "-"}</td>
+            <td>${time(item.createdAt)}</td>
+          </tr>
+        `)
+      );
+    }
+
+    async function loadAll() {
+      try {
+        const overview = await api("/v1/admin/overview");
+        renderOverview(overview.overview);
+        await Promise.all([loadUsers(), loadRecharges(), loadVip(), loadRewards()]);
+      } catch (error) {
+        document.getElementById("overviewCards").innerHTML = `<div class="card"><div class="value">${error.message}</div><div class="label">请检查 ADMIN_TOKEN</div></div>`;
+      }
+    }
+
+    loadAll();
+    setInterval(loadAll, 30000);
+  </script>
+</body>
+</html>
