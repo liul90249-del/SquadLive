@@ -12,6 +12,7 @@ const storePath = join(dataDir, "store.json");
 const adminPagePath = join(__dirname, "admin.html");
 const privacyPagePath = join(__dirname, "privacy.html");
 const termsPagePath = join(__dirname, "terms.html");
+const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
 
 const viewerPacks = [
   { label: "5,000", viewers: 5000, cost: 15 },
@@ -266,7 +267,7 @@ async function callDeepSeek(body) {
         authorization: `Bearer ${process.env.DEEPSEEK_API_KEY.trim()}`
       },
       body: JSON.stringify({
-        model: "deepseek-chat",
+        model: deepSeekModel,
         messages: [
           { role: "system", content: deepSeekSystemPrompt(body) },
           { role: "user", content: String(body.text || "") }
