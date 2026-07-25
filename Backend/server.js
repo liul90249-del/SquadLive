@@ -10,6 +10,8 @@ const port = Number(process.env.PORT || 8787);
 const dataDir = process.env.DATA_DIR || join(__dirname, "data");
 const storePath = join(dataDir, "store.json");
 const adminPagePath = join(__dirname, "admin.html");
+const privacyPagePath = join(__dirname, "privacy.html");
+const termsPagePath = join(__dirname, "terms.html");
 
 const viewerPacks = [
   { label: "5,000", viewers: 5000, cost: 15 },
@@ -282,6 +284,18 @@ async function route(req, res) {
 
   if (req.method === "GET" && url.pathname === "/admin") {
     const html = await readFile(adminPagePath, "utf8");
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    return res.end(html);
+  }
+
+  if (req.method === "GET" && url.pathname === "/privacy") {
+    const html = await readFile(privacyPagePath, "utf8");
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    return res.end(html);
+  }
+
+  if (req.method === "GET" && url.pathname === "/terms") {
+    const html = await readFile(termsPagePath, "utf8");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     return res.end(html);
   }
