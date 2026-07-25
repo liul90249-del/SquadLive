@@ -249,28 +249,51 @@ Do not sound scripted. Do not repeat the same compliment style. Keep the respons
 }
 
 async function callDeepSeek(body) {
-  if (!process.env.DEEPSEEK_API_KEY) return localAIReply(body.text);
-  const response = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: "deepseek-chat",
-      messages: [
-        { role: "system", content: deepSeekSystemPrompt(body) },
-        { role: "user", content: String(body.text || "") }
-      ],
-      temperature: 0.74,
-      max_tokens: body.replyDepth > 0.72 ? 180 : 120
-    })
+  const fallback = (reason, providerStatus = null) => ({
+    answer: localAIReply(body.text),
+    source: "fallback",
+    reason,
+    providerStatus
   });
-  if (!response.ok) {
-    return localAIReply(body.text);
+
+  if (!process.env.DEEPSEEK_API_KEY) return fallback("missing_key");
+
+  try {
+    const response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${process.env.DEEPSEEK_API_KEY.trim()}`
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        messages: [
+          { role: "system", content: deepSeekSystemPrompt(body) },
+          { role: "user", content: String(body.text || "") }
+        ],
+        temperature: 0.74,
+        max_tokens: body.replyDepth > 0.72 ? 180 : 120
+      })
+    });
+
+    if (!response.ok) {
+      const providerMessage = (await response.text()).slice(0, 500);
+      console.error("DeepSeek request failed", { status: response.status, message: providerMessage });
+      return fallback("provider_error", response.status);
+    }
+
+    const data = await response.json();
+    const answer = data?.choices?.[0]?.message?.content?.trim();
+    if (!answer) {
+      console.error("DeepSeek returned an empty response");
+      return fallback("empty_response", response.status);
+    }
+
+    return { answer, source: "deepseek", reason: null, providerStatus: response.status };
+  } catch (error) {
+    console.error("DeepSeek network error", error);
+    return fallback("network_error");
   }
-  const data = await response.json();
-  return data?.choices?.[0]?.message?.content?.trim() || localAIReply(body.text);
 }
 
 async function route(req, res) {
@@ -319,8 +342,8 @@ async function route(req, res) {
       store.users[body.userId].lastSeenAt = new Date().toISOString();
       await saveStore(store);
     }
-    const answer = await callDeepSeek(body);
-    return jsonResponse(res, 200, { answer });
+    const result = await callDeepSeek(body);
+    return jsonResponse(res, 200, result);
   }
 
   if (req.method === "POST" && url.pathname === "/v1/activity/ping") {
