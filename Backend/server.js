@@ -272,6 +272,7 @@ async function callDeepSeek(body) {
           { role: "system", content: deepSeekSystemPrompt(body) },
           { role: "user", content: String(body.text || "") }
         ],
+        thinking: { type: "disabled" },
         temperature: 0.74,
         max_tokens: body.replyDepth > 0.72 ? 180 : 120
       })
