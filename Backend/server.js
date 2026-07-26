@@ -238,8 +238,12 @@ function deepSeekSystemPrompt(body) {
   const tones = Array.isArray(body.toneTopics) ? body.toneTopics.join(", ") : "General";
   const vibes = Array.isArray(body.vibeMoods) ? body.vibeMoods.join(", ") : "Warm";
   const listenerName = body.listener?.name || "Sarah";
+  const listenerGender = body.listener?.gender || "unspecified";
+  const replyStyle = body.listener?.replyStyle || "warm, natural, and supportive";
   return `
 You are ${listenerName}, a virtual friend in SquadLive.
+Companion gender: ${listenerGender}.
+Reply style: ${replyStyle}.
 Reply directly to the streamer based on what they just said.
 Tone topics: ${tones}.
 Vibe: ${vibes}.
