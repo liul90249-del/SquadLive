@@ -221,16 +221,17 @@ function viewerCost(viewers) {
 
 function localAIReply(text) {
   const lower = String(text || "").toLowerCase();
+  const usesChinese = /[\u3400-\u9fff]/u.test(lower);
   if (lower.includes("voice") || lower.includes("sound") || lower.includes("好听")) {
-    return "Your voice sounds really pleasant and easy to listen to. It makes the room feel warmer.";
+    return usesChinese ? "你的声音很好听，让直播间感觉很温暖。" : "Your voice sounds warm and pleasant.";
   }
   if (lower.includes("look") || lower.includes("pretty") || lower.includes("beautiful") || lower.includes("好看")) {
-    return "You look really good on camera. Your expression and energy make the room feel alive.";
+    return usesChinese ? "你今天上镜很好看，状态也很自然。" : "You look great on camera today.";
   }
-  if (lower.includes("stress") || lower.includes("worried") || lower.includes("anxious")) {
-    return "I can hear the pressure in that. Take one breath and start with the part you can control right now.";
+  if (lower.includes("stress") || lower.includes("worried") || lower.includes("anxious") || lower.includes("压力") || lower.includes("担心") || lower.includes("焦虑")) {
+    return usesChinese ? "听得出来你有些压力，先处理现在能控制的一件事。" : "I hear the pressure. Start with one thing you can control.";
   }
-  return "I am listening closely. Your voice feels calm and natural, and you look good on camera right now.";
+  return usesChinese ? "我在认真听，你可以继续说。" : "I am listening. Keep going.";
 }
 
 function deepSeekSystemPrompt(body) {
@@ -251,8 +252,9 @@ Tone topics: ${tones}.
 Vibe: ${vibes}.
 Active directions: ${directions.join(", ") || "general, compliment"}.
 ${activeDirectionGuide(directions)}
+Always reply in the same language as the streamer's latest message. If they speak Chinese, reply in Chinese. If they speak English, reply in English. For mixed-language input, use the dominant language of the latest message.
 Naturally include a short compliment when appropriate: their voice sounds pleasant, they look good, their smile is nice, their camera presence is warm, or their energy is attractive.
-Do not sound scripted. Do not repeat the same compliment style. Keep the response to 1-2 short sentences unless depth is high.
+Do not sound scripted. Do not repeat the same compliment style. Never write a long paragraph. Use 1-2 short sentences: about 20-70 Chinese characters or 8-30 English words.
 `.trim();
 }
 
@@ -285,6 +287,21 @@ function conversationHistory(body) {
     .filter((item) => item.content.length > 0);
 }
 
+function conciseReply(answer, userText) {
+  const text = String(answer || "").trim();
+  const maxLength = /[\u3400-\u9fff]/u.test(String(userText || "")) ? 72 : 180;
+  const characters = Array.from(text);
+  if (characters.length <= maxLength) return text;
+
+  const shortened = characters.slice(0, maxLength).join("");
+  const punctuation = ["。", "！", "？", ".", "!", "?"];
+  const sentenceEnd = Math.max(...punctuation.map((mark) => shortened.lastIndexOf(mark)));
+  if (sentenceEnd >= Math.floor(maxLength * 0.45)) {
+    return shortened.slice(0, sentenceEnd + 1).trim();
+  }
+  return `${shortened.trim()}…`;
+}
+
 async function callDeepSeek(body) {
   const fallback = (reason, providerStatus = null) => ({
     answer: localAIReply(body.text),
@@ -311,7 +328,7 @@ async function callDeepSeek(body) {
         ],
         thinking: { type: "disabled" },
         temperature: 0.74,
-        max_tokens: body.replyDepth > 0.72 ? 180 : 120
+        max_tokens: body.replyDepth > 0.72 ? 110 : 80
       })
     });
 
@@ -328,7 +345,7 @@ async function callDeepSeek(body) {
       return fallback("empty_response", response.status);
     }
 
-    return { answer, source: "deepseek", reason: null, providerStatus: response.status };
+    return { answer: conciseReply(answer, body.text), source: "deepseek", reason: null, providerStatus: response.status };
   } catch (error) {
     console.error("DeepSeek network error", error);
     return fallback("network_error");
