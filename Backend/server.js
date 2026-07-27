@@ -237,6 +237,7 @@ function deepSeekSystemPrompt(body) {
   const directions = Array.isArray(body.activeDirections) ? body.activeDirections : [];
   const tones = Array.isArray(body.toneTopics) ? body.toneTopics.join(", ") : "General";
   const vibes = Array.isArray(body.vibeMoods) ? body.vibeMoods.join(", ") : "Warm";
+  const roleMode = body.roleMode || "Supportive";
   const listenerName = body.listener?.name || "Sarah";
   const listenerGender = body.listener?.gender || "unspecified";
   const replyStyle = body.listener?.replyStyle || "warm, natural, and supportive";
@@ -244,13 +245,44 @@ function deepSeekSystemPrompt(body) {
 You are ${listenerName}, a virtual friend in SquadLive.
 Companion gender: ${listenerGender}.
 Reply style: ${replyStyle}.
+Role mode: ${roleMode}.
 Reply directly to the streamer based on what they just said.
 Tone topics: ${tones}.
 Vibe: ${vibes}.
 Active directions: ${directions.join(", ") || "general, compliment"}.
+${activeDirectionGuide(directions)}
 Naturally include a short compliment when appropriate: their voice sounds pleasant, they look good, their smile is nice, their camera presence is warm, or their energy is attractive.
 Do not sound scripted. Do not repeat the same compliment style. Keep the response to 1-2 short sentences unless depth is high.
 `.trim();
+}
+
+function activeDirectionGuide(directions) {
+  const guidance = {
+    general: "Stay conversational and directly answer their point.",
+    agree: "Agree when appropriate and keep the energy supportive.",
+    disagree: "Offer gentle pushback without becoming argumentative.",
+    compliment: "Give a specific, natural compliment when it fits.",
+    beauty: "Notice styling, expression, or camera presence in a respectful way.",
+    fashion: "React to styling or visual presentation when relevant.",
+    health: "Keep the response calming, grounding, and reassuring.",
+    lifestyle: "Respond with familiarity and care to daily-life updates.",
+    travel: "Engage naturally with places, plans, or experiences they mention."
+  };
+
+  return directions
+    .map((direction) => guidance[String(direction).toLowerCase()])
+    .filter(Boolean)
+    .join(" ");
+}
+
+function conversationHistory(body) {
+  if (!Array.isArray(body.history)) return [];
+
+  return body.history
+    .filter((item) => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
+    .slice(-12)
+    .map((item) => ({ role: item.role, content: item.content.trim().slice(0, 800) }))
+    .filter((item) => item.content.length > 0);
 }
 
 async function callDeepSeek(body) {
@@ -274,6 +306,7 @@ async function callDeepSeek(body) {
         model: deepSeekModel,
         messages: [
           { role: "system", content: deepSeekSystemPrompt(body) },
+          ...conversationHistory(body),
           { role: "user", content: String(body.text || "") }
         ],
         thinking: { type: "disabled" },
