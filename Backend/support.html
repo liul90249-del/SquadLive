@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Help and customer support for SquadLive.">
+  <meta name="theme-color" content="#0a0912">
+  <title>SquadLive Support</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --background: #0a0912;
+      --surface: rgba(255, 255, 255, .07);
+      --border: rgba(255, 255, 255, .12);
+      --text: #f8f7ff;
+      --muted: rgba(248, 247, 255, .67);
+      --purple: #9b69ff;
+      --pink: #ff63b8;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--text); background: radial-gradient(circle at 50% -10%, rgba(154,103,255,.23), transparent 34rem), var(--background); }
+    a { color: #cbb5ff; }
+    .shell { width: min(900px, calc(100% - 40px)); margin: 0 auto; }
+    header { border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(10,9,18,.75); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+    nav { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .brand { display: flex; align-items: center; gap: 10px; color: white; text-decoration: none; font-size: 19px; font-weight: 800; }
+    .mark { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 11px; background: linear-gradient(145deg, var(--pink), var(--purple)); }
+    .home { color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 700; }
+    main { padding: 74px 0 90px; }
+    .hero { text-align: center; margin-bottom: 54px; }
+    h1 { margin: 0 0 15px; font-size: clamp(44px, 8vw, 68px); letter-spacing: -.05em; }
+    .hero p { max-width: 640px; margin: 0 auto; color: var(--muted); font-size: 18px; line-height: 1.6; }
+    .contact-card { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 34px 0 58px; padding: 25px 28px; border: 1px solid rgba(165,123,255,.35); border-radius: 22px; background: linear-gradient(125deg, rgba(154,103,255,.18), rgba(255,98,183,.08)); }
+    .contact-card strong { display: block; margin-bottom: 5px; font-size: 18px; }
+    .contact-card span { color: var(--muted); font-size: 14px; }
+    .button { flex: 0 0 auto; min-height: 46px; display: inline-flex; align-items: center; padding: 0 18px; border-radius: 14px; color: white; background: linear-gradient(115deg, var(--purple), var(--pink)); text-decoration: none; font-weight: 750; }
+    h2 { margin: 52px 0 18px; font-size: 28px; letter-spacing: -.025em; }
+    .faq { display: grid; gap: 12px; }
+    details { border: 1px solid var(--border); border-radius: 18px; background: var(--surface); }
+    summary { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 20px; cursor: pointer; font-weight: 730; list-style: none; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: "+"; color: #cbb5ff; font-size: 25px; font-weight: 400; }
+    details[open] summary::after { content: "−"; }
+    details p, details ol { margin: 0; padding: 0 20px 20px; color: var(--muted); line-height: 1.65; }
+    details ol { padding-left: 42px; }
+    details li + li { margin-top: 7px; }
+    .small { color: rgba(248,247,255,.46); font-size: 13px; line-height: 1.6; }
+    footer { border-top: 1px solid rgba(255,255,255,.08); }
+    .footer-inner { min-height: 106px; display: flex; align-items: center; justify-content: space-between; gap: 22px; color: rgba(248,247,255,.45); font-size: 13px; }
+    .links { display: flex; flex-wrap: wrap; gap: 18px; }
+    .links a { color: rgba(248,247,255,.65); text-decoration: none; }
+    @media (max-width: 640px) {
+      main { padding-top: 52px; }
+      .contact-card { align-items: stretch; flex-direction: column; }
+      .button { justify-content: center; }
+      .footer-inner { padding: 28px 0; flex-direction: column; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <nav class="shell"><a class="brand" href="/"><span class="mark" aria-hidden="true">✦</span>SquadLive</a><a class="home" href="/">Back to Home</a></nav>
+  </header>
+
+  <main class="shell">
+    <div class="hero">
+      <h1>How can we help?</h1>
+      <p>Find answers about AI replies, camera and microphone access, subscriptions, coin purchases, and your SquadLive experience.</p>
+    </div>
+
+    <div class="contact-card">
+      <div><strong>Still need help?</strong><span>Email us with your device model, iOS version, and a short description of the issue.</span></div>
+      <a class="button" href="mailto:1655896527@qq.com?subject=SquadLive%20Support">Email Support</a>
+    </div>
+
+    <h2>Using SquadLive</h2>
+    <div class="faq">
+      <details><summary>Why is my AI friend not replying?</summary><p>Check that microphone and speech recognition access are enabled in iOS Settings. Speak clearly, allow a brief pause after finishing a sentence, and confirm that your device has an internet connection. You can also open the live-room settings and send a typed message to test the AI connection.</p></details>
+      <details><summary>How do I enable camera, microphone, or speech recognition?</summary><ol><li>Open the iOS Settings app.</li><li>Scroll to SquadLive.</li><li>Enable Camera, Microphone, Speech Recognition, and Photos access as needed.</li><li>Return to SquadLive and start a new live room.</li></ol></details>
+      <details><summary>Does SquadLive support different languages?</summary><p>The AI friend is designed to respond in the language used in your current conversation. Recognition quality can vary with background noise, device settings, connection quality, and language availability in iOS.</p></details>
+      <details><summary>How do I save or share a live-room video?</summary><p>Use the save or share option after ending your live session. Allow Photos access when prompted. If saving fails, check that your device has enough storage and that SquadLive has permission to add media to your photo library.</p></details>
+    </div>
+
+    <h2>Purchases and Subscriptions</h2>
+    <div class="faq">
+      <details><summary>How do I restore my SquadLive Pro subscription?</summary><p>Open the subscription or paywall screen in SquadLive and select Restore Purchases. Make sure the device is signed in with the same Apple ID that originally purchased the subscription.</p></details>
+      <details><summary>How do I manage or cancel a subscription?</summary><ol><li>Open the iOS Settings app.</li><li>Tap your Apple ID name.</li><li>Tap Subscriptions.</li><li>Select SquadLive and choose the available management or cancellation option.</li></ol></details>
+      <details><summary>I paid, but coins or Pro features did not appear.</summary><p>Wait a moment and reopen the purchase screen. For subscriptions, try Restore Purchases. If the issue remains, email support with the product name and approximate purchase time. Do not send your Apple ID password or full payment information.</p></details>
+      <details><summary>How do I request a refund?</summary><p>Payments are processed by Apple. Refund eligibility and decisions are handled through Apple's purchase support process. Visit <a href="https://reportaproblem.apple.com/" target="_blank" rel="noopener noreferrer">reportaproblem.apple.com</a> while signed in with the Apple ID used for the purchase.</p></details>
+    </div>
+
+    <h2>Privacy and Safety</h2>
+    <div class="faq">
+      <details><summary>How is my voice used?</summary><p>Microphone audio supports the live experience and speech recognition. Speech-derived text may be sent to the SquadLive backend and its configured AI provider to generate a reply. Review the Privacy Policy for more information.</p></details>
+      <details><summary>How can I request deletion of backend data?</summary><p>Email <a href="mailto:1655896527@qq.com?subject=SquadLive%20Data%20Deletion%20Request">1655896527@qq.com</a> with the subject “SquadLive Data Deletion Request.” Include enough information to identify the relevant app record, but do not send passwords or payment details.</p></details>
+    </div>
+
+    <p class="small">AI responses are provided for companionship and entertainment and are not professional medical, legal, financial, or crisis advice.</p>
+  </main>
+
+  <footer>
+    <div class="shell footer-inner"><span>© 2026 SquadLive. All rights reserved.</span><div class="links"><a href="/">Home</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Use</a></div></div>
+  </footer>
+</body>
+</html>

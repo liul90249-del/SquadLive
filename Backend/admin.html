@@ -254,6 +254,35 @@
       font-size: 13px;
     }
     .kv strong { color: var(--text); }
+    .conversation-list {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      max-height: 560px;
+      overflow-y: auto;
+    }
+    .conversation {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #10141d;
+    }
+    .conversation-meta {
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .conversation-message {
+      margin-top: 7px;
+      padding: 9px 10px;
+      border-radius: 8px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .conversation-message.user { background: rgba(255,255,255,.05); }
+    .conversation-message.ai { background: rgba(142,107,255,.13); }
     .section { display: none; }
     .section.active { display: block; }
     a { color: #c3b8ff; }
@@ -418,6 +447,16 @@
       return new Date(value).toLocaleString("zh-CN", { hour12: false });
     }
 
+    function escapeHTML(value) {
+      return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "'": "&#39;",
+        '"': "&quot;"
+      })[character]);
+    }
+
     async function api(path) {
       const response = await fetch(path, {
         headers: { authorization: `Bearer ${state.token}` }
@@ -453,13 +492,14 @@
 
     function renderUsers(targetId, users) {
       document.getElementById(targetId).innerHTML = table(
-        ["用户 ID", "设备 ID", "金币", "VIP", "注册时间", "最后活跃"],
+        ["用户", "设备 ID", "金币", "VIP", "AI 对话", "注册时间", "最后活跃"],
         users.map((user) => `
           <tr onclick="loadUserDetail('${user.id}')">
-            <td><code title="${user.id}">${user.id}</code></td>
+            <td>${user.displayName ? `<strong>${escapeHTML(user.displayName)}</strong><br>` : ""}<code title="${user.id}">${user.id}</code></td>
             <td><code title="${user.deviceId}">${user.deviceId}</code></td>
             <td>${user.coins}</td>
             <td>${user.isPremium ? '<span class="pill vip">VIP</span>' : '<span class="pill">普通</span>'}</td>
+            <td><span class="pill active">${user.aiConversationCount || 0}</span></td>
             <td>${time(user.createdAt)}</td>
             <td>${time(user.lastSeenAt)}</td>
           </tr>
@@ -488,6 +528,7 @@
             <h3>基础信息</h3>
             <div class="kv">
               <div>用户 ID：<br><code title="${data.user.id}">${data.user.id}</code></div>
+              <div>用户名称：<strong>${escapeHTML(data.user.displayName || "-")}</strong></div>
               <div>设备 ID：<br><code title="${data.user.deviceId}">${data.user.deviceId}</code></div>
               <div>金币数量：<strong>${data.user.coins}</strong></div>
               <div>VIP 状态：<strong>${data.user.isPremium ? "VIP 用户" : "普通用户"}</strong></div>
@@ -519,6 +560,16 @@
                   <td>${time(item.startedAt)}</td>
                 </tr>
               `))}
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>用户与 AI 对话</h2><span class="pill active">${data.aiConversations.length}</span></div>
+              ${data.aiConversations.length ? `<div class="conversation-list">${data.aiConversations.map((item) => `
+                <div class="conversation">
+                  <div class="conversation-meta">${time(item.createdAt)} · ${escapeHTML(item.listenerName)} · ${escapeHTML(item.source)}</div>
+                  <div class="conversation-message user"><strong>用户：</strong>${escapeHTML(item.userText)}</div>
+                  <div class="conversation-message ai"><strong>AI：</strong>${escapeHTML(item.aiText)}</div>
+                </div>
+              `).join("")}</div>` : '<div class="empty">暂无 AI 对话</div>'}
             </div>
           </div>
         </div>

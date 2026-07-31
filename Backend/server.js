@@ -9,10 +9,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 8787);
 const dataDir = process.env.DATA_DIR || join(__dirname, "data");
 const storePath = join(dataDir, "store.json");
+const homePagePath = join(__dirname, "index.html");
 const adminPagePath = join(__dirname, "admin.html");
+const supportPagePath = join(__dirname, "support.html");
 const privacyPagePath = join(__dirname, "privacy.html");
 const termsPagePath = join(__dirname, "terms.html");
-const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
+const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-chat";
 
 const viewerPacks = [
   { label: "5,000", viewers: 5000, cost: 15 },
@@ -67,6 +69,7 @@ async function loadStore() {
   store.rewardSubmissions ||= {};
   store.coinTransactions ||= {};
   store.vipSubscriptions ||= {};
+  store.aiConversations ||= {};
   return store;
 }
 
@@ -89,7 +92,7 @@ function getOrCreateUser(store, deviceId = "anonymous") {
   const user = {
     id: newId("user"),
     deviceId,
-    coins: 100,
+    coins: 300,
     isPremium: false,
     createdAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
@@ -99,7 +102,7 @@ function getOrCreateUser(store, deviceId = "anonymous") {
   recordCoinTransaction(store, {
     userId: user.id,
     type: "signup_bonus",
-    coins: 100,
+    coins: 300,
     amountCents: 0,
     source: "system",
     note: "Initial coins"
@@ -147,10 +150,30 @@ function recordVipSubscription(store, input) {
   return subscription;
 }
 
+function recordAIConversation(store, input) {
+  const conversation = {
+    id: newId("chat"),
+    userId: input.userId,
+    userText: String(input.userText || "").trim().slice(0, 1200),
+    aiText: String(input.aiText || "").trim().slice(0, 1200),
+    listenerName: String(input.listenerName || "AI Friend").slice(0, 80),
+    source: input.source || "unknown",
+    createdAt: new Date().toISOString()
+  };
+  store.aiConversations[conversation.id] = conversation;
+
+  const allConversations = Object.values(store.aiConversations).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  for (const oldConversation of allConversations.slice(5000)) {
+    delete store.aiConversations[oldConversation.id];
+  }
+  return conversation;
+}
+
 function userPublic(user) {
   return {
     id: user.id,
     deviceId: user.deviceId,
+    displayName: user.displayName || "",
     coins: user.coins,
     isPremium: Boolean(user.isPremium),
     createdAt: user.createdAt,
@@ -199,7 +222,11 @@ function userDetail(store, userId) {
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
     rewardSubmissions: Object.values(store.rewardSubmissions)
       .filter((item) => item.userId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    aiConversations: Object.values(store.aiConversations)
+      .filter((item) => item.userId === userId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 200)
   };
 }
 
@@ -231,7 +258,44 @@ function localAIReply(text) {
   if (lower.includes("stress") || lower.includes("worried") || lower.includes("anxious") || lower.includes("压力") || lower.includes("担心") || lower.includes("焦虑")) {
     return usesChinese ? "听得出来你有些压力，先处理现在能控制的一件事。" : "I hear the pressure. Start with one thing you can control.";
   }
-  return usesChinese ? "我在认真听，你可以继续说。" : "I am listening. Keep going.";
+  if (lower.includes("我爱你") || lower.includes("喜欢你") || lower.includes("i love you") || lower.includes("love you")) {
+    return usesChinese ? "这句话很暖，我也很珍惜现在陪你聊天的时刻。" : "That is really sweet. I’m glad I get to share this moment with you.";
+  }
+  if (lower.includes("谢谢") || lower.includes("thank you") || lower.includes("thanks")) {
+    return usesChinese ? "不用客气，我会继续认真陪你聊。" : "You’re welcome. I’m right here with you.";
+  }
+  if (lower.includes("很高兴认识你") || lower.includes("认识你很高兴") || lower.includes("nice to meet you") || lower.includes("glad to meet you")) {
+    return usesChinese ? "我也很高兴认识你。你今天最想聊点什么？" : "It’s really nice to meet you too. What would you like to talk about today?";
+  }
+  if (lower.includes("summer") || lower.includes("夏天")) {
+    return usesChinese ? "夏天总有一种特别的能量，你最喜欢它的哪一部分？" : "Summer has such a distinct energy. What do you enjoy most about it?";
+  }
+  if (lower.trim() === "good" || lower.includes("i'm good") || lower.includes("i am good") || lower.includes("很好")) {
+    return usesChinese ? "听起来状态不错，今天是什么让你感觉这么好？" : "I’m glad to hear that. What made today feel good?";
+  }
+  if (lower.includes("还是") || lower.includes("选择") || lower.includes("坚持") || lower.includes("放弃") || lower.includes("换一个") || lower.includes("choos") || lower.includes("between") || lower.includes("decision") || lower.includes("quit")) {
+    return usesChinese
+      ? "先比较两个方向未来三个月的收益、成本和最坏结果。你现在更在意稳定，还是成长？"
+      : "Compare each option's next-three-month upside, cost, and worst case. Do you value stability or growth more right now?";
+  }
+  if (/[?？]/u.test(lower) || lower.includes("怎么") || lower.includes("为什么") || lower.includes("怎么办") || lower.includes("how") || lower.includes("why") || lower.includes("what")) {
+    return usesChinese
+      ? "我们把问题拆小一点：你已经尝试过什么，最卡住你的具体一步是什么？"
+      : "Let's narrow it down: what have you tried, and which exact step is blocking you?";
+  }
+  const variants = usesChinese
+    ? [
+        "这件事值得认真聊聊。你现在最希望先解决哪一部分？",
+        "我明白你的重点了。对你来说，理想的结果应该是什么样？",
+        "我们可以继续往下梳理，刚才这件事最让你在意的是什么？"
+      ]
+    : [
+        "That sounds worth unpacking. Which part would you like to solve first?",
+        "I understand your point. What would a good outcome look like for you?",
+        "Let’s stay with that. What matters most to you in this situation?"
+      ];
+  const index = Array.from(String(text || "")).reduce((value, character) => ((value * 31) + character.codePointAt(0)) >>> 0, 0) % variants.length;
+  return variants[index];
 }
 
 function deepSeekSystemPrompt(body) {
@@ -255,6 +319,8 @@ ${activeDirectionGuide(directions)}
 Always reply in the same language as the streamer's latest message. If they speak Chinese, reply in Chinese. If they speak English, reply in English. For mixed-language input, use the dominant language of the latest message.
 Naturally include a short compliment when appropriate: their voice sounds pleasant, they look good, their smile is nice, their camera presence is warm, or their energy is attractive.
 Do not sound scripted. Do not repeat the same compliment style. Never write a long paragraph. Use 1-2 short sentences: about 20-70 Chinese characters or 8-30 English words.
+Do not merely repeat or paraphrase the user's words. React to their meaning and move the conversation forward.
+If the user says it is nice to meet you, warmly say it is nice to meet them too and ask one natural follow-up question.
 `.trim();
 }
 
@@ -319,6 +385,7 @@ async function callDeepSeek(body) {
         "content-type": "application/json",
         authorization: `Bearer ${process.env.DEEPSEEK_API_KEY.trim()}`
       },
+      signal: AbortSignal.timeout(12000),
       body: JSON.stringify({
         model: deepSeekModel,
         messages: [
@@ -326,7 +393,6 @@ async function callDeepSeek(body) {
           ...conversationHistory(body),
           { role: "user", content: String(body.text || "") }
         ],
-        thinking: { type: "disabled" },
         temperature: 0.74,
         max_tokens: body.replyDepth > 0.72 ? 110 : 80
       })
@@ -361,8 +427,20 @@ async function route(req, res) {
     return jsonResponse(res, 200, { ok: true, service: "squadlive-backend" });
   }
 
+  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+    const html = await readFile(homePagePath, "utf8");
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    return res.end(html);
+  }
+
   if (req.method === "GET" && url.pathname === "/admin") {
     const html = await readFile(adminPagePath, "utf8");
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    return res.end(html);
+  }
+
+  if (req.method === "GET" && (url.pathname === "/support" || url.pathname === "/support/")) {
+    const html = await readFile(supportPagePath, "utf8");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     return res.end(html);
   }
@@ -394,11 +472,27 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/v1/ai/deepseek") {
     const body = await readJSON(req);
-    if (body.userId && store.users[body.userId]) {
-      store.users[body.userId].lastSeenAt = new Date().toISOString();
-      await saveStore(store);
+    let user = body.userId ? store.users[body.userId] : null;
+    if (!user && body.deviceId) {
+      user = getOrCreateUser(store, String(body.deviceId).slice(0, 200));
+    }
+    if (user) {
+      user.lastSeenAt = new Date().toISOString();
+      if (typeof body.userName === "string" && body.userName.trim()) {
+        user.displayName = body.userName.trim().slice(0, 80);
+      }
     }
     const result = await callDeepSeek(body);
+    if (user) {
+      recordAIConversation(store, {
+        userId: user.id,
+        userText: body.text,
+        aiText: result.answer,
+        listenerName: body.listener?.name,
+        source: result.source
+      });
+      await saveStore(store);
+    }
     return jsonResponse(res, 200, result);
   }
 
@@ -546,10 +640,15 @@ async function route(req, res) {
     if (req.method === "GET" && url.pathname === "/v1/admin/users") {
       const query = (url.searchParams.get("query") || "").trim().toLowerCase();
       const users = Object.values(store.users)
-        .map(userPublic)
+        .map((user) => ({
+          ...userPublic(user),
+          aiConversationCount: Object.values(store.aiConversations).filter((item) => item.userId === user.id).length
+        }))
         .filter((user) => {
           if (!query) return true;
-          return user.id.toLowerCase().includes(query) || user.deviceId.toLowerCase().includes(query);
+          return user.id.toLowerCase().includes(query)
+            || user.deviceId.toLowerCase().includes(query)
+            || user.displayName.toLowerCase().includes(query);
         })
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       return jsonResponse(res, 200, { users });
