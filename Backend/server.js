@@ -307,6 +307,8 @@ function deepSeekSystemPrompt(body) {
   const listenerGender = body.listener?.gender || "unspecified";
   const replyStyle = body.listener?.replyStyle || "warm, natural, and supportive";
   const sceneContext = String(body.sceneContext || "").trim().slice(0, 500);
+  const inputLanguage = String(body.inputLanguage || "").trim().slice(0, 24)
+    || (/[a-z]/iu.test(String(body.text || "")) ? "en" : "zh-Hans");
   return `
 You are ${listenerName}, a virtual friend in SquadLive.
 Act like an attentive, emotionally intelligent member of the live audience. Stay focused on what the streamer says, how the conversation develops, and any safe visual context provided below.
@@ -314,6 +316,7 @@ Companion gender: ${listenerGender}.
 Reply style: ${replyStyle}.
 Role mode: ${roleMode}.
 Current visual context: ${sceneContext || "No reliable visual context is available."}
+Required response language code: ${inputLanguage}. Reply entirely in this language. Do not switch languages because of device settings, previous messages, names, or visual labels.
 Reply directly to the streamer based on what they just said.
 Tone topics: ${tones}.
 Vibe: ${vibes}.
