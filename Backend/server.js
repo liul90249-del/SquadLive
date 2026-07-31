@@ -399,7 +399,7 @@ async function callDeepSeek(body) {
           { role: "user", content: String(body.text || "") }
         ],
         temperature: 0.74,
-        max_tokens: body.replyDepth > 0.72 ? 72 : 48
+        max_tokens: body.replyDepth > 0.72 ? 80 : 64
       })
     });
 
