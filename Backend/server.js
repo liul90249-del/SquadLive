@@ -14,7 +14,7 @@ const adminPagePath = join(__dirname, "admin.html");
 const supportPagePath = join(__dirname, "support.html");
 const privacyPagePath = join(__dirname, "privacy.html");
 const termsPagePath = join(__dirname, "terms.html");
-const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
 
 const viewerPacks = [
   { label: "5,000", viewers: 5000, cost: 15 },
@@ -352,7 +352,7 @@ function conversationHistory(body) {
 
   return body.history
     .filter((item) => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
-    .slice(-12)
+    .slice(-8)
     .map((item) => ({ role: item.role, content: item.content.trim().slice(0, 800) }))
     .filter((item) => item.content.length > 0);
 }
@@ -392,13 +392,14 @@ async function callDeepSeek(body) {
       signal: AbortSignal.timeout(12000),
       body: JSON.stringify({
         model: deepSeekModel,
+        thinking: { type: "disabled" },
         messages: [
           { role: "system", content: deepSeekSystemPrompt(body) },
           ...conversationHistory(body),
           { role: "user", content: String(body.text || "") }
         ],
         temperature: 0.74,
-        max_tokens: body.replyDepth > 0.72 ? 110 : 80
+        max_tokens: body.replyDepth > 0.72 ? 72 : 48
       })
     });
 
