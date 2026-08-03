@@ -16,6 +16,12 @@ services:
         sync: false
       - key: ADMIN_TOKEN
         sync: false
+      - key: AI_MAX_CONCURRENCY
+        value: "40"
+      - key: AI_QUEUE_LIMIT
+        value: "300"
+      - key: INSTANCE_MEMORY_MB
+        value: "512"
     disk:
       name: squadlive-data
       mountPath: /var/data

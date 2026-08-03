@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5A30F0113014A252005C7C35 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 5A30F0103014A252005C7C35 /* FirebaseAnalytics */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		5A8134443005E662002D3583 /* SquadLive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SquadLive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5A30F0113014A252005C7C35 /* FirebaseAnalytics in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = SquadLive;
 			packageProductDependencies = (
+				5A30F0103014A252005C7C35 /* FirebaseAnalytics */,
 			);
 			productName = SquadLive;
 			productReference = 5A8134443005E662002D3583 /* SquadLive.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = 5A81343B3005E662002D3583;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5A30F00F3014A252005C7C35 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5A8134453005E662002D3583 /* Products */;
 			projectDirPath = "";
@@ -249,7 +258,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_TEAM = D9QJA58T8W;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -258,11 +267,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = SquadLive;
 				INFOPLIST_KEY_DEEPSEEK_API_KEY = "";
-				INFOPLIST_KEY_SQUADLIVE_API_BASE_URL = "http://127.0.0.1:8787";
 				INFOPLIST_KEY_NSCameraUsageDescription = "SquadLive uses the camera only for your private AI live session experience.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "SquadLive uses the microphone so you can talk naturally with your AI listeners.";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "SquadLive saves watermarked live stream records to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "SquadLive saves your recorded live videos to your photo library when you choose to download them.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "SquadLive uses speech recognition to transcribe your words during AI sessions.";
+				INFOPLIST_KEY_SQUADLIVE_API_BASE_URL = "https://squadlive.onrender.com";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -303,7 +312,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_TEAM = D9QJA58T8W;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -312,11 +321,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = SquadLive;
 				INFOPLIST_KEY_DEEPSEEK_API_KEY = "";
-				INFOPLIST_KEY_SQUADLIVE_API_BASE_URL = "";
 				INFOPLIST_KEY_NSCameraUsageDescription = "SquadLive uses the camera only for your private AI live session experience.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "SquadLive uses the microphone so you can talk naturally with your AI listeners.";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "SquadLive saves watermarked live stream records to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "SquadLive saves your recorded live videos to your photo library when you choose to download them.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "SquadLive uses speech recognition to transcribe your words during AI sessions.";
+				INFOPLIST_KEY_SQUADLIVE_API_BASE_URL = "https://squadlive.onrender.com";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -371,6 +380,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		5A30F00F3014A252005C7C35 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.16.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5A30F0103014A252005C7C35 /* FirebaseAnalytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A30F00F3014A252005C7C35 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalytics;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5A81343C3005E662002D3583 /* Project object */;
 }

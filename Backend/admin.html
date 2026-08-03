@@ -158,6 +158,23 @@
       font-size: 28px;
       font-weight: 950;
     }
+    .alerts {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .alert {
+      padding: 14px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .alert strong { display: block; margin-bottom: 5px; }
+    .alert.healthy { border-color: rgba(83,209,132,.42); background: rgba(83,209,132,.09); }
+    .alert.warning { border-color: rgba(255,211,56,.48); background: rgba(255,211,56,.09); }
+    .alert.critical { border-color: rgba(255,97,97,.52); background: rgba(255,97,97,.10); }
+    .alert span { color: var(--muted); font-size: 13px; }
+    .metric-note { margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.45; }
     .panel {
       overflow: hidden;
       margin-bottom: 16px;
@@ -324,7 +341,13 @@
       </div>
 
       <section class="section active" id="section-overview">
+        <div class="alerts" id="systemAlerts"></div>
         <div class="cards" id="overviewCards"></div>
+        <div class="cards" id="systemCards"></div>
+        <div class="panel">
+          <div class="panel-head"><h2>最近 30 天使用情况</h2><span class="pill active">每日更新</span></div>
+          <div id="dailyUsageTable"></div>
+        </div>
         <div class="panel">
           <div class="panel-head"><h2>最近用户</h2></div>
           <div id="recentUsers"></div>
@@ -442,6 +465,22 @@
       return `$${(Number(cents || 0) / 100).toFixed(2)}`;
     }
 
+    function bytes(value) {
+      const number = Number(value || 0);
+      if (number >= 1024 ** 3) return `${(number / 1024 ** 3).toFixed(2)} GB`;
+      if (number >= 1024 ** 2) return `${(number / 1024 ** 2).toFixed(1)} MB`;
+      if (number >= 1024) return `${(number / 1024).toFixed(1)} KB`;
+      return `${number} B`;
+    }
+
+    function duration(seconds) {
+      const total = Number(seconds || 0);
+      const days = Math.floor(total / 86400);
+      const hours = Math.floor((total % 86400) / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      return days ? `${days}天 ${hours}小时` : `${hours}小时 ${minutes}分钟`;
+    }
+
     function time(value) {
       if (!value) return "-";
       return new Date(value).toLocaleString("zh-CN", { hour12: false });
@@ -479,15 +518,58 @@
         ["总用户数", overview.totalUsers],
         ["5 分钟活跃", overview.activeUsers5m],
         ["今日新增", overview.newUsersToday],
-        ["VIP 用户", overview.premiumUsers],
+        ["PRO 用户", `${overview.premiumUsers} · ${overview.premiumConversionPercent}%`],
         ["充值订单", overview.rechargeCount],
         ["充值金额", money(overview.rechargeAmountCents)],
-        ["VIP 订阅", overview.vipSubscriptionCount],
+        ["今日 AI 对话", overview.aiConversationsToday],
         ["待审核分享", overview.pendingRewardSubmissions]
       ];
       document.getElementById("overviewCards").innerHTML = items.map(([label, value]) => `
         <div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>
       `).join("");
+
+      const monitoring = overview.monitoring;
+      const resources = monitoring.resources;
+      const today = monitoring.today || {};
+      const successRate = today.aiRequests ? ((today.aiSuccesses / today.aiRequests) * 100).toFixed(1) : "100.0";
+      const systemItems = [
+        ["内存占用", `${resources.memory.percent}%`, `${bytes(resources.memory.rssBytes)} / ${bytes(resources.memory.limitBytes)}`],
+        ["磁盘占用", `${resources.disk.percent}%`, `数据文件 ${bytes(resources.disk.storeBytes)} · 总空间 ${bytes(resources.disk.totalBytes)}`],
+        ["AI 并发", `${resources.aiConcurrency.active}/${resources.aiConcurrency.limit}`, `排队 ${resources.aiConcurrency.queued} · 今日峰值 ${today.peakAIConcurrency || 0}`],
+        ["AI 成功率", `${successRate}%`, `超时 ${today.aiTimeouts || 0} · 不可用 ${today.aiUnavailable || 0}`],
+        ["平均 AI 延迟", `${today.averageAILatencyMs || 0} ms`, `今日最大 ${today.maxAILatencyMs || 0} ms`],
+        ["今日请求量", today.requests || 0, `4xx ${today.http4xx || 0} · 5xx ${today.http5xx || 0}`],
+        ["并发失败", today.aiQueueRejected || 0, `运行期间累计 ${resources.aiConcurrency.rejectedSinceRestart}`],
+        ["服务器运行时间", duration(resources.uptimeSeconds), `磁盘写入失败 ${resources.storeWriteFailures}`]
+      ];
+      document.getElementById("systemCards").innerHTML = systemItems.map(([label, value, note]) => `
+        <div class="card"><div class="label">${label}</div><div class="value">${value}</div><div class="metric-note">${note}</div></div>
+      `).join("");
+
+      document.getElementById("systemAlerts").innerHTML = monitoring.warnings.map((warning) => `
+        <div class="alert ${warning.level}"><strong>${escapeHTML(warning.title)}</strong><span>${escapeHTML(warning.message)}</span></div>
+      `).join("");
+
+      document.getElementById("dailyUsageTable").innerHTML = table(
+        ["日期", "新增用户", "活跃用户", "总请求", "AI 请求", "AI 成功率", "平均延迟", "超时", "不可用", "峰值并发", "队列拒绝"],
+        monitoring.dailyUsage.map((item) => {
+          const rate = item.aiRequests ? `${((item.aiSuccesses / item.aiRequests) * 100).toFixed(1)}%` : "-";
+          return `<tr>
+            <td>${item.date}</td>
+            <td>${item.newUsers}</td>
+            <td>${item.activeUsers}</td>
+            <td>${item.requests}</td>
+            <td>${item.aiRequests}</td>
+            <td>${rate}</td>
+            <td>${item.averageAILatencyMs} ms</td>
+            <td class="${item.aiTimeouts ? "negative" : ""}">${item.aiTimeouts}</td>
+            <td class="${item.aiUnavailable ? "negative" : ""}">${item.aiUnavailable}</td>
+            <td>${item.peakAIConcurrency}</td>
+            <td class="${item.aiQueueRejected ? "negative" : ""}">${item.aiQueueRejected}</td>
+          </tr>`;
+        }),
+        "暂无每日数据"
+      );
     }
 
     function renderUsers(targetId, users) {

@@ -3,13 +3,16 @@ import Foundation
 import AVFoundation
 import Speech
 import Combine
+import NaturalLanguage
+import StoreKit
 #if os(iOS)
 import UIKit
+import Vision
+import ImageIO
 import PhotosUI
 import Photos
 import WebKit
 import UserNotifications
-import StoreKit
 #endif
 
 private enum AppScreen {
@@ -27,8 +30,202 @@ private enum AppScreen {
     case live
     case coinStore
     case checkout
-    case terms
-    case privacy
+}
+
+private enum SquadLiveLegalLinks {
+    static let privacy = URL(string: "https://squadlive.onrender.com/privacy")!
+    static let terms = URL(string: "https://squadlive.onrender.com/terms")!
+}
+
+private enum StoreProductID {
+    static let weekly = "com.liuzhigang.squadlive.pro.weekly"
+    static let annual = "com.liuzhigang.squadlive.pro.annual"
+    static let coin330 = "com.liuzhigang.squadlive.coins.330"
+    static let coin420 = "com.liuzhigang.squadlive.coins.420"
+    static let coin525 = "com.liuzhigang.squadlive.coins.525"
+    static let coin740 = "com.liuzhigang.squadlive.coins.740"
+    static let coin1450 = "com.liuzhigang.squadlive.coins.1450"
+    static let coin1800 = "com.liuzhigang.squadlive.coins.1800"
+
+    static let subscriptions = [weekly, annual]
+    static let coinAmounts = [
+        coin330: 330,
+        coin420: 420,
+        coin525: 525,
+        coin740: 740,
+        coin1450: 1_450,
+        coin1800: 1_800
+    ]
+    static let all = subscriptions + Array(coinAmounts.keys)
+}
+
+private struct StoreCoinGrant: Identifiable, Equatable {
+    let id: UInt64
+    let productID: String
+    let coins: Int
+}
+
+@MainActor
+private final class StorePurchaseManager: ObservableObject {
+    @Published private(set) var products: [String: Product] = [:]
+    @Published private(set) var isPremium = false
+    @Published private(set) var didLoadEntitlements = false
+    @Published private(set) var purchasingProductID: String?
+    @Published private(set) var coinGrant: StoreCoinGrant?
+    @Published private(set) var statusMessage: String?
+
+    private var updatesTask: Task<Void, Never>?
+    private var hasStarted = false
+    private var queuedCoinGrants: [StoreCoinGrant] = []
+    private var pendingCoinTransactions: [UInt64: StoreKit.Transaction] = [:]
+    private var processedTransactionIDs: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: "squadlive.processedCoinTransactions") ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: "squadlive.processedCoinTransactions") }
+    }
+
+    func start() async {
+        guard !hasStarted else { return }
+        hasStarted = true
+        updatesTask = Task { [weak self] in
+            for await result in StoreKit.Transaction.updates {
+                guard let self else { return }
+                await self.handle(result)
+            }
+        }
+        await loadProducts()
+        await refreshEntitlements()
+    }
+
+    func product(for id: String) -> Product? {
+        products[id]
+    }
+
+    func purchase(productID: String) async -> Bool {
+        if products[productID] == nil {
+            await loadProducts()
+        }
+        guard let product = products[productID] else {
+            statusMessage = "This product is not available from the App Store yet."
+            return false
+        }
+
+        purchasingProductID = productID
+        statusMessage = nil
+        defer { purchasingProductID = nil }
+
+        do {
+            let result = try await product.purchase()
+            switch result {
+            case .success(let verification):
+                guard case .verified(let transaction) = verification else {
+                    statusMessage = "The App Store could not verify this purchase."
+                    return false
+                }
+                await processVerified(transaction)
+                statusMessage = StoreProductID.coinAmounts[productID] == nil ? "Subscription activated." : "Purchase completed."
+                return true
+            case .pending:
+                statusMessage = "Purchase is pending approval."
+                return false
+            case .userCancelled:
+                statusMessage = nil
+                return false
+            @unknown default:
+                statusMessage = "The purchase could not be completed."
+                return false
+            }
+        } catch {
+            statusMessage = "Unable to connect to the App Store. Please try again."
+            return false
+        }
+    }
+
+    func restorePurchases() async -> Bool {
+        do {
+            try await AppStore.sync()
+            await refreshEntitlements()
+            statusMessage = isPremium ? "Your subscription has been restored." : "No active subscription was found."
+            return isPremium
+        } catch {
+            statusMessage = "Restore failed. Please try again."
+            return false
+        }
+    }
+
+    func acknowledgeCoinGrant(_ grant: StoreCoinGrant) async {
+        var processed = processedTransactionIDs
+        processed.insert(String(grant.id))
+        processedTransactionIDs = processed
+        if let transaction = pendingCoinTransactions.removeValue(forKey: grant.id) {
+            await transaction.finish()
+        }
+        if coinGrant?.id == grant.id {
+            coinGrant = nil
+            publishNextCoinGrant()
+        }
+    }
+
+    private func loadProducts() async {
+        do {
+            let loadedProducts = try await Product.products(for: StoreProductID.all)
+            products = Dictionary(uniqueKeysWithValues: loadedProducts.map { ($0.id, $0) })
+            if loadedProducts.isEmpty {
+                statusMessage = "App Store products are still being prepared."
+            }
+        } catch {
+            statusMessage = "Unable to load App Store products."
+        }
+    }
+
+    private func refreshEntitlements() async {
+        var hasActiveSubscription = false
+        for await result in StoreKit.Transaction.currentEntitlements {
+            guard case .verified(let transaction) = result else { continue }
+            if StoreProductID.subscriptions.contains(transaction.productID), transaction.revocationDate == nil {
+                hasActiveSubscription = true
+            }
+        }
+        isPremium = hasActiveSubscription
+        didLoadEntitlements = true
+    }
+
+    private func handle(_ result: VerificationResult<StoreKit.Transaction>) async {
+        guard case .verified(let transaction) = result else { return }
+        await processVerified(transaction)
+        if StoreProductID.subscriptions.contains(transaction.productID) {
+            await refreshEntitlements()
+        }
+    }
+
+    private func processVerified(_ transaction: StoreKit.Transaction) async {
+        if let amount = StoreProductID.coinAmounts[transaction.productID] {
+            let transactionKey = String(transaction.id)
+            guard !processedTransactionIDs.contains(transactionKey), pendingCoinTransactions[transaction.id] == nil else {
+                await transaction.finish()
+                return
+            }
+            let grant = StoreCoinGrant(id: transaction.id, productID: transaction.productID, coins: amount)
+            pendingCoinTransactions[transaction.id] = transaction
+            queuedCoinGrants.append(grant)
+            publishNextCoinGrant()
+            return
+        }
+
+        if StoreProductID.subscriptions.contains(transaction.productID) {
+            isPremium = transaction.revocationDate == nil
+            didLoadEntitlements = true
+        }
+        await transaction.finish()
+    }
+
+    private func publishNextCoinGrant() {
+        guard coinGrant == nil, !queuedCoinGrants.isEmpty else { return }
+        coinGrant = queuedCoinGrants.removeFirst()
+    }
+
+    deinit {
+        updatesTask?.cancel()
+    }
 }
 
 private struct UserProfile: Codable, Equatable {
@@ -55,7 +252,7 @@ private struct AppPreferences: Codable, Equatable {
     var sessionLength = 20.0
     var lastMood = "Overwhelmed"
     var lastMoodIntensity = 5.0
-    var coins = 100
+    var coins = 300
     var lobbyJoinCount = 500
     var lobbyArriveTime = 1.0
     var selectedViewerPackLabel: String?
@@ -109,7 +306,7 @@ private struct AppPreferences: Codable, Equatable {
         sessionLength = try container.decodeIfPresent(Double.self, forKey: .sessionLength) ?? 20.0
         lastMood = try container.decodeIfPresent(String.self, forKey: .lastMood) ?? "Overwhelmed"
         lastMoodIntensity = try container.decodeIfPresent(Double.self, forKey: .lastMoodIntensity) ?? 5.0
-        coins = try container.decodeIfPresent(Int.self, forKey: .coins) ?? 100
+        coins = try container.decodeIfPresent(Int.self, forKey: .coins) ?? 300
         lobbyJoinCount = try container.decodeIfPresent(Int.self, forKey: .lobbyJoinCount) ?? 500
         lobbyArriveTime = try container.decodeIfPresent(Double.self, forKey: .lobbyArriveTime) ?? 1.0
         selectedViewerPackLabel = try container.decodeIfPresent(String.self, forKey: .selectedViewerPackLabel)
@@ -131,7 +328,38 @@ private struct SavedLiveVideo: Codable, Equatable, Identifiable {
     var durationSeconds: Int
     var peakPopularity: Int
     var watermark = "SquadLive"
+    var localVideoFilename: String?
     var downloadedAt: Date?
+}
+
+private enum LiveRecordingStore {
+    static func persistTemporaryRecording(_ sourceURL: URL?, id: UUID) -> String? {
+        guard let sourceURL else { return nil }
+        let filename = "\(id.uuidString).mov"
+        let destinationURL = recordingsDirectory.appendingPathComponent(filename)
+        do {
+            try FileManager.default.createDirectory(at: recordingsDirectory, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+            try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+            return filename
+        } catch {
+            return nil
+        }
+    }
+
+    static func url(for filename: String?) -> URL? {
+        guard let filename else { return nil }
+        let url = recordingsDirectory.appendingPathComponent(filename)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private static var recordingsDirectory: URL {
+        let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return baseURL.appendingPathComponent("SquadLiveRecordings", isDirectory: true)
+    }
 }
 
 private struct RewardSubmission: Codable, Equatable, Identifiable {
@@ -183,19 +411,106 @@ private struct Listener: Identifiable, Equatable {
     let imageURL: String
     let role: String
     let description: String
+    let gender: AICompanionGender
+    let replyStyle: String
 }
 
-private enum ChatCommentKind {
+private enum AICompanionGender: String {
+    case woman
+    case man
+
+    var label: String {
+        switch self {
+        case .woman: "Woman"
+        case .man: "Man"
+        }
+    }
+}
+
+private enum AICompanionCatalog {
+    static let friends = [
+        AIFriend(name: "Sophia", role: "Hype Queen", emoji: "🔥", imageURL: "https://randomuser.me/api/portraits/women/44.jpg", gender: .woman, replyStyle: "Warm, expressive, and encouraging"),
+        AIFriend(name: "Madison", role: "Sweet Support", emoji: "💕", imageURL: "https://randomuser.me/api/portraits/women/68.jpg", gender: .woman, replyStyle: "Gentle, caring, and affirming"),
+        AIFriend(name: "Riley", role: "The Comedian", emoji: "😂", imageURL: "https://randomuser.me/api/portraits/women/12.jpg", gender: .woman, replyStyle: "Playful, bright, and uplifting"),
+        AIFriend(name: "Ava", role: "Deep Thinker", emoji: "🤔", imageURL: "https://randomuser.me/api/portraits/women/79.jpg", gender: .woman, replyStyle: "Thoughtful, reflective, and calm"),
+        AIFriend(name: "Emma", role: "Gentle Soul", emoji: "🌸", imageURL: "https://randomuser.me/api/portraits/women/32.jpg", gender: .woman, replyStyle: "Soft-spoken, empathetic, and reassuring"),
+        AIFriend(name: "Zoe", role: "Loyal Fan", emoji: "👑", imageURL: "https://randomuser.me/api/portraits/women/26.jpg", gender: .woman, replyStyle: "Confident, devoted, and celebratory"),
+        AIFriend(name: "Mia", role: "Drama Queen", emoji: "🎭", imageURL: "https://randomuser.me/api/portraits/women/89.jpg", gender: .woman, replyStyle: "Bold, playful, and expressive"),
+        AIFriend(name: "Chloe", role: "Cheerleader", emoji: "✨", imageURL: "https://randomuser.me/api/portraits/women/53.jpg", gender: .woman, replyStyle: "Bright, enthusiastic, and supportive"),
+        AIFriend(name: "Luna", role: "Night Owl", emoji: "🌙", imageURL: "https://randomuser.me/api/portraits/women/21.jpg", gender: .woman, replyStyle: "Relaxed, intimate, and observant"),
+        AIFriend(name: "Harper", role: "Soft Voice", emoji: "💫", imageURL: "https://randomuser.me/api/portraits/women/65.jpg", gender: .woman, replyStyle: "Tender, attentive, and calming"),
+        AIFriend(name: "Nora", role: "Calm Coach", emoji: "🫶", imageURL: "https://randomuser.me/api/portraits/women/36.jpg", gender: .woman, replyStyle: "Clear, balanced, and reassuring"),
+        AIFriend(name: "Ivy", role: "Bright Spark", emoji: "⚡️", imageURL: "https://randomuser.me/api/portraits/women/7.jpg", gender: .woman, replyStyle: "Optimistic, lively, and motivating"),
+        AIFriend(name: "Liam", role: "Steady Guide", emoji: "🧭", imageURL: "https://randomuser.me/api/portraits/men/32.jpg", gender: .man, replyStyle: "Grounded, practical, and reassuring"),
+        AIFriend(name: "Noah", role: "Calm Listener", emoji: "🌊", imageURL: "https://randomuser.me/api/portraits/men/46.jpg", gender: .man, replyStyle: "Patient, calm, and attentive"),
+        AIFriend(name: "Ethan", role: "Confidence Coach", emoji: "⚡️", imageURL: "https://randomuser.me/api/portraits/men/11.jpg", gender: .man, replyStyle: "Direct, encouraging, and action-focused"),
+        AIFriend(name: "Miles", role: "Warm Humor", emoji: "😄", imageURL: "https://randomuser.me/api/portraits/men/65.jpg", gender: .man, replyStyle: "Lighthearted, kind, and energizing"),
+        AIFriend(name: "Leo", role: "Thoughtful Ally", emoji: "🪶", imageURL: "https://randomuser.me/api/portraits/men/75.jpg", gender: .man, replyStyle: "Reflective, sincere, and supportive"),
+        AIFriend(name: "Owen", role: "Quiet Strength", emoji: "🛡️", imageURL: "https://randomuser.me/api/portraits/men/52.jpg", gender: .man, replyStyle: "Steady, composed, and reassuring")
+    ]
+
+    static var defaultListeners: [Listener] {
+        listeners(for: Array(friends.prefix(3)).map(\.imageURL))
+    }
+
+    static func listeners(for imageURLs: [String]) -> [Listener] {
+        imageURLs.compactMap { imageURL in
+            friends.first { $0.imageURL == imageURL }
+        }
+        .map {
+                Listener(
+                    id: $0.name.lowercased(),
+                    name: $0.name,
+                    avatar: $0.emoji,
+                    imageURL: $0.imageURL,
+                    role: $0.role,
+                    description: $0.replyStyle,
+                    gender: $0.gender,
+                    replyStyle: $0.replyStyle
+                )
+            }
+    }
+}
+
+private enum ChatCommentKind: String, Codable {
     case barrage
     case deepAnswer
 }
 
-private struct ChatComment: Identifiable {
-    let id = UUID()
+private struct ChatComment: Identifiable, Codable {
+    let id: UUID
     let name: String
     let avatar: String
-    let text: String
-    var kind: ChatCommentKind = .barrage
+    var text: String
+    var kind: ChatCommentKind
+    let createdAt: Date
+
+    init(id: UUID = UUID(), name: String, avatar: String, text: String, kind: ChatCommentKind = .barrage, createdAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.avatar = avatar
+        self.text = text
+        self.kind = kind
+        self.createdAt = createdAt
+    }
+}
+
+private enum LiveChatHistoryStore {
+    private static let key = "squadlive.ai-chat-history"
+
+    static func load() -> [ChatComment] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let comments = try? JSONDecoder().decode([ChatComment].self, from: data) else {
+            return []
+        }
+        return comments.filter { $0.kind == .deepAnswer && $0.text != "•••" }
+    }
+
+    static func save(_ comments: [ChatComment]) {
+        let retained = Array(comments.filter { $0.kind == .deepAnswer && $0.text != "•••" }.suffix(240))
+        guard let data = try? JSONEncoder().encode(retained) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
 }
 
 private struct FloatingHeart: Identifiable {
@@ -235,6 +550,11 @@ private enum AppReviewStrategy {
             preferences.reviewPositiveMoments += 3
             requestIfAllowed(preferences: &preferences)
         }
+    }
+
+    static func requestFromLive(preferences: inout AppPreferences) {
+        preferences.reviewPositiveMoments += 2
+        requestIfAllowed(preferences: &preferences, force: true)
     }
 
     private static func requestIfAllowed(preferences: inout AppPreferences, force: Bool = false) {
@@ -490,13 +810,19 @@ private enum LiveToolTab: String, CaseIterable {
 }
 
 private struct DeepSeekChatRequest: Encodable {
+    struct ThinkingMode: Encodable {
+        let type: String
+    }
+
     let model: String
+    let thinking: ThinkingMode
     let messages: [DeepSeekMessage]
     let temperature: Double
     let maxTokens: Int
 
     enum CodingKeys: String, CodingKey {
         case model
+        case thinking
         case messages
         case temperature
         case maxTokens = "max_tokens"
@@ -518,6 +844,9 @@ private struct DeepSeekChatResponse: Decodable {
 
 private struct SquadLiveAIProxyRequest: Encodable {
     let text: String
+    let history: [DeepSeekMessage]
+    let deviceId: String
+    let userName: String
     let listener: ListenerPayload
     let roleMode: String
     let replyDepth: Double
@@ -525,36 +854,104 @@ private struct SquadLiveAIProxyRequest: Encodable {
     let toneTopics: [String]
     let vibeMoods: [String]
     let liveSeconds: Int
+    let sceneContext: String
+    let inputLanguage: String
 
     struct ListenerPayload: Encodable {
         let name: String
         let role: String
+        let gender: String
+        let replyStyle: String
     }
 }
 
 private struct SquadLiveAIProxyResponse: Decodable {
     let answer: String
+    let source: String?
+    let reason: String?
+    let providerStatus: Int?
+}
+
+private struct DeepSeekAnswerResult {
+    let text: String
+    let source: String
+    let reason: String?
+
+    var isDeepSeek: Bool { source == "deepseek" }
+    var shouldRetry: Bool {
+        reason == "network_error" || reason == "provider_error" || reason == "empty_response" || reason == "timeout"
+    }
+}
+
+private enum SquadLiveDeviceIdentity {
+    private static let storageKey = "squadlive.device-id"
+
+    static let value: String = {
+        if let saved = UserDefaults.standard.string(forKey: storageKey), !saved.isEmpty {
+            return saved
+        }
+#if os(iOS)
+        let generated = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+#else
+        let generated = UUID().uuidString
+#endif
+        UserDefaults.standard.set(generated, forKey: storageKey)
+        return generated
+    }()
 }
 
 private enum DeepSeekClient {
-    static func answer(userText: String, listener: Listener, roleMode: String, replyDepth: Double, activeDirections: [String], toneTopics: [String], vibeMoods: [String], liveSeconds: Int) async -> String? {
-        if let backendAnswer = await answerViaBackend(
+    private static let productionBackendURL = URL(string: "https://squadlive.onrender.com")!
+
+    private static var backendBaseURL: URL {
+        guard let rawBaseURL = Bundle.main.object(forInfoDictionaryKey: "SQUADLIVE_API_BASE_URL") as? String,
+              !rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let configuredURL = URL(string: rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return productionBackendURL
+        }
+        return configuredURL
+    }
+
+    private static let backendSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 55
+        configuration.timeoutIntervalForResource = 70
+        configuration.httpMaximumConnectionsPerHost = 1
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
+
+    static func warmBackend() async {
+        var request = URLRequest(url: backendBaseURL.appendingPathComponent("health"), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 55)
+        request.httpMethod = "GET"
+        _ = try? await backendSession.data(for: request)
+    }
+
+    static func answer(userText: String, history: [DeepSeekMessage], userName: String, listener: Listener, roleMode: String, replyDepth: Double, activeDirections: [String], toneTopics: [String], vibeMoods: [String], liveSeconds: Int, sceneContext: String) async -> DeepSeekAnswerResult? {
+        let inputLanguage = detectedLanguageCode(for: userText)
+        let backendAnswer = await answerViaBackend(
             userText: userText,
+            history: history,
+            userName: userName,
             listener: listener,
             roleMode: roleMode,
             replyDepth: replyDepth,
             activeDirections: activeDirections,
             toneTopics: toneTopics,
             vibeMoods: vibeMoods,
-            liveSeconds: liveSeconds
-        ) {
+            liveSeconds: liveSeconds,
+            sceneContext: sceneContext,
+            inputLanguage: inputLanguage
+        )
+        if let backendAnswer, backendAnswer.isDeepSeek {
             return backendAnswer
         }
 
         guard let apiKey = Bundle.main.object(forInfoDictionaryKey: "DEEPSEEK_API_KEY") as? String,
               !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let url = URL(string: "https://api.deepseek.com/chat/completions") else {
-            return nil
+            return backendAnswer
         }
 
         let directionGuide = Self.directionGuide(activeDirections)
@@ -563,8 +960,13 @@ private enum DeepSeekClient {
         let liveStage = liveSeconds < 60 ? "opening" : (liveSeconds < 300 ? "active" : "late")
         let systemPrompt = """
         You are \(listener.name), a virtual live-room friend inside SquadLive.
+        Act like an attentive, emotionally intelligent member of the live audience. Stay focused on what the streamer says, how the conversation develops, and any safe visual context provided below.
+        Companion gender: \(listener.gender.label).
+        Reply style: \(listener.replyStyle).
         Role mode: \(roleMode).
         Live stage: \(liveStage).
+        Current visual context: \(sceneContext.isEmpty ? "The latest frame is still being analyzed. Do not claim that you cannot see the stream; ask the user to hold the item closer if visual detail matters." : sceneContext)
+        Required response language code: \(inputLanguage). Reply entirely in this language. Do not switch languages because of device settings, previous messages, names, or visual labels.
         Tone topics: \(toneGuide).
         Vibe mood: \(vibeGuide).
         Reply directly to the user based on what they just said.
@@ -573,77 +975,89 @@ private enum DeepSeekClient {
         When it fits the moment, include one short compliment about the user's voice, appearance, camera presence, smile, or energy.
         Do not repeat the same compliment style twice in a row.
         Avoid generic greetings and avoid sounding scripted.
-        Use \(replyDepth > 0.72 ? "2-3 short sentences" : "1-2 short sentences").
+        Do not merely repeat or paraphrase the user's words. React to their meaning and move the conversation forward.
+        Refer to visual context when it helps answer the user naturally. Treat visual labels as uncertain, use phrasing such as "it looks like" when needed, and never infer sensitive traits, health, identity, or private information. Never say that you cannot see the stream.
+        If the user says it is nice to meet you, warmly say it is nice to meet them too and ask one natural follow-up question.
+        Always reply in the same language as the user's latest message. Chinese input requires Chinese output; English input requires English output.
+        Usually use 1-2 short sentences, but do not force an unnatural cutoff. When the topic genuinely benefits from detail, a deeper reply may use 3-4 concise sentences. Avoid long, repetitive paragraphs.
         """
         let body = DeepSeekChatRequest(
-            model: "deepseek-chat",
-            messages: [
-                DeepSeekMessage(role: "system", content: systemPrompt),
-                DeepSeekMessage(role: "user", content: userText)
-            ],
+            model: "deepseek-v4-flash",
+            thinking: .init(type: "disabled"),
+            messages: [DeepSeekMessage(role: "system", content: systemPrompt)]
+                + history
+                + [DeepSeekMessage(role: "user", content: userText)],
             temperature: min(0.9, max(0.45, 0.52 + replyDepth * 0.32)),
-            maxTokens: replyDepth > 0.72 ? 180 : 120
+            maxTokens: replyDepth > 0.72 ? 80 : 64
         )
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 16
+        request.timeoutInterval = 50
 
         do {
             request.httpBody = try JSONEncoder().encode(body)
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
-                return nil
+                return backendAnswer
             }
             let decoded = try JSONDecoder().decode(DeepSeekChatResponse.self, from: data)
-            return decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let answer = decoded.choices.first?.message.content else { return backendAnswer }
+            return DeepSeekAnswerResult(text: conciseReply(answer, matching: userText, replyDepth: replyDepth), source: "deepseek", reason: nil)
         } catch {
-            return nil
+            return backendAnswer
         }
     }
 
-    private static func answerViaBackend(userText: String, listener: Listener, roleMode: String, replyDepth: Double, activeDirections: [String], toneTopics: [String], vibeMoods: [String], liveSeconds: Int) async -> String? {
-        guard let rawBaseURL = Bundle.main.object(forInfoDictionaryKey: "SQUADLIVE_API_BASE_URL") as? String,
-              !rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let baseURL = URL(string: rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            return nil
-        }
-
+    private static func answerViaBackend(userText: String, history: [DeepSeekMessage], userName: String, listener: Listener, roleMode: String, replyDepth: Double, activeDirections: [String], toneTopics: [String], vibeMoods: [String], liveSeconds: Int, sceneContext: String, inputLanguage: String) async -> DeepSeekAnswerResult? {
         let requestBody = SquadLiveAIProxyRequest(
             text: userText,
-            listener: .init(name: listener.name, role: listener.role),
+            history: history,
+            deviceId: SquadLiveDeviceIdentity.value,
+            userName: userName,
+            listener: .init(name: listener.name, role: listener.role, gender: listener.gender.label, replyStyle: listener.replyStyle),
             roleMode: roleMode,
             replyDepth: replyDepth,
             activeDirections: activeDirections,
             toneTopics: toneTopics,
             vibeMoods: vibeMoods,
-            liveSeconds: liveSeconds
+            liveSeconds: liveSeconds,
+            sceneContext: sceneContext,
+            inputLanguage: inputLanguage
         )
 
-        var request = URLRequest(url: baseURL.appendingPathComponent("v1/ai/deepseek"))
+        var request = URLRequest(url: backendBaseURL.appendingPathComponent("v1/ai/deepseek"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 16
+        request.timeoutInterval = 50
 
         do {
             request.httpBody = try JSONEncoder().encode(requestBody)
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await backendSession.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
-                return nil
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                print("SquadLive AI backend returned HTTP \(statusCode)")
+                return DeepSeekAnswerResult(text: "", source: "fallback", reason: "provider_error")
             }
-            return try JSONDecoder().decode(SquadLiveAIProxyResponse.self, from: data).answer
+            let decoded = try JSONDecoder().decode(SquadLiveAIProxyResponse.self, from: data)
+            return DeepSeekAnswerResult(
+                text: conciseReply(decoded.answer, matching: userText, replyDepth: replyDepth),
+                source: decoded.source ?? "fallback",
+                reason: decoded.reason
+            )
         } catch {
-            return nil
+            print("SquadLive AI backend request failed: \(error)")
+            return DeepSeekAnswerResult(text: "", source: "fallback", reason: "network_error")
         }
     }
 
     private static func directionGuide(_ activeDirections: [String]) -> String {
         let labels = activeDirections.compactMap { direction -> String? in
-            switch direction {
+            switch direction.lowercased() {
             case "general": return "Stay conversational and directly respond to the user's point."
             case "agree": return "Agree when appropriate and keep the energy supportive."
             case "disagree": return "Offer gentle pushback without sounding argumentative."
@@ -661,6 +1075,24 @@ private enum DeepSeekClient {
         }
         return labels.joined(separator: " ")
     }
+
+    private static func detectedLanguageCode(for text: String) -> String {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        if let language = recognizer.dominantLanguage?.rawValue {
+            return language
+        }
+        return text.unicodeScalars.contains { (0x3400...0x9FFF).contains(Int($0.value)) } ? "zh-Hans" : "en"
+    }
+
+    private static func conciseReply(_ answer: String, matching userText: String, replyDepth: Double) -> String {
+        let cleanAnswer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let usesChinese = userText.unicodeScalars.contains { (0x3400...0x9FFF).contains(Int($0.value)) }
+        let prefersDepth = replyDepth > 0.72
+        let limit = usesChinese ? (prefersDepth ? 160 : 110) : (prefersDepth ? 360 : 240)
+        guard cleanAnswer.count > limit else { return cleanAnswer }
+        return String(cleanAnswer.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
 }
 
 private final class SpeechTranscriber: ObservableObject {
@@ -668,10 +1100,13 @@ private final class SpeechTranscriber: ObservableObject {
     @Published var statusText = "Listening..."
 
 #if os(iOS)
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    private let audioEngine = AVAudioEngine()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private var nextLocaleIdentifier: String?
+    private var restartWorkItem: DispatchWorkItem?
+    private var sessionID = UUID()
+    private var shouldKeepListening = false
+    private let savedLocaleKey = "squadlive.speech-recognition-locale"
 #endif
 
     func start() {
@@ -682,42 +1117,8 @@ private final class SpeechTranscriber: ObservableObject {
         }
 
         stop()
-        transcript = ""
-        statusText = "Listening..."
-
-        let audioSession = AVAudioSession.sharedInstance()
-        do {
-            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-
-            let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-            recognitionRequest.shouldReportPartialResults = true
-            request = recognitionRequest
-
-            let inputNode = audioEngine.inputNode
-            let recordingFormat = inputNode.outputFormat(forBus: 0)
-            inputNode.removeTap(onBus: 0)
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak recognitionRequest] buffer, _ in
-                recognitionRequest?.append(buffer)
-            }
-
-            audioEngine.prepare()
-            try audioEngine.start()
-
-            task = recognizer?.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-                DispatchQueue.main.async {
-                    if let result {
-                        self?.transcript = result.bestTranscription.formattedString
-                    }
-                    if error != nil || result?.isFinal == true {
-                        self?.statusText = error == nil ? "Voice ready." : "Voice paused."
-                    }
-                }
-            }
-        } catch {
-            statusText = "Microphone is unavailable."
-            stop()
-        }
+        shouldKeepListening = true
+        startRecognitionSession()
 #else
         statusText = "Speech recognition runs on iPhone."
 #endif
@@ -725,43 +1126,167 @@ private final class SpeechTranscriber: ObservableObject {
 
     func stop() {
 #if os(iOS)
-        if audioEngine.isRunning {
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-        }
-        request?.endAudio()
-        task?.cancel()
-        request = nil
-        task = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        shouldKeepListening = false
+        restartWorkItem?.cancel()
+        restartWorkItem = nil
+        stopRecognitionSession(deactivateAudio: true)
 #endif
     }
+
+#if os(iOS)
+    func appendAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        recognitionRequest?.appendAudioSampleBuffer(sampleBuffer)
+    }
+#endif
+
+#if os(iOS)
+    private func startRecognitionSession() {
+        guard shouldKeepListening else { return }
+
+        stopRecognitionSession(deactivateAudio: false)
+        transcript = ""
+        statusText = "Listening..."
+        sessionID = UUID()
+        let activeSessionID = sessionID
+
+        let localeID = nextLocaleIdentifier ?? recognitionLocaleIDs().first ?? "en-US"
+        nextLocaleIdentifier = nil
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeID)), recognizer.isAvailable else {
+            statusText = "Speech recognition is unavailable."
+            return
+        }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.taskHint = .dictation
+        recognitionRequest = request
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            DispatchQueue.main.async {
+                guard let self, self.sessionID == activeSessionID else { return }
+                if let result {
+                    self.updateTranscript(from: result, localeID: localeID)
+                }
+                if error != nil || result?.isFinal == true {
+                    self.restartRecognitionSession()
+                }
+            }
+        }
+    }
+
+    private func updateTranscript(from result: SFSpeechRecognitionResult, localeID: String) {
+        let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        if text != transcript {
+            transcript = text
+        }
+
+        if text.count >= 4 {
+            let languageRecognizer = NLLanguageRecognizer()
+            languageRecognizer.processString(text)
+            if let detectedLanguage = languageRecognizer.dominantLanguage?.rawValue,
+               let detectedLocale = bestSupportedLocale(for: detectedLanguage, in: Array(SFSpeechRecognizer.supportedLocales())) {
+                if detectedLocale.identifier != localeID {
+                    nextLocaleIdentifier = detectedLocale.identifier
+                } else {
+                    UserDefaults.standard.set(localeID, forKey: savedLocaleKey)
+                }
+                return
+            }
+        }
+
+        let confidences = result.bestTranscription.segments.map(\.confidence).filter { $0 > 0 }
+        guard text.count >= 3, !confidences.isEmpty else { return }
+        let averageConfidence = confidences.reduce(0, +) / Float(confidences.count)
+        if averageConfidence < 0.20 {
+            let candidates = recognitionLocaleIDs()
+            if let currentIndex = candidates.firstIndex(of: localeID), candidates.count > 1 {
+                nextLocaleIdentifier = candidates[(currentIndex + 1) % candidates.count]
+            }
+        }
+    }
+
+    private func recognitionLocaleIDs() -> [String] {
+        let supportedLocales = Array(SFSpeechRecognizer.supportedLocales())
+        let savedIdentifier = UserDefaults.standard.string(forKey: savedLocaleKey)
+        let preferredIdentifiers = [savedIdentifier].compactMap { $0 } + Locale.preferredLanguages + [Locale.current.identifier]
+        var selected: [String] = []
+
+        for preferredIdentifier in preferredIdentifiers {
+            guard selected.count < 3, let match = bestSupportedLocale(for: preferredIdentifier, in: supportedLocales) else { continue }
+            if !selected.contains(match.identifier) {
+                selected.append(match.identifier)
+            }
+        }
+
+        if let english = bestSupportedLocale(for: "en-US", in: supportedLocales), !selected.contains(english.identifier) {
+            selected.append(english.identifier)
+        }
+
+        return Array(selected.prefix(4))
+    }
+
+    private func bestSupportedLocale(for identifier: String, in supportedLocales: [Locale]) -> Locale? {
+        let normalizedIdentifier = identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        if let exact = supportedLocales.first(where: {
+            $0.identifier.replacingOccurrences(of: "_", with: "-").lowercased() == normalizedIdentifier
+        }) {
+            return exact
+        }
+
+        let preferredLocale = Locale(identifier: identifier)
+        guard let languageCode = preferredLocale.language.languageCode?.identifier else { return nil }
+        let regionCode = preferredLocale.region?.identifier
+        return supportedLocales.first(where: {
+            $0.language.languageCode?.identifier == languageCode && (regionCode == nil || $0.region?.identifier == regionCode)
+        }) ?? supportedLocales.first(where: { $0.language.languageCode?.identifier == languageCode })
+    }
+
+    private func restartRecognitionSession() {
+        guard shouldKeepListening else { return }
+        statusText = "Voice ready."
+        restartWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.startRecognitionSession()
+        }
+        restartWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
+    }
+
+    private func stopRecognitionSession(deactivateAudio: Bool) {
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+        recognitionRequest = nil
+        recognitionTask = nil
+    }
+#endif
 }
 
 struct ContentView: View {
+    @StateObject private var store = StorePurchaseManager()
     @State private var screen: AppScreen
     @State private var profile: UserProfile
     @State private var preferences: AppPreferences
     @State private var initialScreen: AppScreen
-    @State private var selectedListener = Self.listeners[0]
+    @State private var selectedListener = AICompanionCatalog.defaultListeners[0]
     @State private var showPaywall = false
     @State private var showCheckoutOverlay = false
     @State private var showCoinStoreOverlay = false
     @State private var checkoutReturnScreen: AppScreen = .lobby
     @State private var coinStoreReturnScreen: AppScreen = .lobby
 
-    private static let listeners = [
-        Listener(id: "1", name: "Sarah", avatar: "👩‍🦰", imageURL: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=420&h=420&q=85", role: "The Empath", description: "Warm, understanding, always validates your feelings"),
-        Listener(id: "2", name: "David", avatar: "👨‍💼", imageURL: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=420&h=420&q=85", role: "The Rational Advisor", description: "Thoughtful insights, practical solutions"),
-        Listener(id: "3", name: "Maya", avatar: "🧘‍♀️", imageURL: "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&w=420&h=420&q=85", role: "The Zen Guide", description: "Calm energy, mindfulness-based support")
-    ]
+    private var selectedAIListeners: [Listener] {
+        let listeners = AICompanionCatalog.listeners(for: profile.avatars)
+        return listeners.isEmpty ? AICompanionCatalog.defaultListeners : listeners
+    }
 
     init() {
         let savedProfile = PersistenceStore.loadProfile()
+        let savedListeners = AICompanionCatalog.listeners(for: savedProfile.avatars)
         _profile = State(initialValue: savedProfile)
         _preferences = State(initialValue: PersistenceStore.loadPreferences())
         _initialScreen = State(initialValue: savedProfile.isComplete ? .lobby : .onboarding)
         _screen = State(initialValue: .splash)
+        _selectedListener = State(initialValue: savedListeners.first ?? AICompanionCatalog.defaultListeners[0])
     }
 
     var body: some View {
@@ -785,6 +1310,7 @@ struct ContentView: View {
             case .avatars:
                 AvatarSelectionView(pronoun: profile.pronoun) { avatars in
                     profile.avatars = avatars
+                    selectedListener = AICompanionCatalog.listeners(for: avatars).first ?? AICompanionCatalog.defaultListeners[0]
                     PersistenceStore.saveProfile(profile)
                     withAnimation(.easeInOut) { screen = .permissions }
                 }
@@ -805,7 +1331,7 @@ struct ContentView: View {
                 LobbyView(
                     userName: profile.name.isEmpty ? "Friend" : profile.name,
                     userAvatarData: profile.userAvatarData,
-                    listeners: Self.listeners,
+                    listeners: selectedAIListeners,
                     selectedListener: $selectedListener,
                     preferences: $preferences,
                     onEditProfile: { withAnimation(.easeInOut) { screen = .editProfile } },
@@ -833,7 +1359,7 @@ struct ContentView: View {
                     withAnimation(.easeInOut) { screen = .lobby }
                 }
             case .allListeners:
-                AllListenersView(listeners: Self.listeners, selectedListener: $selectedListener) {
+                AllListenersView(listeners: selectedAIListeners, selectedListener: $selectedListener) {
                     withAnimation(.easeInOut) { screen = .lobby }
                 }
             case .moodCheckIn:
@@ -849,31 +1375,38 @@ struct ContentView: View {
             case .live:
                 LiveStreamView(
                     listener: selectedListener,
+                    listeners: selectedAIListeners,
+                    userName: profile.name.isEmpty ? "Friend" : profile.name,
+                    userAvatarData: profile.userAvatarData,
                     preferences: preferences,
                     initialPopularity: Self.liveBasePopularity(for: preferences),
                     purchasedAudienceCount: Self.purchasedAudienceBoost(for: preferences),
+                    audienceArrivalMinutes: preferences.lobbyArriveTime,
                     showPaywall: $showPaywall,
-                    onEnd: { duration, peakPopularity in
-                        saveFinishedLiveVideo(duration: duration, peakPopularity: peakPopularity)
+                    onEnd: { duration, peakPopularity, recordingURL in
+                        saveFinishedLiveVideo(duration: duration, peakPopularity: peakPopularity, recordingURL: recordingURL)
                         withAnimation(.easeInOut) { screen = .lobby }
                     },
                     onShowCoinStore: { openCoinStore(from: .live) },
-                    onUpgrade: { openCheckout(from: .live) }
+                    onUpgrade: { openCheckout(from: .live) },
+                    onCoinsChanged: { updatedCoins in
+                        preferences.coins = updatedCoins
+                    },
+                    onRequestReview: {
+                        AppReviewStrategy.requestFromLive(preferences: &preferences)
+                    }
                 )
             case .coinStore:
                 CoinStoreView(
+                    store: store,
                     coins: preferences.coins,
                     onClose: {
                         withAnimation(.easeInOut) { screen = coinStoreReturnScreen }
-                    },
-                    onBuy: { amount in
-                        preferences.coins += amount
-                        AppReviewStrategy.register(.coinPurchased, preferences: &preferences)
-                        PersistenceStore.savePreferences(preferences)
                     }
                 )
             case .checkout:
                 PremiumCheckoutView(
+                    store: store,
                     onClose: {
                         showPaywall = checkoutReturnScreen == .live
                         withAnimation(.easeInOut) { screen = checkoutReturnScreen }
@@ -884,26 +1417,13 @@ struct ContentView: View {
                         AppReviewStrategy.register(.subscribed, preferences: &preferences)
                         PersistenceStore.savePreferences(preferences)
                         withAnimation(.easeInOut) { screen = checkoutReturnScreen }
-                    },
-                    onTerms: {
-                        withAnimation(.easeInOut) { screen = .terms }
-                    },
-                    onPrivacy: {
-                        withAnimation(.easeInOut) { screen = .privacy }
                     }
                 )
-            case .terms:
-                LegalTextView(kind: .terms) {
-                    withAnimation(.easeInOut) { screen = .checkout }
-                }
-            case .privacy:
-                LegalTextView(kind: .privacy) {
-                    withAnimation(.easeInOut) { screen = .checkout }
-                }
             }
 
             if showCheckoutOverlay {
                 PremiumCheckoutView(
+                    store: store,
                     onClose: {
                         showPaywall = false
                         withAnimation(.easeInOut) { showCheckoutOverlay = false }
@@ -914,9 +1434,7 @@ struct ContentView: View {
                         AppReviewStrategy.register(.subscribed, preferences: &preferences)
                         PersistenceStore.savePreferences(preferences)
                         withAnimation(.easeInOut) { showCheckoutOverlay = false }
-                    },
-                    onTerms: {},
-                    onPrivacy: {}
+                    }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .zIndex(10)
@@ -924,14 +1442,10 @@ struct ContentView: View {
 
             if showCoinStoreOverlay {
                 CoinStoreView(
+                    store: store,
                     coins: preferences.coins,
                     onClose: {
                         withAnimation(.easeInOut) { showCoinStoreOverlay = false }
-                    },
-                    onBuy: { amount in
-                        preferences.coins += amount
-                        AppReviewStrategy.register(.coinPurchased, preferences: &preferences)
-                        PersistenceStore.savePreferences(preferences)
                     }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -939,16 +1453,49 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .task {
+#if os(iOS)
+            RemoteImageCache.prefetch(urlStrings: AICompanionCatalog.friends.map(\.imageURL))
+#endif
+            Task(priority: .utility) {
+                await DeepSeekClient.warmBackend()
+            }
+            await store.start()
+        }
         .onChange(of: profile) { _, newValue in
             PersistenceStore.saveProfile(newValue)
         }
         .onChange(of: preferences) { _, newValue in
             PersistenceStore.savePreferences(newValue)
         }
+        .onChange(of: store.coinGrant) { _, grant in
+            guard let grant else { return }
+            preferences.coins += grant.coins
+            AppReviewStrategy.register(.coinPurchased, preferences: &preferences)
+            PersistenceStore.savePreferences(preferences)
+            Task { await store.acknowledgeCoinGrant(grant) }
+        }
+        .onChange(of: store.isPremium) { _, isPremium in
+            guard store.didLoadEntitlements else { return }
+            preferences.isPremiumMember = isPremium
+            PersistenceStore.savePreferences(preferences)
+        }
+        .onChange(of: store.didLoadEntitlements) { _, didLoad in
+            guard didLoad else { return }
+            preferences.isPremiumMember = store.isPremium
+            PersistenceStore.savePreferences(preferences)
+        }
     }
 
-    private func saveFinishedLiveVideo(duration: Int, peakPopularity: Int) {
-        let video = SavedLiveVideo(durationSeconds: max(duration, 1), peakPopularity: peakPopularity)
+    private func saveFinishedLiveVideo(duration: Int, peakPopularity: Int, recordingURL: URL?) {
+        let id = UUID()
+        let filename = LiveRecordingStore.persistTemporaryRecording(recordingURL, id: id)
+        let video = SavedLiveVideo(
+            id: id,
+            durationSeconds: max(duration, 1),
+            peakPopularity: peakPopularity,
+            localVideoFilename: filename
+        )
         preferences.savedVideos.insert(video, at: 0)
         preferences.savedVideos = Array(preferences.savedVideos.prefix(20))
         AppReviewStrategy.register(.liveCompleted(duration: duration), preferences: &preferences)
@@ -957,13 +1504,16 @@ struct ContentView: View {
 
     private static func liveBasePopularity(for preferences: AppPreferences) -> Int {
         if preferences.isPremiumMember {
-            return Int.random(in: 20_000...28_000)
+            return Int.random(in: 9_000...12_000)
         }
-        return Int.random(in: 450...650)
+        return Int.random(in: 850...1_250)
     }
 
     private static func purchasedAudienceBoost(for preferences: AppPreferences) -> Int {
-        max(0, preferences.lobbyJoinCount - 500)
+        if preferences.selectedViewerPackLabel == nil && preferences.lobbyJoinCount <= 500 {
+            return 0
+        }
+        return max(0, preferences.lobbyJoinCount)
     }
 
     private func openCheckout(from returnScreen: AppScreen) {
@@ -1147,7 +1697,7 @@ private struct OnboardingView: View {
                 }
                 .disabled(!isComplete)
 
-                Text("🔒 100% Private AI experience. No real humans.")
+                Text("🔒 AI-only room. No real human viewers.")
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.42))
                     .multilineTextAlignment(.center)
@@ -1199,21 +1749,6 @@ private struct AvatarSelectionView: View {
     let onComplete: ([String]) -> Void
     @State private var selected: [AIFriend] = []
 
-    private let friends = [
-        AIFriend(name: "Sophia", role: "Hype Queen", emoji: "🔥", imageURL: "https://randomuser.me/api/portraits/women/44.jpg"),
-        AIFriend(name: "Madison", role: "Sweet Support", emoji: "💕", imageURL: "https://randomuser.me/api/portraits/women/68.jpg"),
-        AIFriend(name: "Riley", role: "The Comedian", emoji: "😂", imageURL: "https://randomuser.me/api/portraits/women/12.jpg"),
-        AIFriend(name: "Ava", role: "Deep Thinker", emoji: "🤔", imageURL: "https://randomuser.me/api/portraits/women/79.jpg"),
-        AIFriend(name: "Emma", role: "Gentle Soul", emoji: "🌸", imageURL: "https://randomuser.me/api/portraits/women/32.jpg"),
-        AIFriend(name: "Zoe", role: "Loyal Fan", emoji: "👑", imageURL: "https://randomuser.me/api/portraits/women/26.jpg"),
-        AIFriend(name: "Mia", role: "Drama Queen", emoji: "🎭", imageURL: "https://randomuser.me/api/portraits/women/89.jpg"),
-        AIFriend(name: "Chloe", role: "Cheerleader", emoji: "✨", imageURL: "https://randomuser.me/api/portraits/women/53.jpg"),
-        AIFriend(name: "Luna", role: "Night Owl", emoji: "🌙", imageURL: "https://randomuser.me/api/portraits/women/21.jpg"),
-        AIFriend(name: "Harper", role: "Soft Voice", emoji: "💫", imageURL: "https://randomuser.me/api/portraits/women/65.jpg"),
-        AIFriend(name: "Nora", role: "Calm Coach", emoji: "🫶", imageURL: "https://randomuser.me/api/portraits/women/36.jpg"),
-        AIFriend(name: "Ivy", role: "Bright Spark", emoji: "⚡️", imageURL: "https://randomuser.me/api/portraits/women/7.jpg")
-    ]
-
     var body: some View {
         ZStack(alignment: .bottom) {
             Color.appBackground.ignoresSafeArea()
@@ -1230,7 +1765,7 @@ private struct AvatarSelectionView: View {
                             .font(.system(size: 28, weight: .black))
                             .foregroundStyle(.white)
 
-                        Text("Pick up to 3 — they'll show up in your stream, cheer you on & keep the energy going.")
+                        Text("Pick 3 AI friends. They take turns naturally, and 1–3 friends may join each conversation depending on what you need.")
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(.white.opacity(0.58))
                             .lineSpacing(5)
@@ -1238,7 +1773,7 @@ private struct AvatarSelectionView: View {
                     .padding(.top, 32)
 
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 3), spacing: 16) {
-                        ForEach(friends) { friend in
+                        ForEach(AICompanionCatalog.friends) { friend in
                             let selectedIndex = selected.firstIndex(of: friend)
                             Button {
                                 toggle(friend)
@@ -1274,6 +1809,8 @@ private struct AIFriend: Identifiable, Equatable {
     let role: String
     let emoji: String
     let imageURL: String
+    let gender: AICompanionGender
+    let replyStyle: String
 }
 
 private struct AIFriendCard: View {
@@ -1289,7 +1826,7 @@ private struct AIFriendCard: View {
             let width = proxy.size.width
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
-                    RemoteImage(urlString: friend.imageURL)
+                    RemoteImage(urlString: friend.imageURL, placeholderText: friend.emoji)
                         .frame(width: width, height: width * 1.02)
                         .clipped()
                         .overlay(alignment: .bottom) {
@@ -1308,6 +1845,11 @@ private struct AIFriendCard: View {
                             .foregroundStyle(isSelected ? Color.brandPurple : .white.opacity(0.38))
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
+                        Text("\(friend.gender.label) · \(friend.replyStyle)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.46))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.66)
                     }
                     .padding(.horizontal, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1460,9 +2002,9 @@ private struct PermissionsView: View {
     @State private var isRequesting = false
 
     private let permissions = [
-        ("camera.fill", "Camera Access", "This lets you visually interact with your AI audience in a fully immersive way. Feel assured, we never record or store your camera feed."),
+        ("camera.fill", "Camera Access", "This lets you interact with your AI audience and record your live session locally for sharing. Recordings stay on your device unless you choose to share them."),
         ("mic.fill", "Microphone", "By enabling microphone access, you can chat with your AI fans naturally through voice."),
-        ("dot.radiowaves.left.and.right", "Voice Understanding", "This helps your AI fans understand what you say and reply naturally during the live session. We do not store your voice.")
+        ("dot.radiowaves.left.and.right", "Voice Understanding", "Your speech is transcribed for AI replies. If you save a live recording, its audio remains on your device unless you choose to share it.")
     ]
 
     var body: some View {
@@ -1479,7 +2021,7 @@ private struct PermissionsView: View {
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(Color.brandPurple)
                         }
-                        Text("SquadLive offers an AI-powered live streaming experience designed as an emotional support tool. Everything happens locally on your device - your privacy is fully respected and protected.")
+                        Text("SquadLive is an AI-only live experience with no real human viewers. Camera scene analysis runs on your device; conversation text and limited scene context are sent to the AI service to generate replies. Saved recordings remain on your device unless you share them.")
                             .font(.system(size: 14))
                             .foregroundStyle(.white.opacity(0.62))
                             .lineSpacing(3)
@@ -1754,7 +2296,7 @@ private struct LobbyView: View {
             Spacer()
 
             HStack(spacing: 5) {
-                Text("PARALLEL LIVE")
+                Text("SQUADLIVE")
                     .font(.system(size: 15, weight: .black))
                     .foregroundStyle(.white)
                 Circle().fill(Color.red).frame(width: 7, height: 7)
@@ -1766,7 +2308,7 @@ private struct LobbyView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "crown.fill")
                         .foregroundStyle(Color.gold)
-                    Text("VIP")
+                    Text("PRO")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white)
                 }
@@ -1888,7 +2430,7 @@ private struct LobbyView: View {
                 .background(LinearGradient(colors: [Color(red: 0.78, green: 0.59, blue: 0.04), Color(red: 0.96, green: 0.77, blue: 0.09)], startPoint: .leading, endPoint: .trailing), in: RoundedRectangle(cornerRadius: 16))
             }
 
-            Text("Your live session will have \(projectedViewerCount.formatted()) people joining within \(Int(preferences.lobbyArriveTime)) minute\(preferences.lobbyArriveTime == 1 ? "" : "s").")
+            Text("Your AI audience grows quickly toward \(baseViewerCount.formatted()) viewers after you go live. \(purchasedViewerBoost.formatted()) extra viewers will join within \(Int(preferences.lobbyArriveTime)) minute\(preferences.lobbyArriveTime == 1 ? "" : "s").")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.white.opacity(0.62))
                 .multilineTextAlignment(.center)
@@ -1936,7 +2478,7 @@ private struct LobbyView: View {
             if selectedViewerCost > 0 {
                 HStack(spacing: 10) {
                     CoinIcon(size: 22)
-                    Text("\(preferences.lobbyJoinCount.formatted()) viewers selected")
+                    Text("\(purchasedViewerBoost.formatted()) extra AI viewers selected")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white)
                     Spacer()
@@ -1951,7 +2493,7 @@ private struct LobbyView: View {
 
             SliderBlock(title: "Viewer arrive time", value: $preferences.lobbyArriveTime, range: 1...60, step: 1, valueText: "\(Int(preferences.lobbyArriveTime)) min", minText: "1 min", maxText: "1 hr")
             SliderBlock(
-                title: "How many viewers will join",
+                title: "How many extra AI viewers join",
                 value: Binding(
                     get: { Double(preferences.lobbyJoinCount) },
                     set: { value in
@@ -2021,7 +2563,7 @@ private struct LobbyView: View {
                         Text("Share for bonus coins")
                             .font(.system(size: 22, weight: .black))
                             .foregroundStyle(.white)
-                        Text("Submit a social share link or screenshot to get 100 coins instantly, once per day. Approved posts can earn up to 10k coins.")
+                        Text("Submit a social share link or screenshot to receive a 100-coin daily bonus. One bonus is available per day.")
                             .font(.system(size: 13))
                             .foregroundStyle(.white.opacity(0.62))
                             .lineSpacing(2)
@@ -2030,7 +2572,6 @@ private struct LobbyView: View {
 
                 HStack(spacing: 10) {
                     RewardRulePill(icon: "bolt.fill", title: "Daily submit", coins: "100")
-                    RewardRulePill(icon: "checkmark.seal.fill", title: "Approved", coins: "10k")
                 }
             }
             .padding(16)
@@ -2057,7 +2598,7 @@ private struct LobbyView: View {
                     .foregroundStyle(.white)
 
                 if preferences.savedVideos.isEmpty {
-                    EmptyStateCard(title: "No saved streams", message: "End a live session to save a watermarked video here.")
+                    EmptyStateCard(title: "No saved streams", message: "End a live session to create a recorded video you can save or share.")
                 } else {
                     ForEach(preferences.savedVideos) { video in
                         SavedVideoCard(
@@ -2186,7 +2727,10 @@ private struct LobbyView: View {
 
     private func downloadSavedVideo(_ video: SavedLiveVideo) {
 #if os(iOS)
-        let image = renderSavedVideoReceipt(video)
+        guard let videoURL = LiveRecordingStore.url(for: video.localVideoFilename) else {
+            savedVideoMessage = "This older stream has no video recording. Start a new live session to create a shareable video."
+            return
+        }
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
             guard status == .authorized || status == .limited else {
                 DispatchQueue.main.async {
@@ -2196,12 +2740,12 @@ private struct LobbyView: View {
             }
 
             PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: videoURL)
             } completionHandler: { success, _ in
                 DispatchQueue.main.async {
                     if success {
                         markSavedVideoDownloaded(video.id)
-                        savedVideoMessage = "Saved to Photos with SquadLive watermark."
+                        savedVideoMessage = "Live video saved to Photos and ready to share."
                     } else {
                         savedVideoMessage = "Could not save locally. Please try again."
                     }
@@ -2219,8 +2763,15 @@ private struct LobbyView: View {
         PersistenceStore.savePreferences(preferences)
     }
 
-    private var projectedViewerCount: Int {
-        preferences.lobbyJoinCount
+    private var baseViewerCount: Int {
+        preferences.isPremiumMember ? 200_000 : 20_000
+    }
+
+    private var purchasedViewerBoost: Int {
+        if preferences.selectedViewerPackLabel == nil && preferences.lobbyJoinCount <= 500 {
+            return 0
+        }
+        return max(0, preferences.lobbyJoinCount)
     }
 
     private var selectedViewerCost: Int {
@@ -2228,7 +2779,7 @@ private struct LobbyView: View {
     }
 
     private var insufficientCoinsMessage: String {
-        "\(preferences.lobbyJoinCount.formatted()) viewers costs \(selectedViewerCost) coins. You currently have \(preferences.coins) coins."
+        "\(purchasedViewerBoost.formatted()) extra AI viewers cost \(selectedViewerCost) coins. You currently have \(preferences.coins) coins."
     }
 
     private var bottomBar: some View {
@@ -2239,7 +2790,7 @@ private struct LobbyView: View {
             } label: {
                 HStack(spacing: 8) {
                     CoinIcon(size: 20)
-                    Text("Earn 10k fans by sharing!")
+                    Text("Earn daily coins by sharing")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.70))
                         .lineLimit(2)
@@ -2368,7 +2919,7 @@ private struct LobbyView: View {
             platform: rewardPlatform,
             proofLink: cleanLink,
             screenshotData: rewardScreenshotData,
-            estimatedRewardCoins: 10_000
+            estimatedRewardCoins: shouldGrantDailyBonus ? 100 : 0
         )
 
         if shouldGrantDailyBonus {
@@ -2429,19 +2980,19 @@ private struct SliderBlock: View {
 }
 
 private struct CoinStoreView: View {
+    @ObservedObject var store: StorePurchaseManager
     let coins: Int
     let onClose: () -> Void
-    let onBuy: (Int) -> Void
     @State private var purchaseMessage: String?
     @State private var selectedPackCoins = 525
 
     private let packs = [
-        (coins: 330, rate: "66.1 coins/$1", bonus: nil as String?, badge: nil as String?, price: "$4.99", highlighted: false),
-        (coins: 420, rate: "70.1 coins/$1", bonus: "+6% bonus", badge: nil, price: "$5.99", highlighted: false),
-        (coins: 525, rate: "75.1 coins/$1", bonus: "+14% bonus", badge: "Best Value", price: "$6.99", highlighted: true),
-        (coins: 740, rate: "82.3 coins/$1", bonus: "+24% bonus", badge: nil, price: "$8.99", highlighted: false),
-        (coins: 1_450, rate: "90.7 coins/$1", bonus: "+37% bonus", badge: "Popular", price: "$15.99", highlighted: false),
-        (coins: 1_800, rate: "94.8 coins/$1", bonus: "+43% bonus", badge: "Most Coins", price: "$18.99", highlighted: false)
+        (id: StoreProductID.coin330, coins: 330, rate: "66.1 coins/$1", bonus: nil as String?, badge: nil as String?, price: "$4.99", highlighted: false),
+        (id: StoreProductID.coin420, coins: 420, rate: "70.1 coins/$1", bonus: "+6% bonus", badge: nil, price: "$5.99", highlighted: false),
+        (id: StoreProductID.coin525, coins: 525, rate: "75.1 coins/$1", bonus: "+14% bonus", badge: "Great Value", price: "$6.99", highlighted: true),
+        (id: StoreProductID.coin740, coins: 740, rate: "82.3 coins/$1", bonus: "+24% bonus", badge: nil, price: "$8.99", highlighted: false),
+        (id: StoreProductID.coin1450, coins: 1_450, rate: "96.7 coins/$1", bonus: "+46% bonus", badge: "Best Value", price: "$14.99", highlighted: false),
+        (id: StoreProductID.coin1800, coins: 1_800, rate: "90.0 coins/$1", bonus: "+36% bonus", badge: "Most Coins", price: "$19.99", highlighted: false)
     ]
 
     var body: some View {
@@ -2482,26 +3033,29 @@ private struct CoinStoreView: View {
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 12) {
-                        ForEach(packs, id: \.coins) { pack in
+                        ForEach(packs, id: \.id) { pack in
                             CoinStorePackRow(
                                 coins: pack.coins,
                                 rate: pack.rate,
                                 bonus: pack.bonus,
                                 badge: pack.badge,
-                                price: pack.price,
+                                price: store.product(for: pack.id)?.displayPrice ?? pack.price,
                                 highlighted: pack.highlighted,
                                 isSelected: selectedPackCoins == pack.coins
                             ) {
                                 selectedPackCoins = pack.coins
-                                onBuy(pack.coins)
-                                purchaseMessage = "+\(pack.coins.formatted()) coins added."
+                                Task {
+                                    let purchased = await store.purchase(productID: pack.id)
+                                    purchaseMessage = purchased ? "+\(pack.coins.formatted()) coins added." : store.statusMessage
+                                }
                             }
+                            .disabled(store.purchasingProductID != nil)
                         }
 
                         if let purchaseMessage {
                             Text(purchaseMessage)
                                 .font(.system(size: 14, weight: .black))
-                                .foregroundStyle(Color.green)
+                                .foregroundStyle(purchaseMessage.contains("added") ? Color.green : Color.gold)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 38)
                                 .background(.white.opacity(0.07), in: Capsule())
@@ -2518,6 +3072,13 @@ private struct CoinStoreView: View {
                             Spacer()
                         }
                         .padding(.top, 8)
+
+                        HStack(spacing: 20) {
+                            Link("Privacy Policy", destination: SquadLiveLegalLinks.privacy)
+                            Link("Terms of Use", destination: SquadLiveLegalLinks.terms)
+                        }
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.48))
                         .padding(.bottom, 8)
                     }
                 }
@@ -2545,61 +3106,58 @@ private struct CoinStorePackRow: View {
 
     var body: some View {
         Button(action: action) {
-            ZStack(alignment: .topTrailing) {
-                HStack(spacing: 12) {
-                    CoinIcon(size: 34)
+            HStack(spacing: 12) {
+                CoinIcon(size: 34)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
                         Text(coins.formatted())
                             .font(.system(size: 24, weight: .black))
                             .foregroundStyle(isSelected && highlighted ? Color(red: 1.0, green: 0.57, blue: 0.36) : Color.gold)
-                        HStack(spacing: 6) {
-                            Text(rate)
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.38))
+                        if let badge {
+                            Text(badge.uppercased())
+                                .font(.system(size: 8, weight: .black))
+                                .foregroundStyle(badgeColor)
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.86)
-                            if let bonus {
-                                Text(bonus)
-                                    .font(.system(size: 10, weight: .black))
-                                    .foregroundStyle(Color.green)
-                                    .padding(.horizontal, 7)
-                                    .frame(height: 20)
-                                    .background(Color.green.opacity(0.20), in: Capsule())
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.78)
-                            }
+                                .minimumScaleFactor(0.72)
+                                .padding(.horizontal, 7)
+                                .frame(height: 18)
+                                .background(badgeColor.opacity(0.13), in: Capsule())
+                                .overlay(Capsule().stroke(badgeColor.opacity(0.48), lineWidth: 1))
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Text(price)
-                        .font(.system(size: 15, weight: .black))
-                        .foregroundStyle(.white)
-                        .frame(width: 92, height: 44)
-                        .background(LinearGradient(colors: [Color.brandPurple, Color.brandPurpleDark], startPoint: .topLeading, endPoint: .bottomTrailing), in: Capsule())
-                        .shadow(color: Color.brandPurple.opacity(0.24), radius: 10)
-                        .padding(.top, badge == nil ? 0 : 14)
+                    HStack(spacing: 6) {
+                        Text(rate)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.38))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.86)
+                        if let bonus {
+                            Text(bonus)
+                                .font(.system(size: 10, weight: .black))
+                                .foregroundStyle(Color.green)
+                                .padding(.horizontal, 7)
+                                .frame(height: 20)
+                                .background(Color.green.opacity(0.20), in: Capsule())
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.78)
+                        }
+                    }
                 }
-                .padding(.horizontal, 16)
-                .frame(maxWidth: .infinity)
-                .frame(height: 84)
-                .background(rowBackground, in: RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(borderColor, lineWidth: isSelected ? 2 : 1))
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                if let badge {
-                    Text(badge)
-                        .font(.system(size: 11, weight: .black))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                        .padding(.horizontal, 10)
-                        .frame(height: 24)
-                        .background(badgeColor, in: Capsule())
-                        .padding(.top, 8)
-                        .padding(.trailing, 12)
-                }
+                Text(price)
+                    .font(.system(size: 15, weight: .black))
+                    .foregroundStyle(.white)
+                    .frame(width: 92, height: 44)
+                    .background(LinearGradient(colors: [Color.brandPurple, Color.brandPurpleDark], startPoint: .topLeading, endPoint: .bottomTrailing), in: Capsule())
+                    .shadow(color: Color.brandPurple.opacity(0.24), radius: 10)
             }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity)
+            .frame(height: 84)
+            .background(rowBackground, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(borderColor, lineWidth: isSelected ? 2 : 1))
         }
         .buttonStyle(.plain)
         .contentShape(RoundedRectangle(cornerRadius: 18))
@@ -2733,9 +3291,9 @@ private struct SavedVideoCard: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.54))
 
-                Text(video.downloadedAt == nil ? "Not downloaded yet" : "Downloaded to local")
+                Text(video.localVideoFilename == nil ? "Legacy record · no playable video" : (video.downloadedAt == nil ? "Ready to save and share" : "Saved to Photos"))
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(video.downloadedAt == nil ? .white.opacity(0.46) : Color.green)
+                    .foregroundStyle(video.localVideoFilename == nil ? Color.gold : (video.downloadedAt == nil ? .white.opacity(0.46) : Color.green))
 
                 Text(hasSubmission ? "Proof submitted" : "Ready for TikTok or Instagram reward proof")
                     .font(.system(size: 12, weight: .medium))
@@ -2745,12 +3303,25 @@ private struct SavedVideoCard: View {
             Spacer()
 
             VStack(spacing: 10) {
+                if let videoURL = LiveRecordingStore.url(for: video.localVideoFilename) {
+                    ShareLink(item: videoURL) {
+                        Image(systemName: "square.and.arrow.up.circle.fill")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(Color.gold)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                }
+
                 Button(action: onDownload) {
                     Image(systemName: video.downloadedAt == nil ? "arrow.down.circle.fill" : "checkmark.circle.fill")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(video.downloadedAt == nil ? Color.brandPurple : Color.green)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
+                .contentShape(Rectangle())
 
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "chevron.right")
                     .font(.system(size: 18, weight: .bold))
@@ -2780,7 +3351,7 @@ private struct RewardSubmissionRow: View {
                 Text("\(submission.platform) · \(submission.status)")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(.white)
-                Text("+\(submission.estimatedRewardCoins.formatted()) coins after approval")
+                Text(submission.estimatedRewardCoins > 0 ? "+\(submission.estimatedRewardCoins.formatted()) daily bonus coins" : "Share proof saved")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color.gold)
                 Text(submission.submittedAt.formatted(date: .abbreviated, time: .shortened))
@@ -2971,11 +3542,9 @@ private struct AppSettingsView: View {
 
             ScrollView {
                 VStack(spacing: 14) {
-                    SettingToggleRow(icon: "lock.fill", title: "Private Mode", description: "Keep sessions local and AI-only.", isOn: $preferences.privateMode)
-                    SettingToggleRow(icon: "sparkles", title: "Supportive Prompts", description: "Show gentle suggestions during quiet moments.", isOn: $preferences.supportivePrompts)
-                    SettingToggleRow(icon: "wand.and.stars", title: "Soft Animations", description: "Use calmer motion across the experience.", isOn: $preferences.softAnimations)
-
-                    InfoRow(icon: "shield.fill", title: "Data", description: "SquadLive saves your profile and session settings on this device.")
+                    InfoRow(icon: "person.2.fill", title: "AI-Only Audience", description: "SquadLive uses simulated AI friends and activity. No real human viewers join your room.")
+                    InfoRow(icon: "shield.fill", title: "On-Device Data", description: "Your profile, preferences, saved AI reply history, and live recordings are stored on this device.")
+                    InfoRow(icon: "network", title: "AI Processing", description: "Conversation text and limited on-device scene analysis are sent to the AI service to generate replies.")
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 18)
@@ -3116,17 +3685,15 @@ private struct SessionSettingsView: View {
 
             ScrollView {
                 VStack(spacing: 14) {
-                    SettingToggleRow(icon: "text.bubble.fill", title: "AI Comments", description: "Let AI supporters react during the stream.", isOn: $preferences.commentsEnabled)
+                    SettingToggleRow(icon: "text.bubble.fill", title: "Ambient AI Comments", description: "Show short background audience reactions between direct AI replies.", isOn: $preferences.commentsEnabled)
                     SettingToggleRow(icon: "heart.fill", title: "Floating Hearts", description: "Show tap-to-send heart reactions.", isOn: $preferences.heartsEnabled)
-                    SettingToggleRow(icon: "lock.fill", title: "PRO Reminder", description: "Show a premium response preview during long sessions.", isOn: $preferences.autoPaywall)
+                    SettingToggleRow(icon: "lock.fill", title: "PRO Reminder", description: "After four minutes, periodically explain how PRO restores high-frequency AI replies and gifts.", isOn: $preferences.autoPaywall)
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Free Session Length")
+                        Text("AI Activity")
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(.white)
-                        Slider(value: $preferences.sessionLength, in: 10...60, step: 5)
-                            .tint(Color.brandPurple)
-                        Text("\(Int(preferences.sessionLength)) seconds before PRO prompt")
+                        Text("Free sessions begin with four minutes of normal AI and gift activity. After that, activity gradually slows. PRO keeps dynamic 1–3 friend replies and gifts highly active.")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(.white.opacity(0.58))
                     }
@@ -3148,20 +3715,29 @@ private struct SessionSettingsView: View {
 
 private struct LiveStreamView: View {
     let listener: Listener
+    let listeners: [Listener]
+    let userName: String
+    let userAvatarData: Data?
     let preferences: AppPreferences
     let initialPopularity: Int
     let purchasedAudienceCount: Int
+    let audienceArrivalMinutes: Double
     @Binding var showPaywall: Bool
-    let onEnd: (Int, Int) -> Void
+    let onEnd: (Int, Int, URL?) -> Void
     let onShowCoinStore: () -> Void
     let onUpgrade: () -> Void
+    let onCoinsChanged: (Int) -> Void
+    let onRequestReview: () -> Void
 
     @StateObject private var speechTranscriber = SpeechTranscriber()
+    @StateObject private var cameraRecorder = LiveCameraRecorder()
     @State private var popularity: Int
     @State private var coins: Int
     @State private var isRecording = true
     @State private var showExitConfirm = false
     @State private var comments: [ChatComment] = []
+    @State private var chatHistory: [ChatComment] = []
+    @State private var showChatHistory = false
     @State private var showBanner = true
     @State private var streamTime = 0
     @State private var hearts: [FloatingHeart] = []
@@ -3172,9 +3748,18 @@ private struct LiveStreamView: View {
     @State private var clockTimer: Timer?
     @State private var heartTimer: Timer?
     @State private var warmupTimer: Timer?
+    @State private var speechReplyTimer: Timer?
     @State private var lastProcessedTranscript = ""
+    @State private var pendingDeepPrompts: [String] = []
+    @State private var recentSpeechPromptTimes: [String: TimeInterval] = [:]
+    @State private var conversationMemories: [String: [DeepSeekMessage]] = [:]
+    @State private var nextResponderIndex = 0
     @State private var lastDeepAnswerTime = -120
+    @State private var deepAnswerVisibleUntil = -1
     @State private var deepAnswerInFlight = false
+    @State private var activeDeepRequestID: UUID?
+    @State private var hasRequestedOpeningGreeting = false
+    @State private var lastBarrageCommentText = ""
     @State private var openingCommentIndex = 0
     @State private var openingAudienceWaves = 0
     @State private var showLiveToolPanel = false
@@ -3194,6 +3779,10 @@ private struct LiveStreamView: View {
     @State private var audienceBoostUntil = 0
     @State private var audienceTargetPopularity: Int?
     @State private var paywallCooldownUntil = 0
+    @State private var isFinishingLive = false
+    @State private var showLiveReviewPrompt = false
+    @State private var hasShownLiveReviewPrompt = false
+    @State private var thermalState = ProcessInfo.processInfo.thermalState
 
     private let aiComments = [
         ("Emma", "👩", "That confidence looks good on you."),
@@ -3203,12 +3792,78 @@ private struct LiveStreamView: View {
         ("Sofia", "👱‍♀️", "You explain things in such a real way."),
         ("Ryan", "👨‍🦰", "The room is locked in with you."),
         ("Zoe", "👩‍🦱", "That felt personal and powerful."),
-        ("Alex", "🧑", "Keep going, this is resonating.")
+        ("Alex", "🧑", "Keep going, this is resonating."),
+        ("Jane", "✨", "This live is taking off."),
+        ("Luna", "🌙", "You are literally glowing right now."),
+        ("Yoash", "🔥", "How do you make this look so effortless?"),
+        ("Sam", "⚡️", "What a vibe!"),
+        ("Ken", "🙌", "Your energy has the whole room here."),
+        ("Mia", "💫", "This is such a clip-worthy moment."),
+        ("Ava", "🫶", "Your smile just lifted the whole room."),
+        ("Noah", "👑", "Okay, main-character energy."),
+        ("Chloe", "🐰", "You look so comfortable on camera."),
+        ("Harper", "🌟", "Your voice is so easy to listen to."),
+        ("Nora", "💬", "This deserves way more viewers."),
+        ("Ivy", "⚡️", "The confidence today is everything."),
+        ("Sophia", "💖", "The room found the right live."),
+        ("Emma", "👩", "The camera really loves you today."),
+        ("Jake", "👨", "You make this feel completely effortless."),
+        ("Lily", "👧", "I could honestly listen to this all day."),
+        ("Marcus", "🧔", "That point landed harder than expected."),
+        ("Sofia", "👱‍♀️", "Your storytelling is so easy to follow."),
+        ("Ryan", "👨‍🦰", "The energy just went up."),
+        ("Zoe", "👩‍🦱", "You are owning this moment."),
+        ("Alex", "🧑", "This deserves to be on everyone's feed."),
+        ("Jane", "✨", "I joined at exactly the right time."),
+        ("Luna", "🌙", "Your calm energy is contagious."),
+        ("Yoash", "🔥", "You have natural creator energy."),
+        ("Sam", "⚡️", "The whole vibe is immaculate."),
+        ("Ken", "🙌", "You have everyone's attention right now."),
+        ("Mia", "💫", "That smile just changed the whole vibe."),
+        ("Ava", "🫶", "This feels like talking to a close friend."),
+        ("Noah", "👑", "You are making this look way too easy."),
+        ("Chloe", "🐰", "This lighting was made for you."),
+        ("Harper", "🌟", "Your voice has such a soothing tone."),
+        ("Nora", "💬", "This is the kind of live I needed today."),
+        ("Ivy", "⚡️", "Your confidence is showing in the best way."),
+        ("Sophia", "💖", "Your presence feels so warm."),
+        ("Emma", "👩", "The way you tell stories is everything."),
+        ("Jake", "👨", "Not me staying for the whole story."),
+        ("Lily", "👧", "You are glowing without even trying."),
+        ("Marcus", "🧔", "That was honestly inspiring."),
+        ("Sofia", "👱‍♀️", "Your honesty is really refreshing."),
+        ("Ryan", "👨‍🦰", "This room keeps getting better."),
+        ("Zoe", "👩‍🦱", "You look amazing from this angle."),
+        ("Alex", "🧑", "You make people want to stay and listen."),
+        ("Jane", "✨", "This is low-key my favorite live today."),
+        ("Luna", "🌙", "Wait, why is this so calming?"),
+        ("Yoash", "🔥", "Your voice has real podcast energy."),
+        ("Sam", "⚡️", "That timing was actually perfect."),
+        ("Ken", "🙌", "The room is fully locked in."),
+        ("Mia", "💫", "This moment deserves a replay."),
+        ("Ava", "🫶", "I really needed to hear that today."),
+        ("Noah", "👑", "The confidence shift is real."),
+        ("Chloe", "🐰", "You look so natural doing this."),
+        ("Harper", "🌟", "Your voice makes the room feel peaceful."),
+        ("Nora", "💬", "How does this not have more likes?"),
+        ("Ivy", "⚡️", "The energy here is actually addictive."),
+        ("Sophia", "💖", "This room feels so positive."),
+        ("Emma", "👩", "Your expression says everything."),
+        ("Jake", "👨", "That was such a real moment."),
+        ("Lily", "👧", "You are absolutely shining right now."),
+        ("Marcus", "🧔", "Strong message, even stronger delivery."),
+        ("Sofia", "👱‍♀️", "You make confidence look natural."),
+        ("Ryan", "👨‍🦰", "This live has serious momentum."),
+        ("Zoe", "👩‍🦱", "The styling and energy are both perfect."),
+        ("Alex", "🧑", "People are going to remember this one.")
     ]
     private let openingComments = [
         ("Emma", "👩", "Hi, we are here with you."),
         ("Jake", "👨", "You already look comfortable on camera."),
-        ("Lily", "👧", "Your vibe is warm today.")
+        ("Lily", "👧", "Your vibe is warm today."),
+        ("Jane", "✨", "This already feels like a good live."),
+        ("Sam", "⚡️", "What a vibe!"),
+        ("Luna", "🌙", "You are glowing today.")
     ]
     private let viewerJoinComments = [
         ("Mia", "👋", "came in to watch"),
@@ -3232,11 +3887,16 @@ private struct LiveStreamView: View {
         "Nora": "https://randomuser.me/api/portraits/women/36.jpg",
         "Ivy": "https://randomuser.me/api/portraits/women/7.jpg",
         "Sophia": "https://randomuser.me/api/portraits/women/44.jpg",
+        "Jane": "https://randomuser.me/api/portraits/women/41.jpg",
+        "Luna": "https://randomuser.me/api/portraits/women/21.jpg",
+        "Sam": "https://randomuser.me/api/portraits/women/57.jpg",
         "Jake": "https://randomuser.me/api/portraits/men/32.jpg",
         "Marcus": "https://randomuser.me/api/portraits/men/46.jpg",
         "Ryan": "https://randomuser.me/api/portraits/men/22.jpg",
         "Alex": "https://randomuser.me/api/portraits/men/65.jpg",
-        "Noah": "https://randomuser.me/api/portraits/men/11.jpg"
+        "Noah": "https://randomuser.me/api/portraits/men/11.jpg",
+        "Yoash": "https://randomuser.me/api/portraits/men/54.jpg",
+        "Ken": "https://randomuser.me/api/portraits/men/38.jpg"
     ]
     private var avatarFrames: [AvatarFrameAsset] {
         let bundledNames = BundleResourceLookup.urls(forExtension: "svga", subdirectory: "AvatarFrames")
@@ -3289,25 +3949,114 @@ private struct LiveStreamView: View {
         GiftAnimationAsset(baseName: "香水", format: .png, subdirectory: "GiftEffects")
     ]
 
-    init(listener: Listener, preferences: AppPreferences, initialPopularity: Int, purchasedAudienceCount: Int, showPaywall: Binding<Bool>, onEnd: @escaping (Int, Int) -> Void, onShowCoinStore: @escaping () -> Void, onUpgrade: @escaping () -> Void) {
+    init(listener: Listener, listeners: [Listener], userName: String, userAvatarData: Data?, preferences: AppPreferences, initialPopularity: Int, purchasedAudienceCount: Int, audienceArrivalMinutes: Double, showPaywall: Binding<Bool>, onEnd: @escaping (Int, Int, URL?) -> Void, onShowCoinStore: @escaping () -> Void, onUpgrade: @escaping () -> Void, onCoinsChanged: @escaping (Int) -> Void, onRequestReview: @escaping () -> Void) {
         self.listener = listener
+        self.listeners = listeners
+        self.userName = userName
+        self.userAvatarData = userAvatarData
         self.preferences = preferences
         self.initialPopularity = initialPopularity
         self.purchasedAudienceCount = purchasedAudienceCount
+        self.audienceArrivalMinutes = audienceArrivalMinutes
         self._showPaywall = showPaywall
         self.onEnd = onEnd
         self.onShowCoinStore = onShowCoinStore
         self.onUpgrade = onUpgrade
+        self.onCoinsChanged = onCoinsChanged
+        self.onRequestReview = onRequestReview
         self._popularity = State(initialValue: max(100, initialPopularity))
         self._coins = State(initialValue: preferences.coins)
+        self._liveToneTopics = State(initialValue: preferences.activeCommentCategories.map { $0.capitalized })
+        let mappedVibes = preferences.selectedVibes.map { vibe in
+            switch vibe {
+            case "Hater": return "Haters"
+            case "Flirtatious": return "Flirty"
+            case "Joker", "Sarcastic": return "Funny"
+            case "Questioner", "Intellectual", "Critic": return "Curious"
+            case "Fan", "Supporter", "Motivator": return "Hype"
+            case "Emotional": return "Happy"
+            default: return vibe
+            }
+        }
+        self._liveVibeMoods = State(initialValue: mappedVibes.isEmpty ? ["Hype", "Happy"] : Array(Set(mappedVibes)))
+    }
+
+    private var activeAIListeners: [Listener] {
+        var active = [listener]
+        for candidate in listeners where !active.contains(where: { $0.id == candidate.id }) {
+            active.append(candidate)
+        }
+        return Array(active.prefix(3))
+    }
+
+    private var hasConversationMemory: Bool {
+        conversationMemories.values.contains { !$0.isEmpty }
+    }
+
+    private var isAIActivityReduced: Bool {
+        !preferences.isPremiumMember && streamTime >= 240
+    }
+
+    private var minimumAIReplyInterval: Int {
+        guard isAIActivityReduced else { return 0 }
+        switch streamTime {
+        case 240..<300: return 14
+        case 300..<360: return 24
+        case 360..<480: return 36
+        default: return 44
+        }
+    }
+
+    private func orderedResponders() -> [Listener] {
+        let active = activeAIListeners
+        guard active.count > 1 else { return active }
+        let startIndex = nextResponderIndex % active.count
+        return Array(active[startIndex...] + active[..<startIndex])
+    }
+
+    private func responderCount(for prompt: String, remembersPrompt: Bool) -> Int {
+        let availableCount = activeAIListeners.count
+        guard availableCount > 1 else { return availableCount }
+        if !remembersPrompt { return 1 }
+
+        let lowercased = prompt.lowercased()
+        let asksForGroup = ["你们", "大家", "三个人", "一起", "陪陪我", "all of you", "everyone", "you guys", "both of you", "stay with me"]
+            .contains { lowercased.contains($0) }
+        let needsSupport = ["难过", "伤心", "孤独", "害怕", "焦虑", "压力", "崩溃", "失眠", "不开心", "陪我", "sad", "lonely", "afraid", "anxious", "stressed", "overwhelmed", "depressed", "upset"]
+            .contains { lowercased.contains($0) }
+        let celebrates = ["开心", "高兴", "激动", "成功", "做到了", "生日", "庆祝", "happy", "excited", "proud", "celebrate", "birthday", "i did it"]
+            .contains { lowercased.contains($0) }
+        let asksAdvice = prompt.contains("?") || prompt.contains("？") || ["怎么办", "怎么选", "建议", "应该", "why", "how", "what should", "advice", "choose"]
+            .contains { lowercased.contains($0) }
+
+        if isAIActivityReduced {
+            if streamTime < 300 && (asksForGroup || needsSupport) && Int.random(in: 0..<100) < 35 {
+                return min(2, availableCount)
+            }
+            return 1
+        }
+
+        let roll = Int.random(in: 0..<100)
+        if asksForGroup || needsSupport {
+            return min(roll < 68 ? 3 : 2, availableCount)
+        }
+        if celebrates {
+            return min(roll < 42 ? 3 : (roll < 82 ? 2 : 1), availableCount)
+        }
+        if asksAdvice || prompt.count > 70 {
+            return min(roll < 18 ? 3 : (roll < 68 ? 2 : 1), availableCount)
+        }
+        return min(roll < 62 ? 1 : (roll < 92 ? 2 : 3), availableCount)
     }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            CameraPreview()
+            CameraPreview(recorder: cameraRecorder, beautyIntensity: beautyFilter)
                 .ignoresSafeArea()
+                .overlay(liveFilterEffect)
             LinearGradient(colors: [.brandPurple.opacity(0.20), .black.opacity(0.22), .black.opacity(0.78)], startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
+                .opacity(showLiveToolPanel ? 0.16 : 1)
 
             VStack(spacing: 0) {
                 VStack(spacing: 12) {
@@ -3341,8 +4090,8 @@ private struct LiveStreamView: View {
                 ZStack {
                     if !isRecording {
                         VStack(spacing: 14) {
-                            FramedAIAvatar(imageURL: listener.imageURL, frameAsset: avatarFrameForListener)
-                            Text("\(listener.name) is listening...")
+                            UserAvatarView(imageData: userAvatarData, size: 124)
+                            Text("\(userName)'s stream is paused")
                                 .font(.system(size: 18, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.82))
                         }
@@ -3352,9 +4101,51 @@ private struct LiveStreamView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 VStack(spacing: 12) {
+                    if isRecording, let aiStatus = liveAIStatusText {
+                        HStack(spacing: 8) {
+                            if deepAnswerInFlight {
+                                ProgressView()
+                                    .tint(.white.opacity(0.86))
+                                    .scaleEffect(0.72)
+                            } else {
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 7, height: 7)
+                            }
+                            Text(aiStatus)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.84))
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: 34)
+                        .background(.black.opacity(0.48), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.12)))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+
                     if preferences.commentsEnabled && isRecording {
                         VStack(spacing: 8) {
-                            ForEach(Array(comments.suffix(6).enumerated()), id: \.element.id) { index, comment in
+                            if !chatHistory.isEmpty {
+                                HStack {
+                                    Spacer()
+                                    Button {
+                                        withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                                            showChatHistory = true
+                                        }
+                                    } label: {
+                                        Label("History", systemImage: "arrow.up")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundStyle(.white.opacity(0.78))
+                                            .padding(.horizontal, 10)
+                                            .frame(height: 28)
+                                            .background(.black.opacity(0.42), in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+
+                            ForEach(Array(comments.suffix(3).enumerated()), id: \.element.id) { index, comment in
                                 LiveCommentRow(
                                     comment: comment,
                                     imageURL: commentImageURL(for: comment),
@@ -3362,49 +4153,40 @@ private struct LiveStreamView: View {
                                     isPremium: isPremiumComment(comment)
                                 )
                                 .opacity(min(1.0, 0.82 + Double(index) * 0.035))
+                                .fixedSize(horizontal: false, vertical: true)
                                 .transition(.asymmetric(
                                     insertion: .move(edge: .leading).combined(with: .opacity).combined(with: .scale(scale: 0.96)),
-                                    removal: .move(edge: .bottom).combined(with: .opacity)
+                                    removal: .move(edge: .top).combined(with: .opacity)
                                 ))
                             }
                         }
-                        .frame(maxHeight: 260, alignment: .bottom)
-                        .clipped()
+                        .frame(maxHeight: 340, alignment: .bottom)
+                        .mask(
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .clear, location: 0),
+                                    .init(color: .black.opacity(0.28), location: 0.08),
+                                    .init(color: .black, location: 0.22)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .contentShape(Rectangle())
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 24)
+                                .onEnded { value in
+                                    if value.translation.height < -24, !chatHistory.isEmpty {
+                                        withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                                            showChatHistory = true
+                                        }
+                                    }
+                                }
+                        )
                     }
                 }
                 .padding(.horizontal, 18)
                 .padding(.bottom, 10)
-
-                if showLiveToolPanel {
-                    LiveToolPanel(
-                        selectedTool: $selectedLiveTool,
-                        quickPrompt: $liveQuickPrompt,
-                        aiRoleMode: $aiRoleMode,
-                        aiReplyDepth: $aiReplyDepth,
-                        audienceEnergy: $audienceEnergy,
-                        beautyFilter: $beautyFilter,
-                        giftIntensity: $giftIntensity,
-                        toneTopics: $liveToneTopics,
-                        vibeMoods: $liveVibeMoods,
-                        selectedFilter: $selectedFilter,
-                        autoFakeDonations: $autoFakeDonations,
-                        selectedGiftIndexes: $selectedGiftIndexes,
-                        listener: listener,
-                        coins: coins,
-                        message: liveToolMessage,
-                        giftAssets: giftAssets,
-                        onSendPrompt: sendLiveToolPrompt,
-                        onBuyViewers: buyLiveViewers,
-                        onClose: {
-                            withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-                                showLiveToolPanel = false
-                            }
-                        }
-                    )
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 10)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
 
                 HStack {
                     Button {
@@ -3415,12 +4197,13 @@ private struct LiveStreamView: View {
                         Image(systemName: "gearshape.fill")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(showLiveToolPanel ? .white : .white.opacity(0.72))
-                            .frame(width: 44, height: 44)
+                            .frame(width: 48, height: 48)
                             .background(showLiveToolPanel ? Color.brandPurple.opacity(0.36) : .white.opacity(0.10), in: Circle())
                             .overlay(Circle().stroke(showLiveToolPanel ? Color.brandPurple.opacity(0.72) : .clear, lineWidth: 1.4))
+                            .frame(width: 64, height: 64)
                     }
                     .buttonStyle(.plain)
-                    .contentShape(Circle())
+                    .contentShape(Rectangle())
 
                     Spacer()
 
@@ -3466,24 +4249,70 @@ private struct LiveStreamView: View {
                         Image(systemName: "rectangle.portrait.and.arrow.right")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(Color.red.opacity(0.78))
-                            .frame(width: 44, height: 44)
+                            .frame(width: 48, height: 48)
                             .background(Color.red.opacity(0.15), in: Circle())
                             .overlay(Circle().stroke(Color.red.opacity(0.28)))
+                            .frame(width: 64, height: 64)
                     }
                     .buttonStyle(.plain)
-                    .contentShape(Circle())
+                    .contentShape(Rectangle())
                 }
                 .padding(.horizontal, 38)
                 .padding(.bottom, 16)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .opacity(showLiveToolPanel ? 0 : 1)
+            .allowsHitTesting(!showLiveToolPanel && !showChatHistory)
 
-            ForEach(activeGifts) { gift in
-                GiftEffectView(gift: gift)
-                    .transition(.scale.combined(with: .opacity))
+            if showLiveToolPanel {
+                Color.black.opacity(0.08)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                            showLiveToolPanel = false
+                        }
+                    }
+
+                LiveToolPanel(
+                    selectedTool: $selectedLiveTool,
+                    quickPrompt: $liveQuickPrompt,
+                    aiRoleMode: $aiRoleMode,
+                    aiReplyDepth: $aiReplyDepth,
+                    audienceEnergy: $audienceEnergy,
+                    beautyFilter: $beautyFilter,
+                    giftIntensity: $giftIntensity,
+                    toneTopics: $liveToneTopics,
+                    vibeMoods: $liveVibeMoods,
+                    selectedFilter: $selectedFilter,
+                    autoFakeDonations: $autoFakeDonations,
+                    selectedGiftIndexes: $selectedGiftIndexes,
+                    listener: listener,
+                    coins: coins,
+                    message: liveToolMessage,
+                    giftAssets: giftAssets,
+                    onSendPrompt: sendLiveToolPrompt,
+                    onBuyViewers: buyLiveViewers,
+                    onClose: {
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                            showLiveToolPanel = false
+                        }
+                    }
+                )
+                .frame(maxWidth: 372)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.97, anchor: .bottom)))
             }
 
-            if preferences.heartsEnabled && isRecording {
+            if !showLiveToolPanel {
+                ForEach(activeGifts) { gift in
+                    GiftEffectView(gift: gift)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+
+            if preferences.heartsEnabled && isRecording && !showLiveToolPanel {
                 VStack {
                     Spacer()
                     HStack {
@@ -3501,11 +4330,36 @@ private struct LiveStreamView: View {
                 .allowsHitTesting(false)
             }
 
-            if showPaywall {
+            if showChatHistory && !showLiveToolPanel {
+                Color.black.opacity(0.46)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.easeOut(duration: 0.22)) {
+                            showChatHistory = false
+                        }
+                    }
+
+                LiveChatHistoryPanel(
+                    comments: filteredChatHistory,
+                    listener: listener,
+                    avatarURLs: chatAvatarURLMap,
+                    onClose: {
+                        withAnimation(.easeOut(duration: 0.22)) {
+                            showChatHistory = false
+                        }
+                    }
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 118)
+                .padding(.bottom, 104)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            if showPaywall && !showLiveToolPanel && !showChatHistory {
                 PaywallBanner(
                     listener: listener,
                     onClose: {
-                        paywallCooldownUntil = streamTime + 180
+                        paywallCooldownUntil = streamTime + 90
                         withAnimation(.easeOut(duration: 0.25)) {
                             showPaywall = false
                         }
@@ -3517,39 +4371,116 @@ private struct LiveStreamView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
+            if showLiveReviewPrompt && !showLiveToolPanel && !showChatHistory {
+                LiveReviewPrompt(
+                    onPositiveFeedback: {
+                        showLiveReviewPrompt = false
+                        onRequestReview()
+                    },
+                    onNegativeFeedback: {
+                        withAnimation(.easeOut(duration: 0.24)) {
+                            showLiveReviewPrompt = false
+                        }
+                        liveToolMessage = "Thanks for telling us. We'll keep improving your AI live experience."
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                .zIndex(8)
+            }
+
             if showExitConfirm {
                 ExitStreamConfirmView(
                     onCancel: { showExitConfirm = false },
-                    onEnd: { onEnd(streamTime, popularity) }
+                    onEnd: finishLiveSession
                 )
                 .transition(.opacity)
             }
         }
         .onAppear {
+#if os(iOS)
+            UIApplication.shared.isIdleTimerDisabled = true
+#endif
             startTimers()
+            let transcriber = speechTranscriber
+            cameraRecorder.setSpeechAudioHandler { [weak transcriber] sampleBuffer in
+                transcriber?.appendAudioSampleBuffer(sampleBuffer)
+            }
             speechTranscriber.start()
+            cameraRecorder.updateBeautyIntensity(beautyFilter)
+            applyThermalState(ProcessInfo.processInfo.thermalState)
+            cameraRecorder.startCaptureAndRecording()
+            Task { await DeepSeekClient.warmBackend() }
+        }
+        .onChange(of: beautyFilter) { _, newValue in
+            cameraRecorder.updateBeautyIntensity(newValue)
+        }
+        .onChange(of: preferences.coins) { _, newValue in
+            coins = newValue
         }
         .onChange(of: isRecording) { _, newValue in
             handleRecordingChanged(newValue)
         }
+        .onChange(of: speechTranscriber.transcript) { _, _ in
+            scheduleSpeechReply()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+            applyThermalState(ProcessInfo.processInfo.thermalState)
+        }
         .onDisappear {
+#if os(iOS)
+            UIApplication.shared.isIdleTimerDisabled = false
+#endif
             stopTimers()
+            cameraRecorder.setSpeechAudioHandler(nil)
             speechTranscriber.stop()
+            if !isFinishingLive {
+                cameraRecorder.cancelRecording()
+            }
+        }
+    }
+
+    private func finishLiveSession() {
+        guard !isFinishingLive else { return }
+        isFinishingLive = true
+        showExitConfirm = false
+        stopTimers()
+        speechTranscriber.stop()
+        cameraRecorder.stopRecording { recordingURL in
+            onEnd(streamTime, popularity, recordingURL)
         }
     }
 
     private func startTimers() {
         stopTimers()
+        popularity = max(100, initialPopularity)
+        audienceTargetPopularity = nil
+        audienceBoostUntil = 0
         showBanner = true
         comments = []
+        chatHistory = LiveChatHistoryStore.load()
+        showChatHistory = false
         streamTime = 0
         activeGifts = []
         lastProcessedTranscript = ""
+        pendingDeepPrompts = []
+        recentSpeechPromptTimes = [:]
+        conversationMemories = [:]
+        nextResponderIndex = 0
         lastDeepAnswerTime = -120
+        deepAnswerVisibleUntil = -1
         deepAnswerInFlight = false
+        activeDeepRequestID = nil
+        hasRequestedOpeningGreeting = false
+        showLiveReviewPrompt = false
+        hasShownLiveReviewPrompt = false
         openingCommentIndex = 0
+        lastBarrageCommentText = ""
         openingAudienceWaves = 0
         preloadLiveAvatars()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            requestOpeningAIGreetingIfNeeded()
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
             withAnimation { showBanner = false }
@@ -3568,7 +4499,7 @@ private struct LiveStreamView: View {
             if let target = audienceTargetPopularity, popularity >= target {
                 audienceTargetPopularity = nil
             }
-            if preferences.commentsEnabled && (delta > 90 || isAudienceBoostActive) && Int.random(in: 0...100) < (isAudienceBoostActive ? 62 : 32) {
+            if preferences.commentsEnabled && !isDeepAnswerVisible && (delta > 90 || isAudienceBoostActive) && Int.random(in: 0...100) < (isAudienceBoostActive ? 62 : 32) {
                 appendViewerJoinComment()
             }
         }
@@ -3582,8 +4513,13 @@ private struct LiveStreamView: View {
             guard isRecording else { return }
             streamTime += 1
             maybeRequestDeepAnswer()
-            let paywallStartTime = max(Int(preferences.sessionLength), 90)
-            if preferences.autoPaywall && streamTime >= paywallStartTime && streamTime >= paywallCooldownUntil && !showPaywall && !showLiveToolPanel {
+            if streamTime >= 180 && !hasShownLiveReviewPrompt {
+                hasShownLiveReviewPrompt = true
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                    showLiveReviewPrompt = true
+                }
+            }
+            if preferences.autoPaywall && !preferences.isPremiumMember && streamTime >= 240 && streamTime >= paywallCooldownUntil && !showPaywall && !showLiveToolPanel && !showChatHistory && !showLiveReviewPrompt {
                 withAnimation { showPaywall = true }
             }
         }
@@ -3608,6 +4544,34 @@ private struct LiveStreamView: View {
             giftTimer?.invalidate()
             giftTimer = nil
             hearts.removeAll()
+        }
+    }
+
+    private var isThermallyLimited: Bool {
+        thermalState == .serious || thermalState == .critical
+    }
+
+    private var isThermallyCritical: Bool {
+        thermalState == .critical
+    }
+
+    private func applyThermalState(_ newState: ProcessInfo.ThermalState) {
+        guard thermalState != newState || newState != .nominal else {
+            cameraRecorder.updateThermalState(newState)
+            return
+        }
+        thermalState = newState
+        cameraRecorder.updateThermalState(newState)
+
+        if newState == .serious || newState == .critical {
+            activeGifts.removeAll()
+            if newState == .critical {
+                hearts.removeAll()
+            }
+            if isRecording {
+                scheduleNextAIGift()
+                scheduleNextAutoHeart()
+            }
         }
     }
 
@@ -3687,12 +4651,14 @@ private struct LiveStreamView: View {
         clockTimer = nil
         heartTimer = nil
         warmupTimer = nil
+        speechReplyTimer?.invalidate()
+        speechReplyTimer = nil
     }
 
     private func preloadLiveAvatars() {
 #if os(iOS)
         var urls = Array(commentAvatarURLMap.values)
-        urls.append(listener.imageURL)
+        urls.append(contentsOf: activeAIListeners.map(\.imageURL))
         RemoteImageCache.prefetch(urlStrings: urls)
 #endif
     }
@@ -3704,6 +4670,15 @@ private struct LiveStreamView: View {
         let interval: Double
         if isAudienceBoostActive {
             interval = Double.random(in: 1.1...2.2)
+        } else if popularity >= 10_000 {
+            switch streamTime {
+            case 0..<35:
+                interval = Double.random(in: 1.8...3.0)
+            case 35..<180:
+                interval = Double.random(in: 2.5...4.2)
+            default:
+                interval = Double.random(in: 3.5...6.0)
+            }
         } else {
             switch streamTime {
             case 0..<12:
@@ -3730,7 +4705,8 @@ private struct LiveStreamView: View {
     private func configurePurchasedAudienceRamp() {
         guard purchasedAudienceCount > 0 else { return }
         audienceTargetPopularity = min(500_000, popularity + purchasedAudienceCount)
-        audienceBoostUntil = streamTime + max(120, min(420, purchasedAudienceCount / 180))
+        let requestedDuration = Int(audienceArrivalMinutes * 60)
+        audienceBoostUntil = streamTime + max(60, min(3_600, requestedDuration))
     }
 
     private func applyOpeningAudienceWave() {
@@ -3750,6 +4726,15 @@ private struct LiveStreamView: View {
             }
         } else if isAudienceBoostActive {
             joinCount = Int.random(in: 80...520)
+        } else if popularity >= 10_000 {
+            switch streamTime {
+            case 0..<35:
+                joinCount = Int.random(in: 12...38)
+            case 35..<180:
+                joinCount = Int.random(in: 8...28)
+            default:
+                joinCount = Int.random(in: 5...22)
+            }
         } else {
             switch streamTime {
             case 0..<12:
@@ -3769,7 +4754,7 @@ private struct LiveStreamView: View {
         popularity = min(popularityCeiling, popularity + joinCount)
         audienceEnergy = min(1.0, audienceEnergy + Double.random(in: 0.006...0.018))
 
-        guard preferences.commentsEnabled else { return }
+        guard preferences.commentsEnabled, !isDeepAnswerVisible else { return }
         if openingAudienceWaves <= 18 || openingAudienceWaves.isMultiple(of: Int.random(in: 2...4)) || isAudienceBoostActive {
             appendViewerJoinComment()
         }
@@ -3783,7 +4768,7 @@ private struct LiveStreamView: View {
         let interval = initialDelay ? Double.random(in: 2.4...4.2) : nextBarrageInterval()
         commentTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { timer in
             timer.invalidate()
-            if isRecording && preferences.commentsEnabled {
+            if isRecording && preferences.commentsEnabled && !isDeepAnswerVisible {
                 appendBarrageComment()
             }
             scheduleNextBarrage()
@@ -3791,6 +4776,10 @@ private struct LiveStreamView: View {
     }
 
     private func nextBarrageInterval() -> Double {
+        if isDeepAnswerVisible {
+            return Double(deepAnswerVisibleUntil - streamTime) + Double.random(in: 1.2...2.8)
+        }
+
         if isAudienceBoostActive {
             return Double.random(in: 1.2...2.4)
         }
@@ -3816,78 +4805,87 @@ private struct LiveStreamView: View {
     }
 
     private func appendBarrageComment() {
+        guard !isDeepAnswerVisible else { return }
         let item: (String, String, String)
         if openingCommentIndex < openingComments.count {
             item = openingComments[openingCommentIndex]
             openingCommentIndex += 1
         } else {
-            item = contextualBarrageComment()
+            let contextualComment = contextualBarrageComment()
+            item = contextualComment.2 == lastBarrageCommentText
+                ? aiComments.filter { $0.2 != lastBarrageCommentText }.randomElement() ?? contextualComment
+                : contextualComment
         }
+        lastBarrageCommentText = item.2
 
+        let comment = ChatComment(name: item.0, avatar: item.1, text: item.2, kind: .barrage)
+        rememberChatComment(comment)
         withAnimation {
-            comments.append(ChatComment(name: item.0, avatar: item.1, text: item.2, kind: .barrage))
+            comments.append(comment)
             comments = Array(comments.suffix(6))
         }
-        expireComment(comments.last?.id, after: 6.5)
+        expireComment(comment.id, after: 6.5)
     }
 
     private func appendViewerJoinComment() {
+        guard !isDeepAnswerVisible else { return }
         let item = viewerJoinComments.randomElement() ?? viewerJoinComments[0]
+        let comment = ChatComment(name: item.0, avatar: item.1, text: item.2, kind: .barrage)
+        rememberChatComment(comment)
         withAnimation {
-            comments.append(ChatComment(name: item.0, avatar: item.1, text: item.2, kind: .barrage))
+            comments.append(comment)
             comments = Array(comments.suffix(8))
         }
-        expireComment(comments.last?.id, after: 5.0)
+        expireComment(comment.id, after: 5.0)
     }
 
     private var popularityCeiling: Int {
         if let target = audienceTargetPopularity {
-            return max(target, popularity + 2_000)
+            return min(500_000, max(target, floatingAudienceCenter) + audienceFluctuationRadius)
         }
-
-        if isAudienceBoostActive {
-            return max(500_000, popularity + 80_000)
-        }
-
-        let organicCeiling = organicPopularityTarget + max(2_500, organicPopularityTarget / 5)
-        switch max(initialPopularity, popularity) {
-        case 150_000...:
-            return min(500_000, max(organicCeiling, max(initialPopularity + 55_000, Int(Double(initialPopularity) * 1.28))))
-        case 50_000...:
-            return min(500_000, max(organicCeiling, max(initialPopularity + 38_000, Int(Double(initialPopularity) * 1.42))))
-        case 5_000...:
-            return min(500_000, max(organicCeiling, max(initialPopularity + 18_000, Int(Double(initialPopularity) * 2.1))))
-        case 1_000...:
-            return min(500_000, max(organicCeiling, initialPopularity + 12_000))
-        default:
-            return min(500_000, max(organicCeiling, initialPopularity + 9_000))
-        }
+        return min(500_000, floatingAudienceCenter + audienceFluctuationRadius)
     }
 
     private var popularityFloor: Int {
-        let organicFloor = Int(Double(organicPopularityTarget) * 0.62)
-        switch max(initialPopularity, popularity) {
-        case 50_000...:
-            return max(organicFloor, max(1_000, Int(Double(initialPopularity) * 0.82)))
-        case 5_000...:
-            return max(organicFloor, max(800, Int(Double(initialPopularity) * 0.72)))
-        case 1_000...:
-            return max(organicFloor, max(650, Int(Double(initialPopularity) * 0.70)))
-        default:
-            return max(organicFloor, max(180, Int(Double(initialPopularity) * 0.72)))
+        if streamTime < baselineRampDuration && popularity < baselinePopularityTarget {
+            return max(100, Int(Double(initialPopularity) * 0.72))
         }
+        return max(100, floatingAudienceCenter - audienceFluctuationRadius)
     }
 
     private var organicPopularityTarget: Int {
-        let minutes = max(0.0, Double(streamTime) / 60.0)
-        let base = max(initialPopularity, preferences.isPremiumMember ? 20_000 : 520)
-        let earlyLift = preferences.isPremiumMember ? 28_000.0 : 5_800.0
-        let earlyCurve = earlyLift * (1.0 - exp(-minutes / 16.0))
-        let steadyGrowth = minutes * (preferences.isPremiumMember ? 125.0 : 38.0)
-        let longSessionBonus = max(0.0, minutes - 25.0) * (preferences.isPremiumMember ? 48.0 : 18.0)
-        let purchasedTail = Double(purchasedAudienceCount) * min(1.0, minutes / 18.0)
-        let energyBoost = Double(base) * min(0.45, max(0.0, audienceEnergy - 0.5) * 0.55)
-        return min(500_000, Int(Double(base) + earlyCurve + steadyGrowth + longSessionBonus + purchasedTail + energyBoost))
+        let seconds = Double(streamTime)
+        let slowWave = sin(seconds / 18.0) * 0.62
+        let quickWave = sin(seconds / 5.5) * 0.18
+        let energyBias = min(0.12, max(-0.12, audienceEnergy - 0.54))
+        let offset = Double(audienceFluctuationRadius) * (slowWave + quickWave + energyBias)
+        let target = floatingAudienceCenter + Int(offset)
+        return min(popularityCeiling, max(popularityFloor, target))
+    }
+
+    private var baselinePopularityTarget: Int {
+        preferences.isPremiumMember ? 200_000 : 20_000
+    }
+
+    private var baselineRampDuration: Int {
+        preferences.isPremiumMember ? 60 : 45
+    }
+
+    private var purchasedAudienceProgress: Double {
+        guard purchasedAudienceCount > 0 else { return 0 }
+        let duration = max(60, Int(audienceArrivalMinutes * 60))
+        return min(1, Double(streamTime) / Double(duration))
+    }
+
+    private var floatingAudienceCenter: Int {
+        min(500_000, baselinePopularityTarget + Int(Double(purchasedAudienceCount) * purchasedAudienceProgress))
+    }
+
+    private var audienceFluctuationRadius: Int {
+        if preferences.isPremiumMember {
+            return min(50_000, max(15_000, floatingAudienceCenter / 10))
+        }
+        return 5_000
     }
 
     private func nextPopularityDelta() -> Int {
@@ -3898,7 +4896,8 @@ private struct LiveStreamView: View {
             if roll < 14 {
                 return -Int(Double.random(in: 8...38) * max(1.0, min(6.0, scale)))
             }
-            let plannedStep = max(24, min(2_800, remaining / 24))
+            let remainingTicks = max(1, (audienceBoostUntil - streamTime) / 2)
+            let plannedStep = max(24, min(20_000, remaining / remainingTicks))
             return plannedStep + Int.random(in: -24...120)
         }
 
@@ -3909,8 +4908,29 @@ private struct LiveStreamView: View {
             if roll < 12 {
                 return -Int(Double.random(in: 5...24) * min(4.0, scale))
             }
+            if streamTime < baselineRampDuration && popularity < baselinePopularityTarget {
+                let remainingToBaseline = baselinePopularityTarget - popularity
+                let remainingTicks = max(1, (baselineRampDuration - streamTime) / 2)
+                let maximumStep = preferences.isPremiumMember ? 12_000 : 1_800
+                let plannedStep = max(80, min(maximumStep, remainingToBaseline / remainingTicks))
+                let jitter = max(12, plannedStep / 10)
+                return plannedStep + Int.random(in: -jitter...jitter)
+            }
             let plannedStep = max(18, min(streamTime < 180 ? 520 : 240, remaining / (streamTime < 240 ? 16 : 34)))
             return plannedStep + Int.random(in: 0...80)
+        }
+
+        if organicTarget < popularity {
+            let distance = popularity - organicTarget
+            let maximumStep = preferences.isPremiumMember ? 2_400 : 620
+            let plannedStep = max(18, min(maximumStep, distance / 5))
+            let jitter = max(8, plannedStep / 5)
+            return -plannedStep + Int.random(in: -jitter...jitter)
+        }
+
+        if popularity >= 10_000 {
+            let movementUnit = max(20, audienceFluctuationRadius / 45)
+            return Int.random(in: -movementUnit...movementUnit)
         }
 
         if isAudienceBoostActive {
@@ -3963,10 +4983,18 @@ private struct LiveStreamView: View {
 
     private func commentImageURL(for comment: ChatComment) -> String? {
         if comment.kind == .deepAnswer {
-            return listener.imageURL
+            return chatAvatarURLMap[comment.name] ?? listener.imageURL
         }
 
-        return commentAvatarURLMap[comment.name]
+        return chatAvatarURLMap[comment.name]
+    }
+
+    private var chatAvatarURLMap: [String: String] {
+        var avatarURLs = commentAvatarURLMap
+        for activeListener in activeAIListeners {
+            avatarURLs[activeListener.name] = activeListener.imageURL
+        }
+        return avatarURLs
     }
 
     private func isPremiumComment(_ comment: ChatComment) -> Bool {
@@ -3976,6 +5004,22 @@ private struct LiveStreamView: View {
     private func contextualBarrageComment() -> (String, String, String) {
         let transcript = speechTranscriber.transcript.lowercased()
 
+        if liveVibeMoods.contains("Haters") {
+            return [("Alex", "🧑", "I disagree, but I am still listening."), ("Marcus", "🧔", "That take is bold. Say more.")].randomElement() ?? aiComments[0]
+        }
+
+        if liveVibeMoods.contains("Flirty") {
+            return [("Sofia", "👱‍♀️", "Your smile is making this room brighter."), ("Ryan", "👨‍🦰", "Your camera presence is impossible to ignore.")].randomElement() ?? aiComments[0]
+        }
+
+        if liveVibeMoods.contains("Funny") {
+            return [("Lily", "👧", "Okay, that made me laugh."), ("Jake", "👨", "You always make the story better.")].randomElement() ?? aiComments[0]
+        }
+
+        if liveVibeMoods.contains("Curious") {
+            return [("Noah", "🔥", "What happened next?"), ("Ava", "💫", "Can you tell us more about that?")].randomElement() ?? aiComments[0]
+        }
+
         if transcript.contains("sad") || transcript.contains("tired") || transcript.contains("stress") || transcript.contains("worried") {
             return [("Sofia", "👱‍♀️", "That sounds heavy, but you are saying it clearly."), ("Emma", "👩", "We are staying with you through this.")].randomElement() ?? aiComments[0]
         }
@@ -3984,7 +5028,7 @@ private struct LiveStreamView: View {
             return [("Zoe", "👩‍🦱", "That joy is showing on your face."), ("Ryan", "👨‍🦰", "This is the energy we came for.")].randomElement() ?? aiComments[0]
         }
 
-        let activeDirections = preferences.activeCommentCategories.filter { $0 != "slot1" && $0 != "slot2" && $0 != "slot3" }
+        let activeDirections = liveToneTopics.map { $0.lowercased() }
         let direction = activeDirections.randomElement() ?? "general"
         return commentsForDirection(direction).randomElement() ?? aiComments[0]
     }
@@ -4045,64 +5089,285 @@ private struct LiveStreamView: View {
     }
 
     private func maybeRequestDeepAnswer() {
-        guard !deepAnswerInFlight else { return }
-        guard streamTime - lastDeepAnswerTime >= 10 else { return }
-
         let cleanTranscript = speechTranscriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard cleanTranscript.count >= 10 else { return }
+        guard isMeaningfulSpeech(cleanTranscript) else { return }
         guard cleanTranscript != lastProcessedTranscript else { return }
+        guard streamTime - lastDeepAnswerTime >= minimumAIReplyInterval else { return }
 
-        let newSegment = cleanTranscript.replacingOccurrences(of: lastProcessedTranscript, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = newSegment.count >= 18 ? newSegment : cleanTranscript
-        guard shouldSendToDeepSeek(prompt) else { return }
+        let newSegment: String
+        if !lastProcessedTranscript.isEmpty, cleanTranscript.hasPrefix(lastProcessedTranscript) {
+            newSegment = String(cleanTranscript.dropFirst(lastProcessedTranscript.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            newSegment = cleanTranscript
+        }
+        let prompt = isMeaningfulSpeech(newSegment) ? newSegment : cleanTranscript
 
         lastProcessedTranscript = cleanTranscript
+        guard shouldAcceptSpeechPrompt(prompt) else { return }
+        guard !deepAnswerInFlight else {
+            enqueueDeepPrompt(prompt)
+            return
+        }
+        requestDeepAnswer(for: prompt)
+    }
+
+    private func sendLiveToolPrompt(_ promptText: String) {
+        let prompt = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        guard streamTime - lastDeepAnswerTime >= minimumAIReplyInterval else {
+            liveToolMessage = "Free AI and gift activity gradually slows after four minutes. Subscribe to PRO for frequent dynamic replies from your AI friends."
+            return
+        }
+        guard !deepAnswerInFlight else {
+            enqueueDeepPrompt(prompt)
+            return
+        }
+        requestDeepAnswer(for: prompt)
+    }
+
+    private func scheduleSpeechReply() {
+        let text = speechTranscriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasCJK = text.unicodeScalars.contains { (0x3400...0x9FFF).contains(Int($0.value)) }
+        let wordCount = text.split(whereSeparator: { $0.isWhitespace }).count
+        let delay: TimeInterval
+        if hasCJK {
+            delay = text.count < 7 ? 0.95 : 0.68
+        } else {
+            delay = wordCount < 4 ? 1.15 : 0.72
+        }
+        scheduleSpeechReply(after: delay)
+    }
+
+    private func scheduleSpeechReply(after delay: TimeInterval) {
+        guard isRecording else { return }
+        speechReplyTimer?.invalidate()
+        speechReplyTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { timer in
+            timer.invalidate()
+            speechReplyTimer = nil
+            maybeRequestDeepAnswer()
+        }
+    }
+
+    private func requestDeepAnswer(for prompt: String, remembersPrompt: Bool = true) {
         deepAnswerInFlight = true
+        let requestID = UUID()
+        activeDeepRequestID = requestID
+        let ordered = orderedResponders()
+        let selectedCount = responderCount(for: prompt, remembersPrompt: remembersPrompt)
+        let responders = Array(ordered.prefix(selectedCount))
+        let memorySnapshot = conversationMemories
+        if !responders.isEmpty, !activeAIListeners.isEmpty {
+            nextResponderIndex = (nextResponderIndex + responders.count) % activeAIListeners.count
+        }
+        lastDeepAnswerTime = streamTime
 
         Task {
-            let remoteAnswer = await DeepSeekClient.answer(
-                userText: prompt,
-                listener: listener,
-                roleMode: aiRoleMode,
-                replyDepth: aiReplyDepth,
-                activeDirections: preferences.activeCommentCategories,
-                toneTopics: liveToneTopics,
-                vibeMoods: liveVibeMoods,
-                liveSeconds: streamTime
-            )
-            let answer = remoteAnswer ?? localDeepAnswer(for: prompt)
+            var successfulReplies = 0
+
+            for (index, responder) in responders.enumerated() {
+                let provisionalCommentID = await MainActor.run {
+                    appendDeepAnswer("•••", from: responder, displayDuration: 180)
+                }
+
+                var result: DeepSeekAnswerResult?
+                for attempt in 0..<3 {
+                    result = await DeepSeekClient.answer(
+                        userText: prompt,
+                        history: memorySnapshot[responder.id] ?? [],
+                        userName: userName,
+                        listener: responder,
+                        roleMode: aiRoleMode,
+                        replyDepth: aiReplyDepth,
+                        activeDirections: liveToneTopics,
+                        toneTopics: liveToneTopics,
+                        vibeMoods: liveVibeMoods,
+                        liveSeconds: streamTime,
+                        sceneContext: cameraRecorder.sceneContext
+                    )
+                    if result?.isDeepSeek == true || result?.shouldRetry != true {
+                        break
+                    }
+                    if attempt < 2 {
+                        try? await Task.sleep(for: .milliseconds(900 + attempt * 1100))
+                    }
+                }
+
+                let didSucceed = await MainActor.run { () -> Bool in
+                    guard activeDeepRequestID == requestID, isRecording else { return false }
+                    if let result, result.isDeepSeek, !result.text.isEmpty {
+                        if let provisionalCommentID {
+                            replaceDeepAnswer(provisionalCommentID, with: result.text, from: responder)
+                        } else {
+                            appendDeepAnswer(result.text, from: responder)
+                        }
+                        if remembersPrompt {
+                            rememberConversation(userText: prompt, assistantText: result.text, for: responder)
+                        } else {
+                            var memory = conversationMemories[responder.id] ?? []
+                            memory.append(DeepSeekMessage(role: "assistant", content: result.text))
+                            conversationMemories[responder.id] = Array(memory.suffix(12))
+                        }
+                        return true
+                    }
+                    removeDeepAnswer(provisionalCommentID)
+                    return false
+                }
+                if didSucceed {
+                    successfulReplies += 1
+                }
+
+                if index < responders.count - 1 {
+                    try? await Task.sleep(for: .milliseconds(420))
+                }
+            }
+
             await MainActor.run {
+                guard activeDeepRequestID == requestID else { return }
+                activeDeepRequestID = nil
                 deepAnswerInFlight = false
                 guard isRecording else { return }
-                appendDeepAnswer(answer)
+
+                if successfulReplies == 0 {
+                    let usesChinese = prompt.unicodeScalars.contains { (0x3400...0x9FFF).contains(Int($0.value)) }
+                    liveToolMessage = usesChinese ? "AI 连接中断，下一条消息会自动重试。" : "AI connection was interrupted. Your next message will retry automatically."
+                }
+
                 lastDeepAnswerTime = streamTime
+                if !pendingDeepPrompts.isEmpty {
+                    let delay = max(0, minimumAIReplyInterval)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Double(delay)) {
+                        guard isRecording, !deepAnswerInFlight, !pendingDeepPrompts.isEmpty else { return }
+                        let nextPrompt = pendingDeepPrompts.removeFirst()
+                        requestDeepAnswer(for: nextPrompt)
+                    }
+                } else if speechTranscriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines) != lastProcessedTranscript {
+                    scheduleSpeechReply(after: 0.7)
+                }
             }
         }
     }
 
-    private func sendLiveToolPrompt() {
-        let prompt = liveQuickPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
-        liveQuickPrompt = ""
-        deepAnswerInFlight = true
+    private func requestOpeningAIGreetingIfNeeded() {
+        guard isRecording,
+              !hasRequestedOpeningGreeting,
+              !deepAnswerInFlight,
+              !hasConversationMemory,
+              speechTranscriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        hasRequestedOpeningGreeting = true
+        let prefersChinese = Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
+        let prompt = prefersChinese
+            ? "直播刚刚开始。请像直播间里一直关注我的 AI 朋友一样，自然地欢迎我，用一句简短的话问我今天想聊什么。"
+            : "The live just started. Welcome me naturally like an attentive AI friend in the audience, then ask one short question about what I want to share today."
+        requestDeepAnswer(for: prompt, remembersPrompt: false)
+    }
 
-        Task {
-            let remoteAnswer = await DeepSeekClient.answer(
-                userText: prompt,
-                listener: listener,
-                roleMode: aiRoleMode,
-                replyDepth: aiReplyDepth,
-                activeDirections: preferences.activeCommentCategories,
-                toneTopics: liveToneTopics,
-                vibeMoods: liveVibeMoods,
-                liveSeconds: streamTime
-            )
-            let answer = remoteAnswer ?? localDeepAnswer(for: prompt)
-            await MainActor.run {
-                deepAnswerInFlight = false
-                appendDeepAnswer(answer)
-                lastDeepAnswerTime = streamTime
+    private var liveAIStatusText: String? {
+        if deepAnswerInFlight {
+            return "Your AI friends are replying..."
+        }
+        if speechTranscriber.statusText.contains("not enabled") || speechTranscriber.statusText.contains("unavailable") {
+            return speechTranscriber.statusText
+        }
+        if streamTime < 24 && !hasConversationMemory {
+            return "Your AI friends are listening..."
+        }
+        return nil
+    }
+
+    private func isMeaningfulSpeech(_ text: String) -> Bool {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return false }
+        let lowercased = clean.lowercased()
+        let words = lowercased.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        let nonLatinCount = text.unicodeScalars.filter {
+            CharacterSet.letters.contains($0) && $0.value > 127
+        }.count
+        if nonLatinCount >= 2 { return true }
+        if clean.contains("?") || clean.contains("？") { return words.count >= 2 }
+
+        let shortIntentPhrases = [
+            "i love you", "love you", "thank you", "thanks", "hello there", "help me",
+            "i am sad", "i'm sad", "i feel sad", "not good", "feel bad", "i am happy", "i'm happy"
+        ]
+        if shortIntentPhrases.contains(where: { lowercased.contains($0) }) { return true }
+
+        let fillerWords: Set<String> = [
+            "yes", "yeah", "yep", "okay", "ok", "good", "right", "well", "um", "uh", "like", "so",
+            "the", "a", "an", "and", "but", "it", "this", "that", "really", "very"
+        ]
+        let meaningfulWords = words.filter { !fillerWords.contains($0) && $0.count > 1 }
+        return words.count >= 3 && meaningfulWords.count >= 2
+    }
+
+    private func shouldAcceptSpeechPrompt(_ prompt: String) -> Bool {
+        let key = normalizedSpeechKey(prompt)
+        guard key.count >= 2 else { return false }
+
+        let now = Date().timeIntervalSinceReferenceDate
+        recentSpeechPromptTimes = recentSpeechPromptTimes.filter { now - $0.value < 30 }
+        guard recentSpeechPromptTimes[key] == nil else { return false }
+        recentSpeechPromptTimes[key] = now
+        return true
+    }
+
+    private func normalizedSpeechKey(_ text: String) -> String {
+        let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        return String(folded.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
+    }
+
+    private func enqueueDeepPrompt(_ prompt: String) {
+        guard !prompt.isEmpty, pendingDeepPrompts.last != prompt else { return }
+        pendingDeepPrompts.append(prompt)
+        pendingDeepPrompts = Array(pendingDeepPrompts.suffix(8))
+    }
+
+    private func rememberConversation(userText: String, assistantText: String, for responder: Listener) {
+        var memory = conversationMemories[responder.id] ?? []
+        memory.append(DeepSeekMessage(role: "user", content: userText))
+        memory.append(DeepSeekMessage(role: "assistant", content: assistantText))
+        conversationMemories[responder.id] = Array(memory.suffix(12))
+    }
+
+    @ViewBuilder
+    private var liveFilterEffect: some View {
+        ZStack {
+            if selectedFilter != "None" {
+                Text(filterEmoji)
+                    .font(.system(size: 108))
+                    .shadow(color: filterGlowColor.opacity(0.82), radius: 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 86)
+                    .accessibilityLabel("\(selectedFilter) live filter")
             }
+
+            filterGlowColor
+                .opacity(selectedFilter == "None" ? 0 : 0.10)
+                .blendMode(.screen)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var filterEmoji: String {
+        switch selectedFilter {
+        case "Unicorn Mask": "🦄"
+        case "Owl Mask": "🦉"
+        case "Cyberpunk LED": "🤖"
+        case "Cool Shades": "😎"
+        case "Star Eyes": "⭐️"
+        case "Cat Ears": "🐱"
+        case "Bunny Mask": "🐰"
+        case "Flower Crown": "🌸"
+        case "Fire Aura": "🔥"
+        default: ""
+        }
+    }
+
+    private var filterGlowColor: Color {
+        switch selectedFilter {
+        case "Cyberpunk LED": .brandPurple
+        case "Fire Aura": .brandOrange
+        case "Flower Crown", "Unicorn Mask": .pink
+        default: .white
         }
     }
 
@@ -4113,14 +5378,17 @@ private struct LiveStreamView: View {
         }
 
         coins -= cost
+        onCoinsChanged(coins)
         let target = min(500_000, popularity + viewers)
         let firstWave = min(max(Int(Double(viewers) * 0.10), 300), 10_000)
         popularity = min(target, popularity + firstWave)
         audienceTargetPopularity = target
         audienceBoostUntil = streamTime + max(150, min(480, viewers / 180))
         liveToolMessage = "\(viewers.formatted()) viewers are joining now."
-        appendViewerJoinComment()
-        appendViewerJoinComment()
+        if !isDeepAnswerVisible {
+            appendViewerJoinComment()
+            appendViewerJoinComment()
+        }
         if autoFakeDonations {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 if isRecording {
@@ -4144,12 +5412,64 @@ private struct LiveStreamView: View {
         return triggers.contains { lowercased.contains($0) }
     }
 
-    private func appendDeepAnswer(_ text: String) {
+    @discardableResult
+    private func appendDeepAnswer(_ text: String, from responder: Listener? = nil, displayDuration: Int = 16) -> UUID? {
+        let normalizedAnswer = normalizedSpeechKey(text)
+        if let lastAnswer = chatHistory.last(where: { $0.kind == .deepAnswer }),
+           normalizedSpeechKey(lastAnswer.text) == normalizedAnswer,
+           Date().timeIntervalSince(lastAnswer.createdAt) < 20 {
+            return nil
+        }
+        deepAnswerVisibleUntil = streamTime + displayDuration
+        let speaker = responder ?? listener
+        let comment = ChatComment(name: speaker.name, avatar: speaker.avatar, text: text, kind: .deepAnswer)
+        rememberChatComment(comment)
         withAnimation {
-            comments.append(ChatComment(name: listener.name, avatar: listener.avatar, text: text, kind: .deepAnswer))
+            comments.append(comment)
             comments = Array(comments.suffix(4))
         }
-        expireComment(comments.last?.id, after: 9.0)
+        expireComment(comment.id, after: Double(displayDuration))
+        return comment.id
+    }
+
+    private func replaceDeepAnswer(_ id: UUID, with text: String, from responder: Listener? = nil) {
+        var isVisible = false
+        if let index = comments.firstIndex(where: { $0.id == id }) {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                comments[index].text = text
+            }
+            isVisible = true
+        }
+        if let index = chatHistory.firstIndex(where: { $0.id == id }) {
+            chatHistory[index].text = text
+            LiveChatHistoryStore.save(chatHistory)
+        }
+        if !isVisible {
+            appendDeepAnswer(text, from: responder)
+        }
+    }
+
+    private func removeDeepAnswer(_ id: UUID?) {
+        guard let id else { return }
+        withAnimation(.easeOut(duration: 0.22)) {
+            comments.removeAll { $0.id == id }
+        }
+        chatHistory.removeAll { $0.id == id }
+        LiveChatHistoryStore.save(chatHistory)
+    }
+
+    private var filteredChatHistory: [ChatComment] {
+        chatHistory.filter { $0.kind == .deepAnswer }
+    }
+
+    private func rememberChatComment(_ comment: ChatComment) {
+        chatHistory.append(comment)
+        chatHistory = Array(chatHistory.suffix(240))
+        LiveChatHistoryStore.save(chatHistory)
+    }
+
+    private var isDeepAnswerVisible: Bool {
+        streamTime < deepAnswerVisibleUntil
     }
 
     private func expireComment(_ id: UUID?, after delay: Double) {
@@ -4163,30 +5483,66 @@ private struct LiveStreamView: View {
 
     private func localDeepAnswer(for text: String) -> String {
         let lowercased = text.lowercased()
+        let usesChinese = text.unicodeScalars.contains { (0x3400...0x9FFF).contains(Int($0.value)) }
         if lowercased.contains("voice") || lowercased.contains("sound") || lowercased.contains("好听") {
-            return "Your voice sounds really pleasant and easy to listen to. It makes the room feel calmer."
+            return usesChinese ? "你的声音很好听，让直播间感觉很舒服。" : "Your voice sounds warm and pleasant."
         }
         if lowercased.contains("pretty") || lowercased.contains("beautiful") || lowercased.contains("cute") || lowercased.contains("look") || lowercased.contains("好看") {
-            return "You look really good on camera. The expression and the lighting both work well together."
+            return usesChinese ? "你今天上镜很好看，状态很自然。" : "You look great on camera today."
         }
         if lowercased.contains("stress") || lowercased.contains("worried") || lowercased.contains("anxious") {
-            return "I hear the pressure in that. Try naming the one part you can control right now, then let the rest wait for one minute."
+            return usesChinese ? "听得出来你有些压力，先做一件现在能控制的小事。" : "I hear the pressure. Start with one thing you can control."
         }
         if lowercased.contains("relationship") || lowercased.contains("friend") || lowercased.contains("family") {
-            return "That sounds personal, so slow it down. A clear boundary plus one honest sentence may help more than trying to fix everything at once."
+            return usesChinese ? "这件事对你很重要，慢慢说，我会继续听。" : "That sounds personal. Slow down and tell me more."
+        }
+        if lowercased.contains("我爱你") || lowercased.contains("喜欢你") || lowercased.contains("i love you") || lowercased.contains("love you") {
+            return usesChinese ? "这句话很暖，我也很珍惜现在陪你聊天的时刻。" : "That is really sweet. I’m glad I get to share this moment with you."
+        }
+        if lowercased.contains("谢谢") || lowercased.contains("thank you") || lowercased.contains("thanks") {
+            return usesChinese ? "不用客气，我会继续认真陪你聊。" : "You’re welcome. I’m right here with you."
+        }
+        if lowercased.contains("很高兴认识你") || lowercased.contains("认识你很高兴") || lowercased.contains("nice to meet you") || lowercased.contains("glad to meet you") {
+            return usesChinese ? "我也很高兴认识你。你今天最想聊点什么？" : "It’s really nice to meet you too. What would you like to talk about today?"
+        }
+        if lowercased.contains("summer") || lowercased.contains("夏天") {
+            return usesChinese ? "夏天总有一种特别的能量，你最喜欢它的哪一部分？" : "Summer has such a distinct energy. What do you enjoy most about it?"
+        }
+        if lowercased == "good" || lowercased.contains("i'm good") || lowercased.contains("i am good") || lowercased.contains("很好") {
+            return usesChinese ? "听起来状态不错，今天是什么让你感觉这么好？" : "I’m glad to hear that. What made today feel good?"
+        }
+        if lowercased.contains("还是") || lowercased.contains("选择") || lowercased.contains("坚持") || lowercased.contains("放弃") || lowercased.contains("换一个") || lowercased.contains("choos") || lowercased.contains("between") || lowercased.contains("decision") || lowercased.contains("quit") {
+            return usesChinese ? "先比较两个方向未来三个月的收益、成本和最坏结果。你更在意稳定，还是成长？" : "Compare each option's next-three-month upside, cost, and worst case. Do you value stability or growth more?"
         }
         if lowercased.contains("why") || lowercased.contains("how") || lowercased.contains("what") {
-            return "That is a real question. Start with the smallest version of it, because the first useful answer is usually hidden in one concrete detail."
+            return usesChinese ? "这是个好问题，可以先从最具体的一点说起。" : "That is a good question. Start with one concrete detail."
         }
-        return "I am listening to the deeper part of what you said. You do not need to perform it perfectly; say the next true sentence."
+        if text.contains("?") || text.contains("？") || lowercased.contains("怎么") || lowercased.contains("为什么") || lowercased.contains("怎么办") {
+            return usesChinese ? "我们把问题拆小一点：你已经尝试过什么，最卡住你的具体一步是什么？" : "Let's narrow it down: what have you tried, and which exact step is blocking you?"
+        }
+        let variants = usesChinese
+            ? [
+                "这件事值得认真聊聊。你现在最希望先解决哪一部分？",
+                "我明白你的重点了。对你来说，理想的结果应该是什么样？",
+                "我们可以继续往下梳理，刚才这件事最让你在意的是什么？"
+            ]
+            : [
+                "That sounds worth unpacking. Which part would you like to solve first?",
+                "I understand your point. What would a good outcome look like for you?",
+                "Let’s stay with that. What matters most to you in this situation?"
+            ]
+        let hash = text.unicodeScalars.reduce(UInt(0)) { ($0 &* 31) &+ UInt($1.value) }
+        let index = Int(hash % UInt(variants.count))
+        return variants[index]
     }
 
     private func scheduleNextAIGift(initialDelay: Bool = false) {
         giftTimer?.invalidate()
-        let interval = initialDelay ? Double.random(in: 20...34) : nextGiftInterval()
+        let baseInterval = initialDelay ? Double.random(in: 20...34) : nextGiftInterval()
+        let interval = isThermallyCritical ? baseInterval * 3 : isThermallyLimited ? baseInterval * 2.2 : baseInterval
         giftTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { timer in
             timer.invalidate()
-            if isRecording && autoFakeDonations {
+            if isRecording && autoFakeDonations && !isThermallyCritical {
                 triggerAIGift()
             }
             scheduleNextAIGift()
@@ -4195,10 +5551,10 @@ private struct LiveStreamView: View {
 
     private func scheduleFirstLiveGift() {
         giftTimer?.invalidate()
-        let interval = Double.random(in: 4.6...5.6)
+        let interval = isThermallyLimited ? Double.random(in: 12...18) : Double.random(in: 4.6...5.6)
         giftTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { timer in
             timer.invalidate()
-            if isRecording && autoFakeDonations {
+            if isRecording && autoFakeDonations && !isThermallyCritical {
                 triggerAIGift()
             }
             scheduleNextAIGift()
@@ -4207,12 +5563,19 @@ private struct LiveStreamView: View {
 
     private func scheduleNextAutoHeart(initialDelay: Bool = false) {
         heartTimer?.invalidate()
-        let interval = initialDelay ? Double.random(in: 2.0...5.0) : Double.random(in: 4.0...9.0)
+        let interval: Double
+        if isThermallyCritical {
+            interval = Double.random(in: 20...30)
+        } else if isThermallyLimited {
+            interval = Double.random(in: 10...18)
+        } else {
+            interval = initialDelay ? Double.random(in: 2.0...5.0) : Double.random(in: 4.0...9.0)
+        }
         heartTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { timer in
             timer.invalidate()
-            if isRecording && preferences.heartsEnabled {
+            if isRecording && preferences.heartsEnabled && !isThermallyCritical {
                 sendHeart()
-                if Bool.random() {
+                if !isThermallyLimited && Bool.random() {
                     DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 0.25...0.8)) {
                         if isRecording {
                             sendHeart()
@@ -4243,10 +5606,18 @@ private struct LiveStreamView: View {
             baseInterval = streamTime > 240 ? 18...34 : 14...28
         }
         let intensityMultiplier = 1.18 - min(max(giftIntensity, 0), 1) * 0.34
-        return Double.random(in: baseInterval) * intensityMultiplier
+        let freeSlowdownMultiplier: Double
+        if !preferences.isPremiumMember && streamTime >= 240 {
+            let slowdownProgress = min(1.0, Double(streamTime - 240) / 240.0)
+            freeSlowdownMultiplier = 1.55 + slowdownProgress * 1.75
+        } else {
+            freeSlowdownMultiplier = 1
+        }
+        return Double.random(in: baseInterval) * intensityMultiplier * freeSlowdownMultiplier
     }
 
     private func triggerAIGift() {
+        guard !isThermallyCritical else { return }
         let selectedAssets = selectedGiftIndexes.compactMap { giftAssets[safe: $0] }
         let giftPool = (selectedAssets.isEmpty ? giftAssets : selectedAssets).filter { $0.resourceURL != nil }
         let asset = giftPool.randomElement() ?? giftAssets.first
@@ -4258,9 +5629,11 @@ private struct LiveStreamView: View {
             activeGifts.append(gift)
             popularity = min(popularityCeiling, popularity + Int.random(in: 180...980))
             if preferences.commentsEnabled {
-                comments.append(ChatComment(name: sender, avatar: "🎁", text: "sent you a little boost"))
+                let comment = ChatComment(name: sender, avatar: "🎁", text: "sent you a little boost")
+                rememberChatComment(comment)
+                comments.append(comment)
                 comments = Array(comments.suffix(8))
-                expireComment(comments.last?.id, after: 5.5)
+                expireComment(comment.id, after: 5.5)
             }
         }
 
@@ -4272,7 +5645,7 @@ private struct LiveStreamView: View {
     }
 
     private func sendHeart() {
-        guard isRecording else { return }
+        guard isRecording, !isThermallyCritical else { return }
         let heart = FloatingHeart(emoji: heartEmojis.randomElement() ?? "❤️", xOffset: CGFloat.random(in: -30...30))
         hearts.append(heart)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
@@ -4516,8 +5889,131 @@ private struct LiveCommentRow: View {
     }
 }
 
+private struct LiveChatHistoryPanel: View {
+    let comments: [ChatComment]
+    let listener: Listener
+    let avatarURLs: [String: String]
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Chat History")
+                        .font(.system(size: 18, weight: .black))
+                        .foregroundStyle(.white)
+                    Text("Saved AI replies · swipe up for older messages")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.48))
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .black))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .frame(width: 40, height: 40)
+                        .background(.white.opacity(0.10), in: Circle())
+                        .frame(width: 56, height: 56)
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+            }
+            .padding(16)
+
+            Divider().overlay(.white.opacity(0.10))
+
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: true) {
+                    if comments.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "bubble.left.and.exclamationmark.bubble.right")
+                                .font(.system(size: 28))
+                                .foregroundStyle(Color.brandPurple)
+                            Text("No saved AI replies yet")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.82))
+                            Text("AI replies from this and previous live sessions will appear here.")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.48))
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 54)
+                        .padding(.horizontal, 24)
+                    } else {
+                        LazyVStack(spacing: 10) {
+                            ForEach(comments) { comment in
+                                historyRow(comment)
+                                    .id(comment.id)
+                            }
+                        }
+                        .padding(14)
+                    }
+                }
+                .onAppear {
+                    if let latestId = comments.last?.id {
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(latestId, anchor: .bottom)
+                        }
+                    }
+                }
+            }
+        }
+        .background(.black.opacity(0.90), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.16)))
+        .shadow(color: .black.opacity(0.46), radius: 28, y: 12)
+    }
+
+    private func historyRow(_ comment: ChatComment) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Group {
+                if let imageURL = avatarURLs[comment.name] ?? (comment.kind == .deepAnswer ? listener.imageURL : nil) {
+                    RemoteImage(urlString: imageURL)
+                        .frame(width: 38, height: 38)
+                        .clipShape(Circle())
+                } else {
+                    Text(comment.avatar)
+                        .font(.system(size: 18))
+                        .frame(width: 38, height: 38)
+                        .background(.white.opacity(0.09), in: Circle())
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(comment.name)
+                        .font(.system(size: 13, weight: .black))
+                        .foregroundStyle(.white)
+                    if comment.kind == .deepAnswer {
+                        Text("AI REPLY")
+                            .font(.system(size: 9, weight: .black))
+                            .foregroundStyle(Color.brandPurple)
+                    }
+                    Spacer()
+                    Text(comment.createdAt.formatted(date: .omitted, time: .shortened))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.34))
+                }
+                Text(comment.text)
+                    .font(.system(size: 13, weight: comment.kind == .deepAnswer ? .semibold : .regular))
+                    .foregroundStyle(.white.opacity(comment.kind == .deepAnswer ? 0.94 : 0.68))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .background(comment.kind == .deepAnswer ? Color.brandPurple.opacity(0.18) : .white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+        }
+    }
+}
+
 private struct ChatBubble: View {
     let comment: ChatComment
+    @State private var isExpanded = false
+
+    private var isExpandable: Bool {
+        guard comment.kind == .deepAnswer else { return false }
+        let usesCJK = comment.text.unicodeScalars.contains { (0x3400...0x9FFF).contains(Int($0.value)) }
+        return comment.text.count > (usesCJK ? 34 : 78)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -4539,12 +6035,34 @@ private struct ChatBubble: View {
                 .font(.system(size: comment.kind == .deepAnswer ? 14 : 13))
                 .foregroundStyle(.white.opacity(comment.kind == .deepAnswer ? 0.92 : 0.82))
                 .lineSpacing(2)
+                .lineLimit(isExpanded ? nil : 2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: isExpanded)
+
+            if isExpandable {
+                HStack(spacing: 5) {
+                    Spacer()
+                    Text(isExpanded ? "Show less" : "Tap to expand")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.brandPurple.opacity(0.90))
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.brandPurple.opacity(0.82))
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(comment.kind == .deepAnswer ? Color.brandPurple.opacity(0.18) : .black.opacity(0.62), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(comment.kind == .deepAnswer ? Color.brandPurple.opacity(0.65) : .white.opacity(0.08), lineWidth: 1.2))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard isExpandable else { return }
+            withAnimation(.easeInOut(duration: 0.22)) {
+                isExpanded.toggle()
+            }
+        }
     }
 }
 
@@ -4565,12 +6083,14 @@ private struct LiveToolPanel: View {
     let coins: Int
     let message: String?
     let giftAssets: [GiftAnimationAsset]
-    let onSendPrompt: () -> Void
+    let onSendPrompt: (String) -> Void
     let onBuyViewers: (Int, Int) -> Void
     let onClose: () -> Void
     @State private var isExpanded = false
+    @FocusState private var isPromptFocused: Bool
 
     private let toneTopicsData = ["General", "Agree", "Disagree", "Compliment", "Beauty", "Fashion", "Health", "Lifestyle", "Travel"]
+    private let roleModes = ["Supportive", "Playful", "Honest"]
     private let vibeData = [
         ("Haters", "😤", "Receive mean or rude comments"),
         ("Hype", "🔥", "Fans cheer you on loudly"),
@@ -4602,84 +6122,116 @@ private struct LiveToolPanel: View {
     private let giftPrices = [1, 1, 5, 10, 10, 50, 199, 499, 4_099]
 
     var body: some View {
-        VStack(spacing: 14) {
-            Capsule()
-                .fill(.white.opacity(0.28))
-                .frame(width: 48, height: 4)
-                .padding(.top, 2)
-
-            HStack {
-                Text(panelTitle)
-                    .font(.system(size: 22, weight: .black))
-                    .foregroundStyle(.white)
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.68))
-                        .frame(width: 48, height: 48)
-                        .background(.white.opacity(0.12), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .contentShape(Circle())
-            }
-
-            HStack(spacing: 4) {
-                ForEach(LiveToolTab.allCases, id: \.self) { tool in
+        VStack(spacing: 11) {
+            if isPromptFocused {
+                HStack {
+                    Text("Message \(listener.name)")
+                        .font(.system(size: 14, weight: .black))
+                        .foregroundStyle(.white.opacity(0.78))
+                    Spacer()
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            selectedTool = tool
-                        }
+                        isPromptFocused = false
                     } label: {
-                        VStack(spacing: 5) {
-                            Image(systemName: tool.icon)
-                                .font(.system(size: 17, weight: .semibold))
-                            Text(tool.rawValue)
-                                .font(.system(size: 10, weight: .bold))
-                        }
-                        .foregroundStyle(selectedTool == tool ? Color.brandPurple : .white.opacity(0.46))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 60)
-                        .contentShape(Rectangle())
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.72))
+                            .frame(width: 36, height: 36)
+                            .background(.white.opacity(0.10), in: Circle())
                     }
                     .buttonStyle(.plain)
                 }
-            }
+            } else {
+                Capsule()
+                    .fill(.white.opacity(0.34))
+                    .frame(width: 42, height: 4)
+                    .gesture(
+                        DragGesture(minimumDistance: 12)
+                            .onEnded { value in
+                                if value.translation.height < -24 {
+                                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                                        isExpanded = true
+                                    }
+                                } else if value.translation.height > 24 {
+                                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                                        isExpanded = false
+                                    }
+                                }
+                            }
+                    )
 
-            if let message {
-                Text(message)
-                    .font(.system(size: 12, weight: .black))
-                    .foregroundStyle(message.contains("Not enough") ? Color.gold : Color.green)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .frame(height: 34)
-                    .background(.white.opacity(0.07), in: Capsule())
-            }
+                HStack {
+                    Text(panelTitle)
+                        .font(.system(size: 18, weight: .black))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.76))
+                            .frame(width: 40, height: 40)
+                            .background(.white.opacity(0.14), in: Circle())
+                            .frame(width: 56, height: 56)
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                }
 
-            ScrollView(showsIndicators: false) {
-                toolContent
-                    .padding(.bottom, 4)
-            }
-            .frame(height: contentHeight)
-        }
-        .padding(20)
-        .background(Color(red: 0.045, green: 0.050, blue: 0.080), in: UnevenRoundedRectangle(topLeadingRadius: 28, bottomLeadingRadius: 8, bottomTrailingRadius: 8, topTrailingRadius: 28))
-        .overlay(UnevenRoundedRectangle(topLeadingRadius: 28, bottomLeadingRadius: 8, bottomTrailingRadius: 8, topTrailingRadius: 28).stroke(.white.opacity(0.10)))
-        .shadow(color: .black.opacity(0.36), radius: 24)
-        .gesture(
-            DragGesture(minimumDistance: 12)
-                .onEnded { value in
-                    if value.translation.height < -24 {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                            isExpanded = true
+                HStack(spacing: 4) {
+                    ForEach(LiveToolTab.allCases, id: \.self) { tool in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                selectedTool = tool
+                            }
+                        } label: {
+                            VStack(spacing: 5) {
+                                Image(systemName: tool.icon)
+                                    .font(.system(size: 17, weight: .semibold))
+                                Text(tool.rawValue)
+                                    .font(.system(size: 10, weight: .bold))
+                            }
+                            .foregroundStyle(selectedTool == tool ? Color.brandPurple : .white.opacity(0.46))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 52)
+                            .contentShape(Rectangle())
                         }
-                    } else if value.translation.height > 24 {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                            isExpanded = false
-                        }
+                        .buttonStyle(.plain)
                     }
                 }
-        )
+
+                if let message {
+                    Text(message)
+                        .font(.system(size: 12, weight: .black))
+                        .foregroundStyle(message.contains("Not enough") ? Color.gold : Color.green)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .frame(height: 34)
+                        .background(.white.opacity(0.07), in: Capsule())
+                }
+
+                ScrollView(showsIndicators: false) {
+                    toolContent
+                        .padding(.bottom, 4)
+                }
+                .scrollDismissesKeyboard(.never)
+                .frame(height: contentHeight)
+            }
+
+            if selectedTool == .tone {
+                promptBar
+            }
+        }
+        .padding(isPromptFocused ? 12 : 16)
+        .background {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(Color(red: 0.025, green: 0.030, blue: 0.055).opacity(0.64))
+        }
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(.white.opacity(0.18), lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 22, y: 10)
+        .animation(.spring(response: 0.28, dampingFraction: 0.88), value: isPromptFocused)
     }
 
     private var panelTitle: String {
@@ -4694,20 +6246,20 @@ private struct LiveToolPanel: View {
 
     private var contentHeight: CGFloat {
         if isExpanded {
-            return selectedTool == .tone ? 420 : 560
+            return selectedTool == .tone ? 410 : 430
         }
 
         switch selectedTool {
         case .tone:
-            return 280
-        case .vibe:
-            return 342
-        case .viewers:
-            return 210
-        case .filters:
             return 300
+        case .vibe:
+            return 270
+        case .viewers:
+            return 190
+        case .filters:
+            return 250
         case .gifts:
-            return 520
+            return 330
         }
     }
 
@@ -4720,19 +6272,22 @@ private struct LiveToolPanel: View {
                 TextField("Type a comment...", text: $quickPrompt)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.white)
+                    .textInputAutocapitalization(.sentences)
                     .disableAutocorrection(true)
+                    .focused($isPromptFocused)
+                    .submitLabel(.send)
+                    .onSubmit(sendPrompt)
                     .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity)
                     .frame(height: 52)
                     .background(.white.opacity(0.10), in: Capsule())
                     .overlay(Capsule().stroke(.white.opacity(0.14)))
-                    .contentShape(Rectangle())
+                    .contentShape(Capsule())
 
                 Button {
-                    if hasPromptText {
-                        onSendPrompt()
-                    }
+                    sendPrompt()
                 } label: {
-                    Image(systemName: hasPromptText ? "paperplane.fill" : "plus")
+                    Image(systemName: "paperplane.fill")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 52, height: 52)
@@ -4740,9 +6295,18 @@ private struct LiveToolPanel: View {
                 }
                 .buttonStyle(.plain)
                 .contentShape(Circle())
-                .opacity(hasPromptText ? 1 : 0.82)
+                .disabled(!hasPromptText)
+                .opacity(hasPromptText ? 1 : 0.42)
             }
         }
+    }
+
+    private func sendPrompt() {
+        let prompt = quickPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        quickPrompt = ""
+        isPromptFocused = false
+        onSendPrompt(prompt)
     }
 
     private var hasPromptText: Bool {
@@ -4754,13 +6318,31 @@ private struct LiveToolPanel: View {
         switch selectedTool {
         case .tone:
             VStack(alignment: .leading, spacing: 16) {
+                Text("AI FRIEND STYLE")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(.white.opacity(0.48))
+                HStack(spacing: 8) {
+                    ForEach(roleModes, id: \.self) { mode in
+                        Button {
+                            aiRoleMode = mode
+                        } label: {
+                            Text(mode)
+                                .font(.system(size: 12, weight: .black))
+                                .foregroundStyle(aiRoleMode == mode ? .white : .white.opacity(0.48))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 36)
+                                .background(aiRoleMode == mode ? Color.brandPurple.opacity(0.58) : .white.opacity(0.08), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                LivePanelSlider(title: "Reply Depth", value: $aiReplyDepth, icon: "text.bubble")
                 Text("BARRAGE TOPICS")
                     .font(.system(size: 12, weight: .black))
                     .foregroundStyle(.white.opacity(0.48))
                 FlowTags(items: toneTopicsData, selected: toneTopics) { topic in
                     toggle(topic, in: &toneTopics, allowsEmpty: false)
                 }
-                promptBar
             }
         case .vibe:
             VStack(alignment: .leading, spacing: 14) {
@@ -4848,6 +6430,14 @@ private struct LiveToolPanel: View {
             }
         case .filters:
             VStack(alignment: .leading, spacing: 14) {
+                LivePanelSlider(title: "Natural Beauty", value: $beautyFilter, icon: "wand.and.stars")
+                HStack {
+                    Text(beautyFilter < 0.05 ? "OFF" : beautyFilter < 0.4 ? "NATURAL" : beautyFilter < 0.72 ? "SMOOTH" : "STRONG")
+                    Spacer()
+                    Text("Applied to preview & saved video")
+                }
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.46))
                 HStack {
                     Text("AR FILTERS")
                     Spacer()
@@ -4891,6 +6481,7 @@ private struct LiveToolPanel: View {
             }
         case .gifts:
             VStack(alignment: .leading, spacing: 14) {
+                LivePanelSlider(title: "Gift Frequency", value: $giftIntensity, icon: "timer")
                 Toggle(isOn: $autoFakeDonations) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Auto Fake Donations")
@@ -5309,65 +6900,686 @@ private struct FallbackGiftBurst: View {
 }
 
 #if os(iOS)
+private final class LiveCameraRecorder: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
+    @Published private(set) var sceneContext = ""
+    private let session = AVCaptureSession()
+    private let sessionQueue = DispatchQueue(label: "com.squadlive.beauty-camera", qos: .userInitiated)
+    private let captureQueue = DispatchQueue(label: "com.squadlive.beauty-frames", qos: .userInteractive)
+    private let visionQueue = DispatchQueue(label: "com.squadlive.scene-analysis", qos: .utility)
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let audioOutput = AVCaptureAudioDataOutput()
+    private let imageContext = CIContext()
+    private let colorSpace = CGColorSpaceCreateDeviceRGB()
+    private let noiseReductionFilter = CIFilter(name: "CINoiseReduction")
+    private let colorControlsFilter = CIFilter(name: "CIColorControls")
+    private var videoDevice: AVCaptureDevice?
+    private weak var previewView: BeautyCameraPreviewView?
+    private var assetWriter: AVAssetWriter?
+    private var videoInput: AVAssetWriterInput?
+    private var audioInput: AVAssetWriterInput?
+    private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var outputBufferPool: CVPixelBufferPool?
+    private var outputDimensions: CMVideoDimensions?
+    private var temporaryOutputBuffer: CVPixelBuffer?
+    private var outputURL: URL?
+    private var beautyIntensity = 0.36
+    private var thermalBeautyMultiplier = 1.0
+    private var isConfigured = false
+    private var wantsRecording = false
+    private var recordingStartTime: CMTime?
+    private var shouldDiscardRecording = false
+    private var finishHandler: ((URL?) -> Void)?
+    private var speechAudioHandler: ((CMSampleBuffer) -> Void)?
+    private var lastSceneAnalysisTime: TimeInterval = 0
+    private var isSceneAnalysisInFlight = false
+    private var allowsSceneAnalysis = true
+
+    func attachPreview(_ view: BeautyCameraPreviewView) {
+        captureQueue.async { [weak self, weak view] in
+            guard let self, let view else { return }
+            self.previewView = view
+        }
+    }
+
+    func updateBeautyIntensity(_ intensity: Double) {
+        captureQueue.async { [weak self] in
+            self?.beautyIntensity = min(max(intensity, 0), 1)
+        }
+    }
+
+    func setSpeechAudioHandler(_ handler: ((CMSampleBuffer) -> Void)?) {
+        captureQueue.async { [weak self] in
+            self?.speechAudioHandler = handler
+        }
+    }
+
+    func updateThermalState(_ state: ProcessInfo.ThermalState) {
+        let targetFPS: Int32
+        let beautyMultiplier: Double
+        switch state {
+        case .serious:
+            targetFPS = 15
+            beautyMultiplier = 0.42
+        case .critical:
+            targetFPS = 12
+            beautyMultiplier = 0
+        default:
+            targetFPS = 24
+            beautyMultiplier = 1
+        }
+        captureQueue.async { [weak self] in
+            self?.thermalBeautyMultiplier = beautyMultiplier
+            self?.allowsSceneAnalysis = state != .serious && state != .critical
+        }
+        sessionQueue.async { [weak self] in
+            self?.setFrameRate(targetFPS)
+        }
+    }
+
+    func startCaptureAndRecording() {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            guard self.configureSessionIfNeeded() else { return }
+            self.captureQueue.sync {
+                self.resetWriterState()
+                self.lastSceneAnalysisTime = 0
+                self.isSceneAnalysisInFlight = false
+                self.shouldDiscardRecording = false
+                self.wantsRecording = true
+                self.outputURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("squadlive-beauty-\(UUID().uuidString).mp4")
+                if let outputURL = self.outputURL {
+                    try? FileManager.default.removeItem(at: outputURL)
+                }
+                DispatchQueue.main.async { [weak self] in
+                    self?.sceneContext = ""
+                }
+            }
+            if !self.session.isRunning {
+                self.session.startRunning()
+            }
+        }
+    }
+
+    func stopRecording(completion: @escaping (URL?) -> Void) {
+        sessionQueue.async { [weak self] in
+            guard let self else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+            self.captureQueue.async {
+                self.finishHandler = completion
+                self.finishWriter()
+            }
+        }
+    }
+
+    func cancelRecording() {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+            self.captureQueue.async {
+                self.shouldDiscardRecording = true
+                self.wantsRecording = false
+                self.finishHandler = nil
+                self.assetWriter?.cancelWriting()
+                if let outputURL = self.outputURL {
+                    try? FileManager.default.removeItem(at: outputURL)
+                }
+                self.resetWriterState()
+            }
+        }
+    }
+
+    private func configureSessionIfNeeded() -> Bool {
+        guard !isConfigured else { return true }
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+        session.sessionPreset = .hd1280x720
+
+        guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
+              let videoDeviceInput = try? AVCaptureDeviceInput(device: videoDevice),
+              session.canAddInput(videoDeviceInput) else { return false }
+        session.addInput(videoDeviceInput)
+        self.videoDevice = videoDevice
+
+        if let audioDevice = AVCaptureDevice.default(for: .audio),
+           let audioDeviceInput = try? AVCaptureDeviceInput(device: audioDevice),
+           session.canAddInput(audioDeviceInput) {
+            session.addInput(audioDeviceInput)
+        }
+
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
+        videoOutput.setSampleBufferDelegate(self, queue: captureQueue)
+        guard session.canAddOutput(videoOutput) else { return false }
+        session.addOutput(videoOutput)
+
+        audioOutput.setSampleBufferDelegate(self, queue: captureQueue)
+        if session.canAddOutput(audioOutput) {
+            session.addOutput(audioOutput)
+        }
+
+        if let connection = videoOutput.connection(with: .video) {
+            if connection.isVideoRotationAngleSupported(90) {
+                connection.videoRotationAngle = 90
+            }
+            if connection.isVideoMirroringSupported {
+                connection.isVideoMirrored = true
+            }
+        }
+        setFrameRate(24)
+        isConfigured = true
+        return true
+    }
+
+    private func setFrameRate(_ framesPerSecond: Int32) {
+        guard let videoDevice,
+              videoDevice.activeFormat.videoSupportedFrameRateRanges.contains(where: {
+                  $0.minFrameRate <= Double(framesPerSecond) && $0.maxFrameRate >= Double(framesPerSecond)
+              }) else { return }
+        do {
+            try videoDevice.lockForConfiguration()
+            let duration = CMTime(value: 1, timescale: framesPerSecond)
+            videoDevice.activeVideoMinFrameDuration = duration
+            videoDevice.activeVideoMaxFrameDuration = duration
+            videoDevice.unlockForConfiguration()
+        } catch {
+            return
+        }
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        if output === videoOutput {
+            processVideoSample(sampleBuffer)
+        } else if output === audioOutput {
+            appendAudioSample(sampleBuffer)
+        }
+    }
+
+    private func processVideoSample(_ sampleBuffer: CMSampleBuffer) {
+        guard let sourceBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let width = CVPixelBufferGetWidth(sourceBuffer)
+        let height = CVPixelBufferGetHeight(sourceBuffer)
+        guard prepareOutputPool(width: width, height: height), let outputBufferPool else { return }
+
+        temporaryOutputBuffer = nil
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, outputBufferPool, &temporaryOutputBuffer) == kCVReturnSuccess,
+              let outputBuffer = temporaryOutputBuffer else { return }
+
+        let sourceImage = CIImage(cvPixelBuffer: sourceBuffer)
+        analyzeSceneIfNeeded(sourceImage)
+        let filteredImage = beautyImage(from: sourceImage).cropped(to: sourceImage.extent)
+        imageContext.render(filteredImage, to: outputBuffer, bounds: sourceImage.extent, colorSpace: colorSpace)
+
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        previewView?.display(pixelBuffer: outputBuffer, presentationTime: presentationTime)
+
+        guard wantsRecording,
+              prepareWriterIfNeeded(width: width, height: height, startTime: presentationTime),
+              assetWriter?.status == .writing,
+              let videoInput,
+              videoInput.isReadyForMoreMediaData else { return }
+        pixelBufferAdaptor?.append(outputBuffer, withPresentationTime: presentationTime)
+    }
+
+    private func analyzeSceneIfNeeded(_ sourceImage: CIImage) {
+        let now = Date().timeIntervalSinceReferenceDate
+        guard allowsSceneAnalysis,
+              !isSceneAnalysisInFlight,
+              now - lastSceneAnalysisTime >= 4 else { return }
+
+        let longestSide = max(sourceImage.extent.width, sourceImage.extent.height)
+        guard longestSide > 0 else { return }
+        let scale = min(1, 320 / longestSide)
+        let scaledImage = sourceImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let cgImage = imageContext.createCGImage(scaledImage, from: scaledImage.extent) else { return }
+
+        lastSceneAnalysisTime = now
+        isSceneAnalysisInFlight = true
+        visionQueue.async { [weak self] in
+            guard let self else { return }
+            let classificationRequest = VNClassifyImageRequest()
+            let textRequest = VNRecognizeTextRequest()
+            textRequest.recognitionLevel = .fast
+            textRequest.usesLanguageCorrection = false
+            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .leftMirrored, options: [:])
+            try? handler.perform([classificationRequest, textRequest])
+            let labels = (classificationRequest.results ?? [])
+                .filter { $0.confidence >= 0.04 }
+                .prefix(8)
+                .map { observation in
+                    let label = observation.identifier.replacingOccurrences(of: "_", with: " ")
+                    return "\(label) \(Int(observation.confidence * 100))%"
+                }
+            let visibleText = (textRequest.results ?? [])
+                .compactMap { $0.topCandidates(1).first?.string.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .prefix(3)
+            var details: [String] = []
+            if !labels.isEmpty {
+                details.append("likely objects or scene: \(labels.joined(separator: ", "))")
+            }
+            if !visibleText.isEmpty {
+                details.append("visible text: \(visibleText.joined(separator: " / "))")
+            }
+            let context = details.isEmpty
+                ? "A recent live-camera frame was analyzed, but no object was identified confidently. Do not say you cannot see; ask for a closer view when needed."
+                : "A recent live-camera frame was analyzed on device; \(details.joined(separator: "; ")). Use this naturally, say 'it looks like' when uncertain, and never claim you cannot see the stream."
+            DispatchQueue.main.async { [weak self] in
+                self?.sceneContext = context
+            }
+            self.captureQueue.async { [weak self] in
+                self?.isSceneAnalysisInFlight = false
+            }
+        }
+    }
+
+    private func beautyImage(from sourceImage: CIImage) -> CIImage {
+        let intensity = beautyIntensity * thermalBeautyMultiplier
+        guard intensity >= 0.01 else { return sourceImage }
+        noiseReductionFilter?.setValue(sourceImage, forKey: kCIInputImageKey)
+        noiseReductionFilter?.setValue(0.012 + intensity * 0.055, forKey: "inputNoiseLevel")
+        noiseReductionFilter?.setValue(0.48 - intensity * 0.12, forKey: "inputSharpness")
+
+        colorControlsFilter?.setValue(noiseReductionFilter?.outputImage ?? sourceImage, forKey: kCIInputImageKey)
+        colorControlsFilter?.setValue(1 + intensity * 0.045, forKey: kCIInputSaturationKey)
+        colorControlsFilter?.setValue(intensity * 0.045, forKey: kCIInputBrightnessKey)
+        colorControlsFilter?.setValue(1 - intensity * 0.035, forKey: kCIInputContrastKey)
+        return colorControlsFilter?.outputImage ?? sourceImage
+    }
+
+    private func prepareOutputPool(width: Int, height: Int) -> Bool {
+        if outputDimensions?.width == Int32(width), outputDimensions?.height == Int32(height), outputBufferPool != nil {
+            return true
+        }
+        let poolAttributes = [kCVPixelBufferPoolMinimumBufferCountKey as String: 5]
+        let pixelAttributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+        ]
+        var pool: CVPixelBufferPool?
+        let status = CVPixelBufferPoolCreate(nil, poolAttributes as CFDictionary, pixelAttributes as CFDictionary, &pool)
+        outputBufferPool = pool
+        outputDimensions = CMVideoDimensions(width: Int32(width), height: Int32(height))
+        return status == kCVReturnSuccess && pool != nil
+    }
+
+    private func prepareWriterIfNeeded(width: Int, height: Int, startTime: CMTime) -> Bool {
+        if assetWriter != nil { return true }
+        guard let outputURL,
+              let writer = try? AVAssetWriter(outputURL: outputURL, fileType: .mp4) else { return false }
+
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: 4_000_000,
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+            ]
+        ]
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        videoInput.expectsMediaDataInRealTime = true
+        guard writer.canAdd(videoInput) else { return false }
+        writer.add(videoInput)
+
+        let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 44_100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: 64_000
+        ])
+        audioInput.expectsMediaDataInRealTime = true
+        if writer.canAdd(audioInput) {
+            writer.add(audioInput)
+            self.audioInput = audioInput
+        }
+
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput, sourcePixelBufferAttributes: nil)
+        guard writer.startWriting() else { return false }
+        writer.startSession(atSourceTime: startTime)
+        assetWriter = writer
+        self.videoInput = videoInput
+        pixelBufferAdaptor = adaptor
+        recordingStartTime = startTime
+        return true
+    }
+
+    private func appendAudioSample(_ sampleBuffer: CMSampleBuffer) {
+        speechAudioHandler?(sampleBuffer)
+        guard wantsRecording,
+              let recordingStartTime,
+              CMSampleBufferGetPresentationTimeStamp(sampleBuffer) >= recordingStartTime,
+              assetWriter?.status == .writing,
+              let audioInput,
+              audioInput.isReadyForMoreMediaData else { return }
+        audioInput.append(sampleBuffer)
+    }
+
+    private func finishWriter() {
+        wantsRecording = false
+        guard let writer = assetWriter, let outputURL else {
+            finishRecording(with: nil)
+            return
+        }
+        guard writer.status == .writing else {
+            try? FileManager.default.removeItem(at: outputURL)
+            finishRecording(with: nil)
+            return
+        }
+        videoInput?.markAsFinished()
+        audioInput?.markAsFinished()
+        writer.finishWriting { [weak self] in
+            guard let self else { return }
+            self.captureQueue.async {
+                let shouldKeep = !self.shouldDiscardRecording && writer.status == .completed
+                if !shouldKeep {
+                    try? FileManager.default.removeItem(at: outputURL)
+                }
+                self.finishRecording(with: shouldKeep ? outputURL : nil)
+            }
+        }
+    }
+
+    private func finishRecording(with url: URL?) {
+        resetWriterState()
+        let completion = finishHandler
+        finishHandler = nil
+        DispatchQueue.main.async {
+            completion?(url)
+        }
+    }
+
+    private func resetWriterState() {
+        assetWriter = nil
+        videoInput = nil
+        audioInput = nil
+        pixelBufferAdaptor = nil
+        recordingStartTime = nil
+        wantsRecording = false
+        temporaryOutputBuffer = nil
+        outputURL = nil
+    }
+}
+
 private struct CameraPreview: UIViewRepresentable {
-    func makeUIView(context: Context) -> PreviewView {
-        let view = PreviewView()
-        view.configure()
+    @ObservedObject var recorder: LiveCameraRecorder
+    let beautyIntensity: Double
+
+    func makeUIView(context: Context) -> BeautyCameraPreviewView {
+        let view = BeautyCameraPreviewView()
+        recorder.attachPreview(view)
         return view
     }
 
-    func updateUIView(_ uiView: PreviewView, context: Context) {}
+    func updateUIView(_ uiView: BeautyCameraPreviewView, context: Context) {
+        recorder.attachPreview(uiView)
+        recorder.updateBeautyIntensity(beautyIntensity)
+    }
 
-    final class PreviewView: UIView {
-        private let session = AVCaptureSession()
-        private var isConfigured = false
+    static func dismantleUIView(_ uiView: BeautyCameraPreviewView, coordinator: ()) {
+        uiView.flush()
+    }
+}
 
-        override class var layerClass: AnyClass {
-            AVCaptureVideoPreviewLayer.self
+private final class BeautyCameraPreviewView: UIView {
+    private var formatDescription: CMVideoFormatDescription?
+    private var formatDimensions: CMVideoDimensions?
+
+    override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
+
+    private var displayLayer: AVSampleBufferDisplayLayer {
+        layer as! AVSampleBufferDisplayLayer
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        displayLayer.videoGravity = .resizeAspectFill
+        backgroundColor = .black
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        displayLayer.videoGravity = .resizeAspectFill
+        backgroundColor = .black
+    }
+
+    func display(pixelBuffer: CVPixelBuffer, presentationTime: CMTime) {
+        let dimensions = CMVideoDimensions(
+            width: Int32(CVPixelBufferGetWidth(pixelBuffer)),
+            height: Int32(CVPixelBufferGetHeight(pixelBuffer))
+        )
+        if formatDescription == nil || formatDimensions?.width != dimensions.width || formatDimensions?.height != dimensions.height {
+            var newFormatDescription: CMVideoFormatDescription?
+            guard CMVideoFormatDescriptionCreateForImageBuffer(
+                allocator: kCFAllocatorDefault,
+                imageBuffer: pixelBuffer,
+                formatDescriptionOut: &newFormatDescription
+            ) == noErr else { return }
+            formatDescription = newFormatDescription
+            formatDimensions = dimensions
+        }
+        guard let formatDescription else { return }
+
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: presentationTime, decodeTimeStamp: .invalid)
+        var sampleBuffer: CMSampleBuffer?
+        guard CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: pixelBuffer,
+            formatDescription: formatDescription,
+            sampleTiming: &timing,
+            sampleBufferOut: &sampleBuffer
+        ) == noErr, let sampleBuffer else { return }
+
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true),
+           CFArrayGetCount(attachments) > 0 {
+            let attachment = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(
+                attachment,
+                Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+            )
         }
 
-        func configure() {
-            guard !isConfigured else { return }
-            guard let previewLayer = layer as? AVCaptureVideoPreviewLayer else { return }
-            isConfigured = true
-
-            previewLayer.videoGravity = .resizeAspectFill
-            previewLayer.session = session
-
-            DispatchQueue.global(qos: .userInitiated).async { [session] in
-                session.beginConfiguration()
-                session.sessionPreset = .medium
-
-                if
-                    let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
-                    let input = try? AVCaptureDeviceInput(device: device),
-                    session.canAddInput(input)
-                {
-                    session.addInput(input)
-                }
-
-                session.commitConfiguration()
-
-                if !session.isRunning {
-                    session.startRunning()
-                }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.displayLayer.status == .failed {
+                self.displayLayer.flush()
             }
+            self.displayLayer.enqueue(sampleBuffer)
         }
+    }
 
-        deinit {
-            if session.isRunning {
-                session.stopRunning()
-            }
-        }
+    func flush() {
+        displayLayer.flushAndRemoveImage()
     }
 }
 #else
+private final class LiveCameraRecorder: ObservableObject {
+    @Published private(set) var sceneContext = ""
+    func startCaptureAndRecording() {}
+    func stopRecording(completion: @escaping (URL?) -> Void) { completion(nil) }
+    func cancelRecording() {}
+    func updateBeautyIntensity(_ intensity: Double) {}
+    func updateThermalState(_ state: ProcessInfo.ThermalState) {}
+    func setSpeechAudioHandler(_ handler: ((CMSampleBuffer) -> Void)?) {}
+}
+
 private struct CameraPreview: View {
+    let recorder: LiveCameraRecorder
+    let beautyIntensity: Double
+
     var body: some View {
         LinearGradient(colors: [.brandPurple.opacity(0.36), .black.opacity(0.94), .black], startPoint: .top, endPoint: .bottom)
     }
 }
 #endif
+
+private struct LiveReviewPrompt: View {
+    let onPositiveFeedback: () -> Void
+    let onNegativeFeedback: () -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            let compact = geometry.size.width < 390 || geometry.size.height < 720
+            let modalWidth = min(geometry.size.width - (compact ? 28 : 44), 500)
+
+            ZStack {
+                Color.black.opacity(0.70)
+                    .ignoresSafeArea()
+                    .onTapGesture(perform: onNegativeFeedback)
+
+                VStack(spacing: compact ? 16 : 22) {
+                    HStack {
+                        Spacer()
+                        Button(action: onNegativeFeedback) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: compact ? 17 : 20, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.72))
+                                .frame(width: 42, height: 42)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .frame(height: 30)
+
+                    reviewIcon(compact: compact)
+
+                    VStack(spacing: compact ? 8 : 12) {
+                        Text("Do you like SquadLive?")
+                            .font(.system(size: compact ? 26 : 32, weight: .bold))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                            .minimumScaleFactor(0.82)
+
+                        Text("If you enjoy using SquadLive, we'd love to hear from you. Your feedback helps us make every AI friend feel more alive.")
+                            .font(.system(size: compact ? 13 : 15, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.68))
+                            .multilineTextAlignment(.center)
+                            .lineSpacing(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) {
+                            positiveButton(compact: compact)
+                            negativeButton(compact: compact)
+                        }
+
+                        VStack(spacing: 10) {
+                            positiveButton(compact: true)
+                            negativeButton(compact: true)
+                        }
+                    }
+
+                    Label("Your feedback helps us improve SquadLive", systemImage: "checkmark.shield.fill")
+                        .font(.system(size: compact ? 11 : 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.52))
+                        .labelStyle(.titleAndIcon)
+                }
+                .padding(.horizontal, compact ? 18 : 28)
+                .padding(.top, compact ? 10 : 14)
+                .padding(.bottom, compact ? 20 : 28)
+                .frame(width: modalWidth)
+                .background {
+                    RoundedRectangle(cornerRadius: compact ? 25 : 30, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            LinearGradient(
+                                colors: [.white.opacity(0.06), .black.opacity(0.44)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: compact ? 25 : 30, style: .continuous))
+                        }
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: compact ? 25 : 30, style: .continuous)
+                        .stroke(LinearGradient(colors: [.brandPurple.opacity(0.65), .white.opacity(0.14)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.62), radius: 34, y: 18)
+                .padding(.vertical, 18)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    private func reviewIcon(compact: Bool) -> some View {
+        ZStack {
+            Ellipse()
+                .stroke(Color.brandPurple.opacity(0.24), lineWidth: 2)
+                .frame(width: compact ? 150 : 190, height: compact ? 50 : 62)
+
+            RoundedRectangle(cornerRadius: compact ? 20 : 25, style: .continuous)
+                .fill(LinearGradient(colors: [.brandPurple, Color(red: 0.30, green: 0.08, blue: 0.72)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: compact ? 78 : 96, height: compact ? 66 : 80)
+                .rotationEffect(.degrees(-8))
+                .overlay {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: compact ? 29 : 36, weight: .bold))
+                        .foregroundStyle(LinearGradient(colors: [.white, .pink.opacity(0.88)], startPoint: .top, endPoint: .bottom))
+                }
+                .shadow(color: Color.brandPurple.opacity(0.60), radius: 18)
+
+            Image(systemName: "sparkle")
+                .foregroundStyle(Color.brandPurple)
+                .offset(x: compact ? 68 : 86, y: -18)
+
+            Image(systemName: "sparkle")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.brandPurple.opacity(0.78))
+                .offset(x: compact ? -67 : -86, y: 20)
+        }
+        .frame(height: compact ? 82 : 104)
+    }
+
+    private func positiveButton(compact: Bool) -> some View {
+        Button(action: onPositiveFeedback) {
+            VStack(spacing: compact ? 7 : 10) {
+                Image(systemName: "hand.thumbsup.fill")
+                    .font(.system(size: compact ? 25 : 31, weight: .semibold))
+                Text("Yes, I Love It!")
+                    .font(.system(size: compact ? 14 : 17, weight: .bold))
+                    .minimumScaleFactor(0.78)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: compact ? 82 : 106)
+            .background(LinearGradient(colors: [Color(red: 0.64, green: 0.20, blue: 1), Color(red: 0.42, green: 0.08, blue: 0.94)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.40), lineWidth: 1))
+            .shadow(color: Color.brandPurple.opacity(0.50), radius: 14)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func negativeButton(compact: Bool) -> some View {
+        Button(action: onNegativeFeedback) {
+            VStack(spacing: compact ? 7 : 10) {
+                Image(systemName: "face.dashed")
+                    .font(.system(size: compact ? 25 : 31, weight: .medium))
+                Text("No, Thanks")
+                    .font(.system(size: compact ? 14 : 17, weight: .bold))
+                    .minimumScaleFactor(0.78)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.white.opacity(0.72))
+            .frame(maxWidth: .infinity)
+            .frame(height: compact ? 82 : 106)
+            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.14), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
 
 private struct PaywallBanner: View {
     let listener: Listener
@@ -5375,18 +7587,38 @@ private struct PaywallBanner: View {
     let onUpgrade: () -> Void
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        VStack(alignment: .trailing, spacing: -18) {
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(.white.opacity(0.90))
+                    .frame(width: 40, height: 40)
+                    .background(.black.opacity(0.68), in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.28)))
+                    .frame(width: 60, height: 60)
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .padding(.trailing, 2)
+            .zIndex(5)
+
             Button(action: onUpgrade) {
                 HStack(spacing: 14) {
-                    RemoteImage(urlString: listener.imageURL)
-                        .frame(width: 56, height: 56)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(.white.opacity(0.20)))
+                    Image("VIPPrivilegeIcon")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 62, height: 62)
+                        .shadow(color: Color.gold.opacity(0.38), radius: 10)
+                        .accessibilityLabel("PRO privileges")
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("\(listener.name) is typing a deep, heartfelt response...")
+                        Text("Keep your AI room highly active with PRO")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white)
+                            .multilineTextAlignment(.leading)
+                        Text("Free AI replies and gifts gradually slow after 4 minutes. PRO keeps dynamic 1–3 friend replies and gift effects frequent.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.68))
                             .multilineTextAlignment(.leading)
                         HStack(spacing: 5) {
                             Circle().fill(.white.opacity(0.42)).frame(width: 7, height: 7)
@@ -5411,29 +7643,16 @@ private struct PaywallBanner: View {
                 .shadow(color: .black.opacity(0.40), radius: 24)
             }
             .buttonStyle(.plain)
-
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .black))
-                    .foregroundStyle(.white.opacity(0.86))
-                    .frame(width: 42, height: 42)
-                    .background(.black.opacity(0.58), in: Circle())
-                    .overlay(Circle().stroke(.white.opacity(0.24)))
-            }
-            .buttonStyle(.plain)
-            .contentShape(Circle())
-            .padding(.leading, -6)
-            .padding(.top, -10)
-            .zIndex(5)
         }
     }
 }
 
 private struct RemoteImage: View {
     let urlString: String
+    var placeholderText: String? = nil
 
     var body: some View {
-        CachedRemoteImageView(url: displayURL)
+        CachedRemoteImageView(url: displayURL, placeholderText: placeholderText)
         .clipped()
     }
 
@@ -5466,6 +7685,7 @@ private struct RemoteImage: View {
 #if os(iOS)
 private struct CachedRemoteImageView: View {
     let url: URL?
+    let placeholderText: String?
     @State private var image: UIImage?
     @State private var didFail = false
 
@@ -5476,9 +7696,9 @@ private struct CachedRemoteImageView: View {
                     .resizable()
                     .scaledToFill()
             } else if didFail {
-                remoteImageFallback
+                remoteImageFallback(placeholderText: placeholderText)
             } else {
-                remoteImagePlaceholder
+                remoteImagePlaceholder(placeholderText: placeholderText)
             }
         }
         .task(id: url) {
@@ -5489,8 +7709,8 @@ private struct CachedRemoteImageView: View {
     @MainActor
     private func load() async {
         didFail = false
+        image = nil
         guard let url else {
-            image = nil
             didFail = true
             return
         }
@@ -5553,6 +7773,7 @@ private enum RemoteImageCache {
 #else
 private struct CachedRemoteImageView: View {
     let url: URL?
+    let placeholderText: String?
 
     var body: some View {
         AsyncImage(url: url) { phase in
@@ -5562,29 +7783,40 @@ private struct CachedRemoteImageView: View {
                     .resizable()
                     .scaledToFill()
             case .failure:
-                remoteImageFallback
+                remoteImageFallback(placeholderText: placeholderText)
             default:
-                remoteImagePlaceholder
+                remoteImagePlaceholder(placeholderText: placeholderText)
             }
         }
     }
 }
 #endif
 
-private var remoteImageFallback: some View {
+private func remoteImageFallback(placeholderText: String?) -> some View {
     ZStack {
         LinearGradient(colors: [.brandPurple.opacity(0.55), .brandOrange.opacity(0.45)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        Image(systemName: "person.fill")
-            .font(.system(size: 28, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.72))
+        if let placeholderText {
+            Text(placeholderText)
+                .font(.system(size: 38))
+        } else {
+            Image(systemName: "person.fill")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
+        }
     }
 }
 
-private var remoteImagePlaceholder: some View {
+private func remoteImagePlaceholder(placeholderText: String?) -> some View {
     ZStack {
-        LinearGradient(colors: [.white.opacity(0.12), .white.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        ProgressView()
-            .tint(.white.opacity(0.65))
+        LinearGradient(colors: [.brandPurple.opacity(0.34), .brandOrange.opacity(0.22)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        if let placeholderText {
+            Text(placeholderText)
+                .font(.system(size: 38))
+        } else {
+            Image(systemName: "person.fill")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.62))
+        }
     }
 }
 
@@ -5619,13 +7851,18 @@ private struct LoopingVideoPlayer: UIViewRepresentable {
     func updateUIView(_ uiView: LoopingVideoUIView, context: Context) {
         uiView.configure(url: url)
     }
+
+    static func dismantleUIView(_ uiView: LoopingVideoUIView, coordinator: Void) {
+        uiView.stop()
+    }
 }
 
 private final class LoopingVideoUIView: UIView {
-    private let player = AVPlayer()
+    private let player = AVQueuePlayer()
     private let playerLayer = AVPlayerLayer()
     private var currentURL: URL?
-    private var endObserver: NSObjectProtocol?
+    private var playerLooper: AVPlayerLooper?
+    private var lifecycleObservers: [NSObjectProtocol] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -5633,6 +7870,17 @@ private final class LoopingVideoUIView: UIView {
         layer.addSublayer(playerLayer)
         playerLayer.player = player
         player.isMuted = true
+        player.actionAtItemEnd = .none
+        player.automaticallyWaitsToMinimizeStalling = false
+
+        lifecycleObservers = [
+            NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.resume()
+            },
+            NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.player.pause()
+            }
+        ]
     }
 
     required init?(coder: NSCoder) {
@@ -5644,47 +7892,63 @@ private final class LoopingVideoUIView: UIView {
         playerLayer.frame = bounds
     }
 
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            player.pause()
+        } else {
+            resume()
+        }
+    }
+
     func configure(url: URL) {
-        guard currentURL != url else { return }
+        guard currentURL != url else {
+            resume()
+            return
+        }
         currentURL = url
+        player.pause()
+        player.removeAllItems()
         let item = AVPlayerItem(url: url)
-        player.replaceCurrentItem(with: item)
+        item.preferredForwardBufferDuration = 1
+        playerLooper = AVPlayerLooper(player: player, templateItem: item)
+        resume()
+    }
 
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-        }
-        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
-            self?.player.seek(to: .zero)
-            self?.player.play()
-        }
+    func stop() {
+        player.pause()
+        playerLooper?.disableLooping()
+        playerLooper = nil
+        player.removeAllItems()
+        currentURL = nil
+    }
 
-        player.play()
+    private func resume() {
+        guard window != nil, currentURL != nil else { return }
+        player.playImmediately(atRate: 1)
     }
 
     deinit {
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-        }
-        player.pause()
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        stop()
     }
 }
 #endif
 
 private struct PremiumCheckoutView: View {
+    @ObservedObject var store: StorePurchaseManager
     let onClose: () -> Void
     let onSubscribe: () -> Void
-    let onTerms: () -> Void
-    let onPrivacy: () -> Void
     @State private var restoreMessage: String?
     @State private var selectedPlan = "weekly"
 
     private let benefits = [
-        ("person.2.fill", "20K+ live room viewers"),
-        ("checkmark.shield", "Get verified badge"),
-        ("bubble.left.and.bubble.right", "Real-time AI audience interaction"),
-        ("sparkles", "Premium effects & virtual gifts"),
-        ("eye", "AI fans react to your appearance"),
-        ("mic", "AI fans react to your voice")
+        ("person.2.fill", "200K+ live room activity"),
+        ("bubble.left.and.bubble.right", "High-frequency dynamic 1–3 friend replies"),
+        ("timer", "No AI reply slowdown after 4 minutes"),
+        ("sparkles", "No gift slowdown after 4 minutes"),
+        ("person.3.fill", "More frequent multi-friend moments"),
+        ("rectangle.stack.badge.plus", "No recurring upgrade reminders while live")
     ]
 
     var body: some View {
@@ -5692,7 +7956,7 @@ private struct PremiumCheckoutView: View {
             Color.black.ignoresSafeArea()
 
             ZStack {
-                LoopingVideoBackground(resourceName: "PremiumFriendsLoop", resourceExtension: "mp4")
+                LoopingVideoBackground(resourceName: "PremiumFriendsLoop", resourceExtension: "m4v")
                     .ignoresSafeArea()
                 LinearGradient(colors: [.black.opacity(0.18), .black.opacity(0.42), .black.opacity(0.96)], startPoint: .top, endPoint: .bottom)
                     .ignoresSafeArea()
@@ -5717,7 +7981,7 @@ private struct PremiumCheckoutView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 18) {
                         VStack(spacing: 4) {
-                            Text("Unlimited Access")
+                            Text("SquadLive PRO")
                                 .font(.system(size: 34, weight: .black))
                                 .foregroundStyle(.white)
                                 .multilineTextAlignment(.center)
@@ -5742,8 +8006,8 @@ private struct PremiumCheckoutView: View {
 
                         VStack(spacing: 12) {
                             SubscriptionPlanCard(
-                                title: "3-Day Free Trial",
-                                price: "US$9.99",
+                                title: "Weekly Plan",
+                                price: store.product(for: StoreProductID.weekly)?.displayPrice ?? "US$9.99",
                                 detail: "per week",
                                 badge: nil,
                                 isSelected: selectedPlan == "weekly"
@@ -5753,23 +8017,34 @@ private struct PremiumCheckoutView: View {
 
                             SubscriptionPlanCard(
                                 title: nil,
-                                price: "US$59.99",
-                                detail: "per year · US$1.15/week",
-                                badge: "Save 88%",
+                                price: store.product(for: StoreProductID.annual)?.displayPrice ?? "US$59.99",
+                                detail: "per year",
+                                badge: "Best Value",
                                 isSelected: selectedPlan == "yearly"
                             ) {
                                 selectedPlan = "yearly"
                             }
                         }
 
-                        Label("No payment today", systemImage: "checkmark.circle.fill")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.78))
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(Color.green, .white.opacity(0.78))
+                        if store.product(for: StoreProductID.weekly)?.subscription?.introductoryOffer?.paymentMode == .freeTrial {
+                            Label("3-day free trial for eligible new subscribers", systemImage: "checkmark.circle.fill")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.78))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(Color.green, .white.opacity(0.78))
+                        }
 
-                        Button(action: onSubscribe) {
-                            Text("Start My 3-Day Free Trial")
+                        Button {
+                            Task {
+                                let productID = selectedPlan == "weekly" ? StoreProductID.weekly : StoreProductID.annual
+                                if await store.purchase(productID: productID) {
+                                    onSubscribe()
+                                } else {
+                                    restoreMessage = store.statusMessage
+                                }
+                            }
+                        } label: {
+                            Text(store.purchasingProductID == nil ? "Continue" : "Connecting to App Store...")
                                 .font(.system(size: 19, weight: .black))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
@@ -5777,6 +8052,7 @@ private struct PremiumCheckoutView: View {
                                 .background(LinearGradient(colors: [Color(red: 0.34, green: 0.52, blue: 0.94), Color.brandPurpleDark], startPoint: .leading, endPoint: .trailing), in: RoundedRectangle(cornerRadius: 18))
                                 .shadow(color: Color.brandPurple.opacity(0.32), radius: 24)
                         }
+                        .disabled(store.purchasingProductID != nil)
 
                         if let restoreMessage {
                             Text(restoreMessage)
@@ -5786,10 +8062,15 @@ private struct PremiumCheckoutView: View {
 
                         HStack(spacing: 18) {
                             Button("Restore Purchase") {
-                                restoreMessage = "No active purchases found."
+                                Task {
+                                    if await store.restorePurchases() {
+                                        onSubscribe()
+                                    }
+                                    restoreMessage = store.statusMessage
+                                }
                             }
-                            Button("Privacy Policy", action: onPrivacy)
-                            Button("Terms of Use", action: onTerms)
+                            Link("Privacy Policy", destination: SquadLiveLegalLinks.privacy)
+                            Link("Terms of Use", destination: SquadLiveLegalLinks.terms)
                         }
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.white.opacity(0.42))
@@ -5856,69 +8137,6 @@ private struct SubscriptionPlanCard: View {
             .overlay(RoundedRectangle(cornerRadius: 20).stroke(isSelected ? .white.opacity(0.86) : .white.opacity(0.16), lineWidth: isSelected ? 2 : 1))
         }
         .buttonStyle(.plain)
-    }
-}
-
-private enum LegalKind {
-    case terms
-    case privacy
-
-    var title: String {
-        switch self {
-        case .terms: "Terms of Use"
-        case .privacy: "Privacy Policy"
-        }
-    }
-
-    var sections: [(String, String)] {
-        switch self {
-        case .terms:
-            [
-                ("AI Support", "SquadLive is an AI-powered emotional support prototype. It is not medical care, crisis care, therapy, or a substitute for professional advice."),
-                ("Subscriptions", "Premium features shown in this prototype are illustrative. Real purchases require StoreKit integration before release."),
-                ("Use", "Use the app respectfully and only for personal support sessions.")
-            ]
-        case .privacy:
-            [
-                ("Private Sessions", "The prototype is designed around an AI-only experience. No human audience is connected to your live session."),
-                ("Permissions", "Camera, microphone, and speech recognition permissions are requested only to support the simulated live session experience."),
-                ("Data", "Profile selections are currently kept in app memory for the active session unless persistence is added later.")
-            ]
-        }
-    }
-}
-
-private struct LegalTextView: View {
-    let kind: LegalKind
-    let onBack: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            PageHeader(title: kind.title, onBack: onBack)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(kind.sections, id: \.0) { section in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(section.0)
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)
-                            Text(section.1)
-                                .font(.system(size: 14))
-                                .foregroundStyle(.white.opacity(0.66))
-                                .lineSpacing(3)
-                        }
-                        .padding(18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
-                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.10)))
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 18)
-                .padding(.bottom, 30)
-            }
-        }
     }
 }
 

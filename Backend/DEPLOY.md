@@ -22,8 +22,11 @@ The blueprint declares:
 - `DATA_DIR=/var/data`
 - Secret env vars for `DEEPSEEK_API_KEY` and `ADMIN_TOKEN`
 - A 1 GB persistent disk mounted at `/var/data`
+- `AI_MAX_CONCURRENCY=40`, `AI_QUEUE_LIMIT=300`, and `INSTANCE_MEMORY_MB=512`
 
 Confirm these are present in the Render dashboard after deployment. If the service is downgraded to a Free instance without a persistent disk, local JSON data can be lost.
+
+The admin dashboard at `/admin` includes daily request and AI usage, average/max AI latency, timeout and provider failure counts, queue pressure, process memory, disk usage, and upgrade warnings. The current JSON store is protected against same-process concurrent overwrites, but PostgreSQL remains the recommended next step before running multiple instances.
 
 ## Basic Deployment
 

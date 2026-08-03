@@ -1,5 +1,5 @@
 import http from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, statfs, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,23 @@ const supportPagePath = join(__dirname, "support.html");
 const privacyPagePath = join(__dirname, "privacy.html");
 const termsPagePath = join(__dirname, "terms.html");
 const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
+const aiMaxConcurrency = Math.max(1, Number(process.env.AI_MAX_CONCURRENCY || 40));
+const aiQueueLimit = Math.max(aiMaxConcurrency, Number(process.env.AI_QUEUE_LIMIT || 300));
+const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 512));
+const processStartedAt = Date.now();
+
+let storePromise;
+let saveQueue = Promise.resolve();
+let metricsSaveTimer;
+let activeAIRequests = 0;
+const pendingAIRequests = [];
+const runtimeMetrics = {
+  maxActiveAIRequests: 0,
+  queueRejected: 0,
+  storeWriteFailures: 0,
+  lastAIErrorAt: null,
+  lastAIErrorReason: null
+};
 
 const viewerPacks = [
   { label: "5,000", viewers: 5000, cost: 15 },
@@ -70,12 +87,110 @@ async function loadStore() {
   store.coinTransactions ||= {};
   store.vipSubscriptions ||= {};
   store.aiConversations ||= {};
+  store.dailyUsage ||= {};
+  store.userIdsByDevice ||= {};
+  for (const user of Object.values(store.users)) {
+    if (user.deviceId) store.userIdsByDevice[user.deviceId] = user.id;
+  }
   return store;
 }
 
+function getStore() {
+  storePromise ||= loadStore();
+  return storePromise;
+}
+
 async function saveStore(store) {
-  await mkdir(dirname(storePath), { recursive: true });
-  await writeFile(storePath, JSON.stringify(store, null, 2));
+  const serialized = JSON.stringify(store, null, 2);
+  const temporaryPath = `${storePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
+  const persist = async () => {
+    await mkdir(dirname(storePath), { recursive: true });
+    await writeFile(temporaryPath, serialized);
+    await rename(temporaryPath, storePath);
+  };
+  const queuedSave = saveQueue.then(persist, persist);
+  saveQueue = queuedSave.catch((error) => {
+    runtimeMetrics.storeWriteFailures += 1;
+    console.error("Failed to persist store", error);
+  });
+  return queuedSave;
+}
+
+function dailyUsage(store, date = new Date()) {
+  const day = todayKey(date);
+  store.dailyUsage[day] ||= {
+    requests: 0,
+    newUsers: 0,
+    http4xx: 0,
+    http5xx: 0,
+    aiRequests: 0,
+    aiSuccesses: 0,
+    aiFallbacks: 0,
+    aiTimeouts: 0,
+    aiUnavailable: 0,
+    aiQueueRejected: 0,
+    aiLatencyTotalMs: 0,
+    aiLatencyMaxMs: 0,
+    peakAIConcurrency: 0,
+    activeUserIds: {}
+  };
+  return store.dailyUsage[day];
+}
+
+function recordDailyMetric(store, field, amount = 1) {
+  const usage = dailyUsage(store);
+  usage[field] = Number(usage[field] || 0) + amount;
+  scheduleMetricsSave(store);
+  return usage;
+}
+
+function recordDailyActiveUser(store, userId) {
+  if (!userId) return;
+  dailyUsage(store).activeUserIds[userId] = true;
+  scheduleMetricsSave(store);
+}
+
+function scheduleMetricsSave(store) {
+  if (metricsSaveTimer) return;
+  metricsSaveTimer = setTimeout(() => {
+    metricsSaveTimer = null;
+    const days = Object.keys(store.dailyUsage).sort();
+    for (const oldDay of days.slice(0, Math.max(0, days.length - 30))) {
+      delete store.dailyUsage[oldDay];
+    }
+    saveStore(store).catch(() => {});
+  }, 30_000);
+  metricsSaveTimer.unref?.();
+}
+
+function runQueuedAIRequest(task) {
+  if (pendingAIRequests.length >= aiQueueLimit) {
+    runtimeMetrics.queueRejected += 1;
+    const error = new Error("AI request queue is full. Please retry shortly.");
+    error.status = 503;
+    throw error;
+  }
+
+  return new Promise((resolve, reject) => {
+    const run = async () => {
+      activeAIRequests += 1;
+      runtimeMetrics.maxActiveAIRequests = Math.max(runtimeMetrics.maxActiveAIRequests, activeAIRequests);
+      try {
+        resolve(await task());
+      } catch (error) {
+        reject(error);
+      } finally {
+        activeAIRequests -= 1;
+        pendingAIRequests.shift()?.();
+      }
+    };
+
+    if (activeAIRequests < aiMaxConcurrency) {
+      run();
+    } else {
+      pendingAIRequests.push(run);
+    }
+  });
 }
 
 function newId(prefix) {
@@ -83,9 +198,11 @@ function newId(prefix) {
 }
 
 function getOrCreateUser(store, deviceId = "anonymous") {
-  const existing = Object.values(store.users).find((user) => user.deviceId === deviceId);
+  const existingId = store.userIdsByDevice[deviceId];
+  const existing = existingId ? store.users[existingId] : null;
   if (existing) {
     existing.lastSeenAt = new Date().toISOString();
+    recordDailyActiveUser(store, existing.id);
     return existing;
   }
 
@@ -99,6 +216,9 @@ function getOrCreateUser(store, deviceId = "anonymous") {
     shareRewardDays: {}
   };
   store.users[user.id] = user;
+  store.userIdsByDevice[deviceId] = user.id;
+  recordDailyMetric(store, "newUsers");
+  recordDailyActiveUser(store, user.id);
   recordCoinTransaction(store, {
     userId: user.id,
     type: "signup_bonus",
@@ -162,9 +282,9 @@ function recordAIConversation(store, input) {
   };
   store.aiConversations[conversation.id] = conversation;
 
-  const allConversations = Object.values(store.aiConversations).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  for (const oldConversation of allConversations.slice(5000)) {
-    delete store.aiConversations[oldConversation.id];
+  const conversationIds = Object.keys(store.aiConversations);
+  for (const oldConversationId of conversationIds.slice(0, Math.max(0, conversationIds.length - 5000))) {
+    delete store.aiConversations[oldConversationId];
   }
   return conversation;
 }
@@ -190,10 +310,126 @@ function isActiveRecently(iso) {
   return Date.now() - new Date(iso).getTime() <= 5 * 60 * 1000;
 }
 
-function adminOverview(store) {
+function publicDailyUsage(store) {
+  return Object.entries(store.dailyUsage)
+    .sort(([left], [right]) => right.localeCompare(left))
+    .slice(0, 30)
+    .map(([date, usage]) => ({
+      date,
+      requests: Number(usage.requests || 0),
+      newUsers: Number(usage.newUsers || 0),
+      http4xx: Number(usage.http4xx || 0),
+      http5xx: Number(usage.http5xx || 0),
+      activeUsers: Object.keys(usage.activeUserIds || {}).length,
+      aiRequests: Number(usage.aiRequests || 0),
+      aiSuccesses: Number(usage.aiSuccesses || 0),
+      aiFallbacks: Number(usage.aiFallbacks || 0),
+      aiTimeouts: Number(usage.aiTimeouts || 0),
+      aiUnavailable: Number(usage.aiUnavailable || 0),
+      aiQueueRejected: Number(usage.aiQueueRejected || 0),
+      peakAIConcurrency: Number(usage.peakAIConcurrency || 0),
+      averageAILatencyMs: usage.aiRequests
+        ? Math.round(Number(usage.aiLatencyTotalMs || 0) / Number(usage.aiRequests))
+        : 0,
+      maxAILatencyMs: Number(usage.aiLatencyMaxMs || 0)
+    }));
+}
+
+async function resourceSnapshot() {
+  const memory = process.memoryUsage();
+  const memoryLimitBytes = instanceMemoryMB * 1024 * 1024;
+  let disk = { usedBytes: 0, totalBytes: 0, percent: 0, storeBytes: 0 };
+
+  try {
+    const [filesystem, storeFile] = await Promise.all([
+      statfs(dataDir),
+      stat(storePath).catch(() => null)
+    ]);
+    const totalBytes = Number(filesystem.blocks) * Number(filesystem.bsize);
+    const availableBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
+    const usedBytes = Math.max(0, totalBytes - availableBytes);
+    disk = {
+      usedBytes,
+      totalBytes,
+      percent: totalBytes ? Number(((usedBytes / totalBytes) * 100).toFixed(1)) : 0,
+      storeBytes: Number(storeFile?.size || 0)
+    };
+  } catch (error) {
+    console.error("Unable to read disk metrics", error);
+  }
+
+  return {
+    uptimeSeconds: Math.floor((Date.now() - processStartedAt) / 1000),
+    memory: {
+      rssBytes: memory.rss,
+      heapUsedBytes: memory.heapUsed,
+      heapTotalBytes: memory.heapTotal,
+      limitBytes: memoryLimitBytes,
+      percent: Number(((memory.rss / memoryLimitBytes) * 100).toFixed(1))
+    },
+    disk,
+    aiConcurrency: {
+      active: activeAIRequests,
+      queued: pendingAIRequests.length,
+      limit: aiMaxConcurrency,
+      queueLimit: aiQueueLimit,
+      peakSinceRestart: runtimeMetrics.maxActiveAIRequests,
+      rejectedSinceRestart: runtimeMetrics.queueRejected
+    },
+    storeWriteFailures: runtimeMetrics.storeWriteFailures,
+    lastAIErrorAt: runtimeMetrics.lastAIErrorAt,
+    lastAIErrorReason: runtimeMetrics.lastAIErrorReason
+  };
+}
+
+function monitoringWarnings(resources, todayUsage) {
+  const warnings = [];
+  const aiRequests = Number(todayUsage?.aiRequests || 0);
+  const aiFailures = Number(todayUsage?.aiFallbacks || 0);
+  const failureRate = aiRequests ? aiFailures / aiRequests : 0;
+
+  if (resources.memory.percent >= 90) {
+    warnings.push({ level: "critical", title: "内存接近耗尽", message: `当前内存占用 ${resources.memory.percent}%，建议立即升级实例。` });
+  } else if (resources.memory.percent >= 75) {
+    warnings.push({ level: "warning", title: "内存使用偏高", message: `当前内存占用 ${resources.memory.percent}%，建议持续观察并准备升级。` });
+  }
+  if (resources.disk.percent >= 90) {
+    warnings.push({ level: "critical", title: "磁盘空间不足", message: `磁盘已使用 ${resources.disk.percent}%，请扩容或清理历史数据。` });
+  } else if (resources.disk.percent >= 75) {
+    warnings.push({ level: "warning", title: "磁盘使用偏高", message: `磁盘已使用 ${resources.disk.percent}%，建议准备扩容。` });
+  }
+  if (resources.aiConcurrency.queued >= Math.max(1, Math.floor(resources.aiConcurrency.queueLimit * 0.6))) {
+    warnings.push({ level: "critical", title: "AI 请求排队严重", message: `当前有 ${resources.aiConcurrency.queued} 个 AI 请求等待处理。` });
+  } else if (resources.aiConcurrency.active >= Math.floor(resources.aiConcurrency.limit * 0.8)) {
+    warnings.push({ level: "warning", title: "AI 并发接近上限", message: `当前 AI 并发 ${resources.aiConcurrency.active}/${resources.aiConcurrency.limit}。` });
+  }
+  if (Number(todayUsage?.aiQueueRejected || 0) > 0 || resources.aiConcurrency.rejectedSinceRestart > 0) {
+    warnings.push({ level: "critical", title: "出现并发失败", message: `今日已有 ${todayUsage?.aiQueueRejected || 0} 个 AI 请求因队列拥堵被拒绝。` });
+  }
+  if (aiRequests >= 10 && failureRate >= 0.2) {
+    warnings.push({ level: "critical", title: "AI 服务不可用率过高", message: `今日 AI 失败或降级率为 ${(failureRate * 100).toFixed(1)}%。` });
+  } else if (aiRequests >= 10 && failureRate >= 0.08) {
+    warnings.push({ level: "warning", title: "AI 稳定性下降", message: `今日 AI 失败或降级率为 ${(failureRate * 100).toFixed(1)}%。` });
+  }
+  if (Number(todayUsage?.aiTimeouts || 0) >= 5) {
+    warnings.push({ level: "warning", title: "AI 回复多次超时", message: `今日已发生 ${todayUsage.aiTimeouts} 次 AI 回复超时。` });
+  }
+  if (resources.storeWriteFailures > 0) {
+    warnings.push({ level: "critical", title: "数据持久化失败", message: `本次运行已发生 ${resources.storeWriteFailures} 次磁盘写入失败。` });
+  }
+  if (!warnings.length) {
+    warnings.push({ level: "healthy", title: "系统运行正常", message: "当前内存、磁盘、AI 并发和失败率均在安全范围内。" });
+  }
+  return warnings;
+}
+
+async function adminOverview(store) {
   const users = Object.values(store.users);
   const coinTransactions = Object.values(store.coinTransactions);
   const vipSubscriptions = Object.values(store.vipSubscriptions);
+  const daily = publicDailyUsage(store);
+  const resources = await resourceSnapshot();
+  const todayUsage = daily.find((item) => item.date === todayKey()) || {};
   return {
     totalUsers: users.length,
     activeUsers5m: users.filter((user) => isActiveRecently(user.lastSeenAt)).length,
@@ -205,7 +441,17 @@ function adminOverview(store) {
       .reduce((sum, item) => sum + item.amountCents, 0),
     vipSubscriptionCount: vipSubscriptions.length,
     activeVipSubscriptionCount: vipSubscriptions.filter((item) => item.status === "active").length,
-    pendingRewardSubmissions: Object.values(store.rewardSubmissions).filter((item) => item.status === "pending").length
+    pendingRewardSubmissions: Object.values(store.rewardSubmissions).filter((item) => item.status === "pending").length,
+    premiumConversionPercent: users.length
+      ? Number(((users.filter((user) => user.isPremium).length / users.length) * 100).toFixed(1))
+      : 0,
+    aiConversationsToday: Object.values(store.aiConversations).filter((item) => isToday(item.createdAt)).length,
+    monitoring: {
+      resources,
+      today: todayUsage,
+      warnings: monitoringWarnings(resources, todayUsage),
+      dailyUsage: daily
+    }
   };
 }
 
@@ -315,7 +561,7 @@ Act like an attentive, emotionally intelligent member of the live audience. Stay
 Companion gender: ${listenerGender}.
 Reply style: ${replyStyle}.
 Role mode: ${roleMode}.
-Current visual context: ${sceneContext || "No reliable visual context is available."}
+Current visual context: ${sceneContext || "The latest frame is still being analyzed. Do not claim that you cannot see the stream; ask the streamer to hold an item closer if visual detail matters."}
 Required response language code: ${inputLanguage}. Reply entirely in this language. Do not switch languages because of device settings, previous messages, names, or visual labels.
 Reply directly to the streamer based on what they just said.
 Tone topics: ${tones}.
@@ -324,9 +570,9 @@ Active directions: ${directions.join(", ") || "general, compliment"}.
 ${activeDirectionGuide(directions)}
 Always reply in the same language as the streamer's latest message. If they speak Chinese, reply in Chinese. If they speak English, reply in English. For mixed-language input, use the dominant language of the latest message.
 Naturally include a short compliment when appropriate: their voice sounds pleasant, they look good, their smile is nice, their camera presence is warm, or their energy is attractive.
-Do not sound scripted. Do not repeat the same compliment style. Never write a long paragraph. Use 1-2 short sentences: about 20-70 Chinese characters or 8-30 English words.
+Do not sound scripted. Do not repeat the same compliment style. Usually use 1-2 short sentences, but do not force an unnatural cutoff. When the topic genuinely benefits from detail, a deeper reply may use 3-4 concise sentences. Avoid long, repetitive paragraphs.
 Do not merely repeat or paraphrase the user's words. React to their meaning and move the conversation forward.
-Refer to visual context only when it is relevant and natural. Treat visual labels as uncertain, never invent details, and never infer sensitive traits, health, identity, or private information.
+Refer to visual context when it is relevant and natural. Treat visual labels as uncertain, say "it looks like" when needed, never invent details, and never infer sensitive traits, health, identity, or private information. Never say that you cannot see the stream.
 If the user says it is nice to meet you, warmly say it is nice to meet them too and ask one natural follow-up question.
 `.trim();
 }
@@ -360,9 +606,12 @@ function conversationHistory(body) {
     .filter((item) => item.content.length > 0);
 }
 
-function conciseReply(answer, userText) {
+function conciseReply(answer, userText, replyDepth = 0.62) {
   const text = String(answer || "").trim();
-  const maxLength = /[\u3400-\u9fff]/u.test(String(userText || "")) ? 72 : 180;
+  const prefersDepth = Number(replyDepth || 0) > 0.72;
+  const maxLength = /[\u3400-\u9fff]/u.test(String(userText || ""))
+    ? (prefersDepth ? 160 : 110)
+    : (prefersDepth ? 360 : 240);
   const characters = Array.from(text);
   if (characters.length <= maxLength) return text;
 
@@ -402,7 +651,7 @@ async function callDeepSeek(body) {
           { role: "user", content: String(body.text || "") }
         ],
         temperature: 0.74,
-        max_tokens: body.replyDepth > 0.72 ? 80 : 64
+        max_tokens: body.replyDepth > 0.72 ? 140 : 96
       })
     });
 
@@ -419,20 +668,25 @@ async function callDeepSeek(body) {
       return fallback("empty_response", response.status);
     }
 
-    return { answer: conciseReply(answer, body.text), source: "deepseek", reason: null, providerStatus: response.status };
+    return { answer: conciseReply(answer, body.text, body.replyDepth), source: "deepseek", reason: null, providerStatus: response.status };
   } catch (error) {
     console.error("DeepSeek network error", error);
-    return fallback("network_error");
+    const isTimeout = error?.name === "TimeoutError" || error?.name === "AbortError";
+    return fallback(isTimeout ? "timeout" : "network_error");
   }
 }
 
 async function route(req, res) {
   if (req.method === "OPTIONS") return jsonResponse(res, 204, {});
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const store = await loadStore();
 
   if (req.method === "GET" && url.pathname === "/health") {
-    return jsonResponse(res, 200, { ok: true, service: "squadlive-backend" });
+    return jsonResponse(res, 200, {
+      ok: true,
+      service: "squadlive-backend",
+      activeAIRequests,
+      queuedAIRequests: pendingAIRequests.length
+    });
   }
 
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
@@ -465,6 +719,8 @@ async function route(req, res) {
     return res.end(html);
   }
 
+  const store = await getStore();
+
   if (req.method === "POST" && url.pathname === "/v1/users/bootstrap") {
     const body = await readJSON(req);
     const user = getOrCreateUser(store, body.deviceId || "anonymous");
@@ -480,6 +736,8 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/v1/ai/deepseek") {
     const body = await readJSON(req);
+    const requestStartedAt = Date.now();
+    recordDailyMetric(store, "aiRequests");
     let user = body.userId ? store.users[body.userId] : null;
     if (!user && body.deviceId) {
       user = getOrCreateUser(store, String(body.deviceId).slice(0, 200));
@@ -490,7 +748,33 @@ async function route(req, res) {
         user.displayName = body.userName.trim().slice(0, 80);
       }
     }
-    const result = await callDeepSeek(body);
+    recordDailyActiveUser(store, user?.id);
+
+    let result;
+    try {
+      result = await runQueuedAIRequest(() => callDeepSeek(body));
+    } catch (error) {
+      if (error.status === 503) recordDailyMetric(store, "aiQueueRejected");
+      throw error;
+    }
+
+    const latencyMs = Date.now() - requestStartedAt;
+    const usage = dailyUsage(store);
+    usage.aiLatencyTotalMs += latencyMs;
+    usage.aiLatencyMaxMs = Math.max(Number(usage.aiLatencyMaxMs || 0), latencyMs);
+    usage.peakAIConcurrency = Math.max(Number(usage.peakAIConcurrency || 0), runtimeMetrics.maxActiveAIRequests);
+    if (result.source === "deepseek") {
+      usage.aiSuccesses += 1;
+    } else {
+      usage.aiFallbacks += 1;
+      if (result.reason === "timeout") usage.aiTimeouts += 1;
+      if (["missing_key", "provider_error", "empty_response", "network_error"].includes(result.reason)) {
+        usage.aiUnavailable += 1;
+      }
+      runtimeMetrics.lastAIErrorAt = new Date().toISOString();
+      runtimeMetrics.lastAIErrorReason = result.reason || "unknown";
+    }
+    scheduleMetricsSave(store);
     if (user) {
       recordAIConversation(store, {
         userId: user.id,
@@ -509,6 +793,7 @@ async function route(req, res) {
     const user = store.users[body.userId];
     if (!user) return jsonResponse(res, 404, { error: "User not found" });
     user.lastSeenAt = new Date().toISOString();
+    recordDailyActiveUser(store, user.id);
     await saveStore(store);
     return jsonResponse(res, 200, { user: userPublic(user) });
   }
@@ -642,7 +927,7 @@ async function route(req, res) {
     if (!requireAdmin(req, res)) return;
 
     if (req.method === "GET" && url.pathname === "/v1/admin/overview") {
-      return jsonResponse(res, 200, { overview: adminOverview(store) });
+      return jsonResponse(res, 200, { overview: await adminOverview(store) });
     }
 
     if (req.method === "GET" && url.pathname === "/v1/admin/users") {
@@ -692,12 +977,49 @@ async function route(req, res) {
 }
 
 const server = http.createServer((req, res) => {
+  res.once("finish", () => {
+    getStore().then((store) => {
+      const usage = dailyUsage(store);
+      usage.requests += 1;
+      if (res.statusCode >= 500) usage.http5xx += 1;
+      else if (res.statusCode >= 400) usage.http4xx += 1;
+      scheduleMetricsSave(store);
+    }).catch((error) => console.error("Unable to record request metrics", error));
+  });
+
   route(req, res).catch((error) => {
     console.error(error);
     jsonResponse(res, error.status || 500, { error: error.message || "Server error" });
   });
 });
 
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 70_000;
+server.requestTimeout = 30_000;
+
 server.listen(port, () => {
   console.log(`SquadLive backend listening on http://localhost:${port}`);
 });
+
+let isShuttingDown = false;
+async function shutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`Received ${signal}; flushing data before shutdown.`);
+  if (metricsSaveTimer) {
+    clearTimeout(metricsSaveTimer);
+    metricsSaveTimer = null;
+  }
+  try {
+    const store = await getStore();
+    await saveStore(store);
+    await saveQueue;
+  } catch (error) {
+    console.error("Final persistence failed", error);
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 8_000).unref();
+}
+
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));
