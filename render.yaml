@@ -16,6 +16,14 @@ services:
         sync: false
       - key: ADMIN_TOKEN
         sync: false
+      - key: APPLE_BUNDLE_ID
+        value: com.liuzhigang.AI-Live-Streaming
+      - key: APPLE_APP_ID
+        sync: false
+      - key: REWARD_TIME_ZONE
+        value: Asia/Shanghai
+      - key: APPLE_IAP_ONLINE_CHECKS
+        value: "false"
       - key: AI_MAX_CONCURRENCY
         value: "40"
       - key: AI_QUEUE_LIMIT

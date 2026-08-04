@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Help and customer support for SquadLive.">
+  <link rel="icon" type="image/png" href="/assets/landing/squadlive-logo.png">
   <meta name="theme-color" content="#0a0912">
   <title>SquadLive Support</title>
   <style>
@@ -24,8 +25,8 @@
     .shell { width: min(900px, calc(100% - 40px)); margin: 0 auto; }
     header { border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(10,9,18,.75); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
     nav { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-    .brand { display: flex; align-items: center; gap: 10px; color: white; text-decoration: none; font-size: 19px; font-weight: 800; }
-    .mark { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 11px; background: linear-gradient(145deg, var(--pink), var(--purple)); }
+    .brand { display: flex; align-items: center; color: white; text-decoration: none; }
+    .brand img { width: 128px; height: 50px; object-fit: contain; border-radius: 10px; }
     .home { color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 700; }
     main { padding: 74px 0 90px; }
     .hero { text-align: center; margin-bottom: 54px; }
@@ -60,7 +61,7 @@
 </head>
 <body>
   <header>
-    <nav class="shell"><a class="brand" href="/"><span class="mark" aria-hidden="true">✦</span>SquadLive</a><a class="home" href="/">Back to Home</a></nav>
+    <nav class="shell"><a class="brand" href="/"><img src="/assets/landing/squadlive-logo.png" alt="SquadLive"></a><a class="home" href="/">Back to Home</a></nav>
   </header>
 
   <main class="shell">

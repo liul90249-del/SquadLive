@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { Environment, SignedDataVerifier } from "@apple/app-store-server-library";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 8787);
@@ -14,6 +15,18 @@ const adminPagePath = join(__dirname, "admin.html");
 const supportPagePath = join(__dirname, "support.html");
 const privacyPagePath = join(__dirname, "privacy.html");
 const termsPagePath = join(__dirname, "terms.html");
+const landingAssets = new Map([
+  ["/assets/landing/squadlive-logo.png", { path: join(__dirname, "assets", "landing", "squadlive-logo.png"), contentType: "image/png" }],
+  ["/assets/landing/live-1.jpg", { path: join(__dirname, "assets", "landing", "live-1.jpg"), contentType: "image/jpeg" }],
+  ["/assets/landing/live-2.jpg", { path: join(__dirname, "assets", "landing", "live-2.jpg"), contentType: "image/jpeg" }],
+  ["/assets/landing/live-3.jpg", { path: join(__dirname, "assets", "landing", "live-3.jpg"), contentType: "image/jpeg" }],
+  ["/assets/landing/live-4.jpg", { path: join(__dirname, "assets", "landing", "live-4.jpg"), contentType: "image/jpeg" }]
+]);
+const appleBundleId = process.env.APPLE_BUNDLE_ID || "com.liuzhigang.AI-Live-Streaming";
+const appleAppId = Number(process.env.APPLE_APP_ID || 0) || undefined;
+const appleOnlineChecks = process.env.APPLE_IAP_ONLINE_CHECKS === "true";
+const mockPurchasesEnabled = process.env.NODE_ENV !== "production" && process.env.ENABLE_MOCK_PURCHASES === "true";
+const rewardTimeZone = process.env.REWARD_TIME_ZONE || "Asia/Shanghai";
 const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
 const aiMaxConcurrency = Math.max(1, Number(process.env.AI_MAX_CONCURRENCY || 40));
 const aiQueueLimit = Math.max(aiMaxConcurrency, Number(process.env.AI_QUEUE_LIMIT || 300));
@@ -42,6 +55,15 @@ const viewerPacks = [
   { label: "400,000", viewers: 400000, cost: 500 }
 ];
 
+const liveViewerPacks = new Map([
+  [5000, 15],
+  [20000, 50],
+  [45000, 120],
+  [100000, 200],
+  [200000, 350],
+  [400000, 500]
+]);
+
 const coinPacks = [
   { id: "coins_1000", coins: 1000, priceCents: 199 },
   { id: "coins_5000", coins: 5000, priceCents: 699 },
@@ -49,8 +71,107 @@ const coinPacks = [
   { id: "coins_35000", coins: 35000, priceCents: 2999 }
 ];
 
+const appStoreCoinAmounts = {
+  "com.liuzhigang.squadlive.coins.330": 330,
+  "com.liuzhigang.squadlive.coins.420": 420,
+  "com.liuzhigang.squadlive.coins.525": 525,
+  "com.liuzhigang.squadlive.coins.740": 740,
+  "com.liuzhigang.squadlive.coins.1450": 1450,
+  "com.liuzhigang.squadlive.coins.1800": 1800
+};
+
+const appStoreSubscriptionProducts = new Set([
+  "com.liuzhigang.squadlive.pro.weekly",
+  "com.liuzhigang.squadlive.pro.annual"
+]);
+
+let appleVerifierPromise;
+
+async function getAppleTransactionVerifiers() {
+  appleVerifierPromise ||= Promise.all([
+    readFile(join(__dirname, "certs", "AppleIncRootCertificate.cer")),
+    readFile(join(__dirname, "certs", "AppleRootCA-G2.cer")),
+    readFile(join(__dirname, "certs", "AppleRootCA-G3.cer"))
+  ]).then((rootCertificates) => ({
+    sandbox: new SignedDataVerifier(rootCertificates, appleOnlineChecks, Environment.SANDBOX, appleBundleId),
+    production: appleAppId
+      ? new SignedDataVerifier(rootCertificates, appleOnlineChecks, Environment.PRODUCTION, appleBundleId, appleAppId)
+      : null
+  }));
+  return appleVerifierPromise;
+}
+
+async function verifyAppleTransaction(signedTransaction) {
+  if (typeof signedTransaction !== "string" || signedTransaction.length < 100) {
+    const error = new Error("Missing signed App Store transaction");
+    error.status = 400;
+    throw error;
+  }
+
+  const verifiers = await getAppleTransactionVerifiers();
+  try {
+    return await verifiers.sandbox.verifyAndDecodeTransaction(signedTransaction);
+  } catch (sandboxError) {
+    if (!verifiers.production) {
+      const error = new Error("Production App Store verification requires APPLE_APP_ID");
+      error.status = 503;
+      throw error;
+    }
+    try {
+      return await verifiers.production.verifyAndDecodeTransaction(signedTransaction);
+    } catch (productionError) {
+      console.error("App Store transaction verification failed", { sandboxError, productionError });
+      const error = new Error("Invalid App Store transaction");
+      error.status = 400;
+      throw error;
+    }
+  }
+}
+
+async function verifyAppleNotification(signedPayload) {
+  if (typeof signedPayload !== "string" || signedPayload.length < 100) {
+    const error = new Error("Missing signed App Store notification");
+    error.status = 400;
+    throw error;
+  }
+
+  const verifiers = await getAppleTransactionVerifiers();
+  try {
+    const payload = await verifiers.sandbox.verifyAndDecodeNotification(signedPayload);
+    return { payload, verifier: verifiers.sandbox };
+  } catch (sandboxError) {
+    if (!verifiers.production) {
+      const error = new Error("Production App Store verification requires APPLE_APP_ID");
+      error.status = 503;
+      throw error;
+    }
+    try {
+      const payload = await verifiers.production.verifyAndDecodeNotification(signedPayload);
+      return { payload, verifier: verifiers.production };
+    } catch (productionError) {
+      console.error("App Store notification verification failed", { sandboxError, productionError });
+      const error = new Error("Invalid App Store notification");
+      error.status = 400;
+      throw error;
+    }
+  }
+}
+
 function todayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
+}
+
+function rewardDayKey(date = new Date()) {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: rewardTimeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(date);
+  } catch {
+    return todayKey(date);
+  }
 }
 
 function jsonResponse(res, status, body) {
@@ -85,11 +206,16 @@ async function loadStore() {
   store.users ||= {};
   store.rewardSubmissions ||= {};
   store.coinTransactions ||= {};
+  store.appleTransactions ||= {};
+  store.appleNotifications ||= {};
+  store.walletOperations ||= {};
   store.vipSubscriptions ||= {};
   store.aiConversations ||= {};
   store.dailyUsage ||= {};
   store.userIdsByDevice ||= {};
   for (const user of Object.values(store.users)) {
+    user.coins = Math.max(0, Number(user.coins ?? 300));
+    user.shareRewardDays ||= {};
     if (user.deviceId) store.userIdsByDevice[user.deviceId] = user.id;
   }
   return store;
@@ -249,10 +375,79 @@ function recordCoinTransaction(store, input) {
     amountCents: Number(input.amountCents || 0),
     source: input.source || "unknown",
     note: input.note || "",
+    platformTransactionId: input.platformTransactionId || "",
+    productId: input.productId || "",
+    environment: input.environment || "",
     createdAt: new Date().toISOString()
   };
   store.coinTransactions[transaction.id] = transaction;
   return transaction;
+}
+
+function walletOperationId(body) {
+  const value = String(body.operationId || body.requestId || "").trim();
+  return value.length >= 8 && value.length <= 120 ? value : null;
+}
+
+function walletUser(store, body) {
+  const deviceId = String(body.deviceId || "").trim();
+  if (!deviceId || deviceId.length > 200) return null;
+  return getOrCreateUser(store, deviceId);
+}
+
+function walletOperationResponse(store, operationId, user) {
+  const operation = store.walletOperations[operationId];
+  return operation && operation.userId === user.id ? operation : null;
+}
+
+function recordWalletOperation(store, input) {
+  const operation = {
+    id: input.id,
+    userId: input.userId,
+    type: input.type,
+    coins: Number(input.coins || 0),
+    balanceAfter: Number(input.balanceAfter || 0),
+    createdAt: new Date().toISOString(),
+    note: input.note || ""
+  };
+  store.walletOperations[operation.id] = operation;
+  return operation;
+}
+
+function spendWalletCoins(store, user, amount, operationId, note) {
+  const existingOperation = walletOperationResponse(store, operationId, user);
+  if (existingOperation) return { operation: existingOperation, duplicate: true };
+  if (store.walletOperations[operationId] && store.walletOperations[operationId].userId !== user.id) {
+    const error = new Error("Wallet operation belongs to another account");
+    error.status = 409;
+    throw error;
+  }
+  if (user.coins < amount) {
+    const error = new Error("Not enough coins");
+    error.status = 402;
+    error.coins = user.coins;
+    throw error;
+  }
+  user.coins -= amount;
+  user.lastSeenAt = new Date().toISOString();
+  const operation = recordWalletOperation(store, {
+    id: operationId,
+    userId: user.id,
+    type: "coin_spend",
+    coins: -amount,
+    balanceAfter: user.coins,
+    note
+  });
+  recordCoinTransaction(store, {
+    userId: user.id,
+    type: "coin_spend",
+    coins: -amount,
+    amountCents: 0,
+    source: "wallet",
+    note,
+    platformTransactionId: operationId
+  });
+  return { operation, duplicate: false };
 }
 
 function recordVipSubscription(store, input) {
@@ -268,6 +463,60 @@ function recordVipSubscription(store, input) {
   };
   store.vipSubscriptions[subscription.id] = subscription;
   return subscription;
+}
+
+function refreshUserPremiumStatus(store, user) {
+  const now = Date.now();
+  user.isPremium = Object.values(store.vipSubscriptions).some((subscription) => {
+    if (subscription.userId !== user.id) return false;
+    if (subscription.status === "grace_period") {
+      return Boolean(subscription.gracePeriodExpiresAt)
+        && new Date(subscription.gracePeriodExpiresAt).getTime() > now;
+    }
+    if (subscription.status !== "active") return false;
+    return !subscription.expiresAt || new Date(subscription.expiresAt).getTime() > now;
+  });
+}
+
+function findUserForAppleSubscription(store, transaction, renewalInfo, originalTransactionId) {
+  const accountToken = String(transaction?.appAccountToken || renewalInfo?.appAccountToken || "").toLowerCase();
+  if (accountToken) {
+    const matchedDeviceId = Object.keys(store.userIdsByDevice)
+      .find((deviceId) => deviceId.toLowerCase() === accountToken);
+    const userId = matchedDeviceId ? store.userIdsByDevice[matchedDeviceId] : null;
+    if (userId && store.users[userId]) return store.users[userId];
+  }
+
+  const existingSubscription = store.vipSubscriptions[originalTransactionId];
+  if (existingSubscription?.userId && store.users[existingSubscription.userId]) {
+    return store.users[existingSubscription.userId];
+  }
+
+  const existingTransaction = Object.values(store.appleTransactions)
+    .find((item) => item.originalTransactionId === originalTransactionId && item.userId);
+  return existingTransaction?.userId ? store.users[existingTransaction.userId] || null : null;
+}
+
+function subscriptionStateFromNotification(notificationType, subtype, transaction, renewalInfo) {
+  const now = Date.now();
+  const expirationTime = Number(transaction?.expiresDate || 0);
+  const graceExpirationTime = Number(renewalInfo?.gracePeriodExpiresDate || 0);
+
+  if (notificationType === "REFUND") return "refunded";
+  if (notificationType === "REVOKE" || transaction?.revocationDate) return "revoked";
+  if (notificationType === "EXPIRED" || notificationType === "GRACE_PERIOD_EXPIRED") return "expired";
+  if (notificationType === "DID_FAIL_TO_RENEW") {
+    if (subtype === "GRACE_PERIOD" && graceExpirationTime > now) return "grace_period";
+    return "billing_retry";
+  }
+  if (graceExpirationTime > now) return "grace_period";
+  if (!expirationTime || expirationTime > now) return "active";
+  return "expired";
+}
+
+function isoFromAppleMillis(value) {
+  const milliseconds = Number(value || 0);
+  return milliseconds > 0 ? new Date(milliseconds).toISOString() : null;
 }
 
 function recordAIConversation(store, input) {
@@ -680,6 +929,16 @@ async function route(req, res) {
   if (req.method === "OPTIONS") return jsonResponse(res, 204, {});
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  if (req.method === "GET" && landingAssets.has(url.pathname)) {
+    const asset = landingAssets.get(url.pathname);
+    const data = await readFile(asset.path);
+    res.writeHead(200, {
+      "content-type": asset.contentType,
+      "cache-control": "public, max-age=604800, immutable"
+    });
+    return res.end(data);
+  }
+
   if (req.method === "GET" && url.pathname === "/health") {
     return jsonResponse(res, 200, {
       ok: true,
@@ -798,6 +1057,14 @@ async function route(req, res) {
     return jsonResponse(res, 200, { user: userPublic(user) });
   }
 
+  if (req.method === "POST" && url.pathname === "/v1/wallet/balance") {
+    const body = await readJSON(req);
+    const user = walletUser(store, body);
+    if (!user) return jsonResponse(res, 400, { error: "Invalid device account" });
+    await saveStore(store);
+    return jsonResponse(res, 200, { user: userPublic(user) });
+  }
+
   if (req.method === "POST" && url.pathname === "/v1/audience/quote") {
     const body = await readJSON(req);
     const viewers = Math.max(0, Number(body.viewers || 0));
@@ -806,26 +1073,264 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/v1/audience/commit") {
     const body = await readJSON(req);
-    const user = store.users[body.userId];
-    if (!user) return jsonResponse(res, 404, { error: "User not found" });
+    const user = walletUser(store, body);
+    if (!user) return jsonResponse(res, 400, { error: "Invalid device account" });
+    const operationId = walletOperationId(body);
+    if (!operationId) return jsonResponse(res, 400, { error: "Invalid wallet operation ID" });
     const viewers = Math.max(0, Number(body.viewers || 0));
-    const cost = viewerCost(viewers);
-    if (user.coins < cost) return jsonResponse(res, 402, { error: "Not enough coins", cost, coins: user.coins });
-    user.coins -= cost;
+    const context = body.context === "live" ? "live" : "lobby";
+    const cost = context === "live" ? liveViewerPacks.get(viewers) : viewerCost(viewers);
+    if (typeof cost !== "number" || cost <= 0) {
+      return jsonResponse(res, 400, { error: "Unsupported viewer package" });
+    }
+    let result;
+    try {
+      result = spendWalletCoins(store, user, cost, operationId, `${context}:${viewers} viewers`);
+    } catch (error) {
+      if (error.status === 402) {
+        return jsonResponse(res, 402, { error: error.message, cost, coins: error.coins });
+      }
+      throw error;
+    }
+    await saveStore(store);
+    return jsonResponse(res, 200, {
+      user: userPublic(user),
+      viewers,
+      cost,
+      duplicate: result.duplicate,
+      operationId
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/storekit/notifications") {
+    const body = await readJSON(req);
+    const { payload: notification, verifier } = await verifyAppleNotification(body.signedPayload);
+    const notificationUUID = String(notification.notificationUUID || "");
+    if (!notificationUUID) return jsonResponse(res, 400, { error: "Missing notification UUID" });
+    if (store.appleNotifications[notificationUUID]) {
+      return jsonResponse(res, 200, { received: true, duplicate: true });
+    }
+
+    const data = notification.data || {};
+    if (data.bundleId && data.bundleId !== appleBundleId) {
+      return jsonResponse(res, 400, { error: "Notification bundle ID does not match" });
+    }
+
+    let transaction = null;
+    let renewalInfo = null;
+    if (data.signedTransactionInfo) {
+      transaction = await verifier.verifyAndDecodeTransaction(data.signedTransactionInfo);
+    }
+    if (data.signedRenewalInfo) {
+      renewalInfo = await verifier.verifyAndDecodeRenewalInfo(data.signedRenewalInfo);
+    }
+
+    const notificationType = String(notification.notificationType || "");
+    const subtype = String(notification.subtype || "");
+    const transactionId = String(transaction?.transactionId || "");
+    const originalTransactionId = String(transaction?.originalTransactionId || renewalInfo?.originalTransactionId || "");
+    const productId = String(transaction?.productId || renewalInfo?.productId || "");
+    if (productId && !appStoreSubscriptionProducts.has(productId)) {
+      return jsonResponse(res, 400, { error: "Unsupported App Store subscription" });
+    }
+
+    const status = subscriptionStateFromNotification(notificationType, subtype, transaction, renewalInfo);
+    const expiresAt = isoFromAppleMillis(transaction?.expiresDate);
+    const gracePeriodExpiresAt = isoFromAppleMillis(renewalInfo?.gracePeriodExpiresDate);
+    const eventSignedDate = Number(notification.signedDate || 0);
+    const user = findUserForAppleSubscription(store, transaction, renewalInfo, originalTransactionId);
+    store.appleNotifications[notificationUUID] = {
+      notificationUUID,
+      notificationType,
+      subtype,
+      transactionId,
+      originalTransactionId,
+      productId,
+      environment: data.environment || transaction?.environment || renewalInfo?.environment || "",
+      signedDate: eventSignedDate,
+      receivedAt: new Date().toISOString(),
+      userId: user?.id || null,
+      status: user ? "processed" : "unlinked"
+    };
+
+    if (user && originalTransactionId && appStoreSubscriptionProducts.has(productId)) {
+      const currentSubscription = store.vipSubscriptions[originalTransactionId];
+      const currentSignedDate = Number(currentSubscription?.lastEventSignedDate || 0);
+      if (!currentSubscription || eventSignedDate >= currentSignedDate) {
+        store.vipSubscriptions[originalTransactionId] = {
+          id: originalTransactionId,
+          userId: user.id,
+          planId: productId,
+          status,
+          amountCents: transaction?.price ? Math.round(Number(transaction.price) / 10) : Number(currentSubscription?.amountCents || 0),
+          platformTransactionId: transactionId || currentSubscription?.platformTransactionId || "",
+          originalTransactionId,
+          startedAt: isoFromAppleMillis(transaction?.originalPurchaseDate) || currentSubscription?.startedAt || new Date().toISOString(),
+          expiresAt: expiresAt || currentSubscription?.expiresAt || null,
+          gracePeriodExpiresAt: gracePeriodExpiresAt || null,
+          autoRenewStatus: renewalInfo?.autoRenewStatus ?? currentSubscription?.autoRenewStatus ?? null,
+          environment: data.environment || transaction?.environment || renewalInfo?.environment || currentSubscription?.environment || "",
+          lastEventSignedDate: eventSignedDate,
+          updatedAt: new Date().toISOString()
+        };
+        refreshUserPremiumStatus(store, user);
+        user.lastSeenAt = new Date().toISOString();
+      }
+    }
+
+    await saveStore(store);
+    return jsonResponse(res, 200, { received: true, notificationType, transactionId });
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/storekit/coins/claim") {
+    const body = await readJSON(req);
+    const deviceId = String(body.deviceId || "").trim();
+    const normalizedAccountToken = deviceId.toLowerCase();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId)) {
+      return jsonResponse(res, 400, { error: "Invalid device account token" });
+    }
+
+    const payload = await verifyAppleTransaction(body.signedTransaction);
+    const transactionId = String(payload.transactionId || "");
+    const productId = String(payload.productId || "");
+    const baseCoinAmount = appStoreCoinAmounts[productId];
+    if (!transactionId || !baseCoinAmount || payload.type !== "Consumable") {
+      return jsonResponse(res, 400, { error: "Unsupported App Store product" });
+    }
+    if (payload.revocationDate) {
+      return jsonResponse(res, 409, { error: "This App Store transaction was revoked" });
+    }
+    if (String(payload.appAccountToken || "").toLowerCase() !== normalizedAccountToken) {
+      return jsonResponse(res, 403, { error: "Transaction does not belong to this account" });
+    }
+
+    const user = getOrCreateUser(store, deviceId);
+    const existingClaim = store.appleTransactions[transactionId];
+    if (existingClaim) {
+      if (existingClaim.userId !== user.id) {
+        return jsonResponse(res, 409, { error: "Transaction has already been claimed" });
+      }
+      return jsonResponse(res, 200, {
+        user: userPublic(user),
+        creditedCoins: existingClaim.coins,
+        balance: user.coins,
+        duplicate: true,
+        transactionId
+      });
+    }
+
+    const quantity = Math.min(10, Math.max(1, Number(payload.quantity || 1)));
+    const creditedCoins = baseCoinAmount * quantity;
+    user.coins += creditedCoins;
     user.lastSeenAt = new Date().toISOString();
+    store.appleTransactions[transactionId] = {
+      transactionId,
+      originalTransactionId: payload.originalTransactionId || transactionId,
+      userId: user.id,
+      productId,
+      coins: creditedCoins,
+      environment: payload.environment || "",
+      purchaseDate: payload.purchaseDate ? new Date(payload.purchaseDate).toISOString() : null,
+      claimedAt: new Date().toISOString()
+    };
     recordCoinTransaction(store, {
       userId: user.id,
-      type: "audience_purchase",
-      coins: -cost,
-      amountCents: 0,
-      source: "coins",
-      note: `${viewers} viewers`
+      type: "coin_purchase",
+      coins: creditedCoins,
+      amountCents: payload.price ? Math.round(Number(payload.price) / 10) : 0,
+      source: "app_store_verified",
+      note: productId,
+      platformTransactionId: transactionId,
+      productId,
+      environment: payload.environment || ""
     });
     await saveStore(store);
-    return jsonResponse(res, 200, { user, viewers, cost });
+    return jsonResponse(res, 200, {
+      user: userPublic(user),
+      creditedCoins,
+      balance: user.coins,
+      duplicate: false,
+      transactionId
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/storekit/subscriptions/claim") {
+    const body = await readJSON(req);
+    const deviceId = String(body.deviceId || "").trim();
+    const normalizedAccountToken = deviceId.toLowerCase();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId)) {
+      return jsonResponse(res, 400, { error: "Invalid device account token" });
+    }
+
+    const payload = await verifyAppleTransaction(body.signedTransaction);
+    const transactionId = String(payload.transactionId || "");
+    const originalTransactionId = String(payload.originalTransactionId || transactionId);
+    const productId = String(payload.productId || "");
+    if (!transactionId || !originalTransactionId || !appStoreSubscriptionProducts.has(productId) || payload.type !== "Auto-Renewable Subscription") {
+      return jsonResponse(res, 400, { error: "Unsupported App Store subscription" });
+    }
+    if (String(payload.appAccountToken || "").toLowerCase() !== normalizedAccountToken) {
+      return jsonResponse(res, 403, { error: "Subscription does not belong to this account" });
+    }
+
+    const user = getOrCreateUser(store, deviceId);
+    const existingClaim = store.appleTransactions[transactionId];
+    if (existingClaim && existingClaim.userId !== user.id) {
+      return jsonResponse(res, 409, { error: "Transaction has already been claimed" });
+    }
+
+    const expirationDate = payload.expiresDate ? new Date(payload.expiresDate) : null;
+    const isActive = !payload.revocationDate && (!expirationDate || expirationDate > new Date());
+    store.appleTransactions[transactionId] ||= {
+      transactionId,
+      originalTransactionId,
+      userId: user.id,
+      productId,
+      kind: "subscription",
+      environment: payload.environment || "",
+      purchaseDate: payload.purchaseDate ? new Date(payload.purchaseDate).toISOString() : null,
+      claimedAt: new Date().toISOString()
+    };
+    const currentSubscription = store.vipSubscriptions[originalTransactionId];
+    const currentExpiration = currentSubscription?.expiresAt ? new Date(currentSubscription.expiresAt).getTime() : 0;
+    const incomingExpiration = expirationDate?.getTime() || 0;
+    const currentSignedDate = Number(currentSubscription?.lastEventSignedDate || 0);
+    const incomingSignedDate = Number(payload.signedDate || 0);
+    const shouldReplaceSubscription = !currentSubscription
+      || Boolean(payload.revocationDate)
+      || incomingSignedDate >= currentSignedDate
+      || incomingExpiration >= currentExpiration;
+    if (shouldReplaceSubscription) {
+      store.vipSubscriptions[originalTransactionId] = {
+        id: originalTransactionId,
+        userId: user.id,
+        planId: productId,
+        status: payload.revocationDate ? "revoked" : (isActive ? "active" : "expired"),
+        amountCents: payload.price ? Math.round(Number(payload.price) / 10) : 0,
+        platformTransactionId: transactionId,
+        originalTransactionId,
+        startedAt: payload.originalPurchaseDate ? new Date(payload.originalPurchaseDate).toISOString() : new Date().toISOString(),
+        expiresAt: expirationDate?.toISOString() || null,
+        gracePeriodExpiresAt: null,
+        autoRenewStatus: null,
+        environment: payload.environment || "",
+        lastEventSignedDate: incomingSignedDate,
+        updatedAt: new Date().toISOString()
+      };
+    }
+    refreshUserPremiumStatus(store, user);
+    user.lastSeenAt = new Date().toISOString();
+    await saveStore(store);
+    return jsonResponse(res, 200, {
+      user: userPublic(user),
+      subscription: store.vipSubscriptions[originalTransactionId],
+      duplicate: Boolean(existingClaim),
+      transactionId
+    });
   }
 
   if (req.method === "POST" && url.pathname === "/v1/coins/purchase") {
+    if (!mockPurchasesEnabled) return jsonResponse(res, 404, { error: "Not found" });
     const body = await readJSON(req);
     const user = store.users[body.userId];
     if (!user) return jsonResponse(res, 404, { error: "User not found" });
@@ -846,6 +1351,7 @@ async function route(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/v1/vip/subscribe") {
+    if (!mockPurchasesEnabled) return jsonResponse(res, 404, { error: "Not found" });
     const body = await readJSON(req);
     const user = store.users[body.userId];
     if (!user) return jsonResponse(res, 404, { error: "User not found" });
@@ -864,9 +1370,24 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/v1/rewards/share-submissions") {
     const body = await readJSON(req);
-    const user = store.users[body.userId];
-    if (!user) return jsonResponse(res, 404, { error: "User not found" });
-    const day = todayKey();
+    const user = walletUser(store, body);
+    if (!user) return jsonResponse(res, 400, { error: "Invalid device account" });
+    const operationId = walletOperationId(body);
+    if (!operationId) return jsonResponse(res, 400, { error: "Invalid wallet operation ID" });
+    const existingOperation = store.walletOperations[operationId];
+    if (existingOperation && existingOperation.userId !== user.id) {
+      return jsonResponse(res, 409, { error: "Wallet operation belongs to another account" });
+    }
+    if (existingOperation) {
+      const existingSubmission = Object.values(store.rewardSubmissions)
+        .find((item) => item.operationId === operationId && item.userId === user.id);
+      return jsonResponse(res, 200, {
+        user: userPublic(user),
+        submission: existingSubmission || null,
+        duplicate: true
+      });
+    }
+    const day = rewardDayKey();
     const baseRewardGranted = user.shareRewardDays[day] !== true;
     if (baseRewardGranted) {
       user.coins += 100;
@@ -882,6 +1403,7 @@ async function route(req, res) {
     }
     const submission = {
       id: newId("reward"),
+      operationId,
       userId: user.id,
       platform: body.platform || "unknown",
       proofLink: body.proofLink || "",
@@ -892,8 +1414,16 @@ async function route(req, res) {
       createdAt: new Date().toISOString()
     };
     store.rewardSubmissions[submission.id] = submission;
+    recordWalletOperation(store, {
+      id: operationId,
+      userId: user.id,
+      type: "share_submission",
+      coins: baseRewardGranted ? 100 : 0,
+      balanceAfter: user.coins,
+      note: submission.id
+    });
     await saveStore(store);
-    return jsonResponse(res, 200, { user, submission });
+    return jsonResponse(res, 200, { user: userPublic(user), submission, duplicate: false });
   }
 
   const reviewMatch = url.pathname.match(/^\/v1\/rewards\/([^/]+)\/review$/);
@@ -905,11 +1435,17 @@ async function route(req, res) {
     if (!submission) return jsonResponse(res, 404, { error: "Submission not found" });
     const user = store.users[submission.userId];
     const bonus = Math.max(0, Math.min(10000, Number(body.bonusCoins || 0)));
+    const shouldGrantReviewBonus = body.status === "approved"
+      && submission.status !== "approved"
+      && !submission.reviewRewardGrantedAt;
     submission.status = body.status === "approved" ? "approved" : "rejected";
-    submission.reviewBonusCoins = submission.status === "approved" ? bonus : 0;
+    if (!submission.reviewRewardGrantedAt) {
+      submission.reviewBonusCoins = submission.status === "approved" ? bonus : 0;
+    }
     submission.reviewedAt = new Date().toISOString();
-    if (user && submission.status === "approved") user.coins += bonus;
-    if (user && submission.status === "approved" && bonus > 0) {
+    if (user && shouldGrantReviewBonus && bonus > 0) {
+      user.coins += bonus;
+      submission.reviewRewardGrantedAt = new Date().toISOString();
       recordCoinTransaction(store, {
         userId: user.id,
         type: "share_review_bonus",
