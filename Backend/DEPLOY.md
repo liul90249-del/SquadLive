@@ -29,7 +29,7 @@ The blueprint declares:
 
 Confirm these are present in the Render dashboard after deployment. If the service is downgraded to a Free instance without a persistent disk, local JSON data can be lost.
 
-The admin dashboard at `/admin` includes daily request and AI usage, average/max AI latency, timeout and provider failure counts, queue pressure, process memory, disk usage, and upgrade warnings. The current JSON store is protected against same-process concurrent overwrites, but PostgreSQL remains the recommended next step before running multiple instances.
+The admin dashboard at `/admin` includes daily request and AI usage, average/max AI latency, timeout and provider failure counts, queue pressure, process memory, disk usage, upgrade warnings, configurable new-user starting coins, and audited manual user coin adjustments. The current JSON store is protected against same-process concurrent overwrites, but PostgreSQL remains the recommended next step before running multiple instances.
 
 ## Basic Deployment
 
@@ -87,6 +87,8 @@ https://api.squadlive.app/admin
 ```
 
 Enter `ADMIN_TOKEN` in the top-right field.
+
+For customer support, copy either `Backend User ID` or `User Lookup ID` from the feedback email into the user search field. Open the matching user detail page to inspect purchases and wallet history, then add or deduct coins with an operations note. The App synchronizes the server balance when it starts or returns to the foreground.
 
 For the current Render service:
 

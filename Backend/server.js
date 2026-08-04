@@ -213,6 +213,8 @@ async function loadStore() {
   store.aiConversations ||= {};
   store.dailyUsage ||= {};
   store.userIdsByDevice ||= {};
+  store.settings ||= {};
+  store.settings.initialCoins = Math.max(0, Math.min(1_000_000, Number(store.settings.initialCoins ?? 300)));
   for (const user of Object.values(store.users)) {
     user.coins = Math.max(0, Number(user.coins ?? 300));
     user.shareRewardDays ||= {};
@@ -332,10 +334,11 @@ function getOrCreateUser(store, deviceId = "anonymous") {
     return existing;
   }
 
+  const initialCoins = Math.max(0, Math.min(1_000_000, Number(store.settings?.initialCoins ?? 300)));
   const user = {
     id: newId("user"),
     deviceId,
-    coins: 300,
+    coins: initialCoins,
     isPremium: false,
     createdAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
@@ -348,10 +351,10 @@ function getOrCreateUser(store, deviceId = "anonymous") {
   recordCoinTransaction(store, {
     userId: user.id,
     type: "signup_bonus",
-    coins: 300,
+    coins: initialCoins,
     amountCents: 0,
     source: "system",
-    note: "Initial coins"
+    note: `Initial coins (${initialCoins})`
   });
   return user;
 }
@@ -695,6 +698,9 @@ async function adminOverview(store) {
       ? Number(((users.filter((user) => user.isPremium).length / users.length) * 100).toFixed(1))
       : 0,
     aiConversationsToday: Object.values(store.aiConversations).filter((item) => isToday(item.createdAt)).length,
+    settings: {
+      initialCoins: Number(store.settings?.initialCoins ?? 300)
+    },
     monitoring: {
       resources,
       today: todayUsage,
@@ -1466,6 +1472,25 @@ async function route(req, res) {
       return jsonResponse(res, 200, { overview: await adminOverview(store) });
     }
 
+    if (req.method === "GET" && url.pathname === "/v1/admin/settings") {
+      return jsonResponse(res, 200, {
+        settings: {
+          initialCoins: Number(store.settings?.initialCoins ?? 300)
+        }
+      });
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/admin/settings") {
+      const body = await readJSON(req);
+      const initialCoins = Number(body.initialCoins);
+      if (!Number.isInteger(initialCoins) || initialCoins < 0 || initialCoins > 1_000_000) {
+        return jsonResponse(res, 400, { error: "Initial coins must be an integer from 0 to 1,000,000" });
+      }
+      store.settings.initialCoins = initialCoins;
+      await saveStore(store);
+      return jsonResponse(res, 200, { settings: { initialCoins } });
+    }
+
     if (req.method === "GET" && url.pathname === "/v1/admin/users") {
       const query = (url.searchParams.get("query") || "").trim().toLowerCase();
       const users = Object.values(store.users)
@@ -1484,6 +1509,31 @@ async function route(req, res) {
     }
 
     const adminUserMatch = url.pathname.match(/^\/v1\/admin\/users\/([^/]+)$/);
+    if (req.method === "POST" && adminUserMatch) {
+      const user = store.users[adminUserMatch[1]];
+      if (!user) return jsonResponse(res, 404, { error: "User not found" });
+      const body = await readJSON(req);
+      const coinDelta = Number(body.coinDelta);
+      const note = String(body.note || "Manual operations adjustment").trim().slice(0, 240);
+      if (!Number.isInteger(coinDelta) || coinDelta === 0 || Math.abs(coinDelta) > 1_000_000) {
+        return jsonResponse(res, 400, { error: "Coin adjustment must be a non-zero integer within ±1,000,000" });
+      }
+      if (user.coins + coinDelta < 0) {
+        return jsonResponse(res, 400, { error: "Adjustment would make the balance negative" });
+      }
+      user.coins += coinDelta;
+      user.lastSeenAt = new Date().toISOString();
+      const transaction = recordCoinTransaction(store, {
+        userId: user.id,
+        type: "admin_adjustment",
+        coins: coinDelta,
+        amountCents: 0,
+        source: "admin",
+        note
+      });
+      await saveStore(store);
+      return jsonResponse(res, 200, { user: userPublic(user), transaction });
+    }
     if (req.method === "GET" && adminUserMatch) {
       const detail = userDetail(store, adminUserMatch[1]);
       return detail ? jsonResponse(res, 200, detail) : jsonResponse(res, 404, { error: "User not found" });

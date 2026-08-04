@@ -271,6 +271,18 @@
       font-size: 13px;
     }
     .kv strong { color: var(--text); }
+    .operation-box {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 9px;
+    }
+    .operation-box label { color: var(--muted); font-size: 12px; font-weight: 800; }
+    .operation-box input { width: 100%; }
+    .operation-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .danger { border: 0; background: rgba(255,97,97,.18); color: #ff9b9b; font-weight: 900; cursor: pointer; }
+    .operation-message { min-height: 18px; color: var(--muted); font-size: 12px; }
     .conversation-list {
       display: grid;
       gap: 10px;
@@ -401,6 +413,18 @@
           <div class="panel-head"><h2>系统设置</h2></div>
           <div class="detail-grid">
             <div class="profile">
+              <h3>新用户初始金币</h3>
+              <div class="kv">
+                <div>只影响修改后首次创建的用户，不会改变已有用户余额。</div>
+              </div>
+              <div class="operation-box">
+                <label for="initialCoinsInput">初始金币数量</label>
+                <input id="initialCoinsInput" type="number" min="0" max="1000000" step="1" placeholder="例如 300">
+                <button class="primary" id="saveInitialCoins">保存初始金币</button>
+                <div class="operation-message" id="initialCoinsMessage"></div>
+              </div>
+            </div>
+            <div class="profile">
               <h3>部署配置</h3>
               <div class="kv">
                 <div>后台地址：<strong>/admin</strong></div>
@@ -409,11 +433,11 @@
               </div>
             </div>
             <div class="profile">
-              <h3>上线前必须替换</h3>
+              <h3>运营说明</h3>
               <div class="kv">
-                <div>数据库：<strong>当前为 JSON，本地测试用</strong></div>
-                <div>支付：<strong>当前为 Mock，需要接 App Store 收据验证</strong></div>
-                <div>域名：<strong>SQUADLIVE_API_BASE_URL</strong></div>
+                <div>用户反馈邮件会携带<strong>用户查询 ID</strong>。</div>
+                <div>在用户管理搜索该 ID，即可打开用户详情。</div>
+                <div>人工金币调整会写入金币流水，App 下次启动或回到前台时自动同步。</div>
               </div>
             </div>
           </div>
@@ -499,6 +523,23 @@
     async function api(path) {
       const response = await fetch(path, {
         headers: { authorization: `Bearer ${state.token}` }
+      });
+      if (!response.ok) {
+        let message = response.statusText;
+        try { message = (await response.json()).error || message; } catch {}
+        throw new Error(message);
+      }
+      return response.json();
+    }
+
+    async function apiPost(path, body) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${state.token}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(body)
       });
       if (!response.ok) {
         let message = response.statusText;
@@ -617,6 +658,16 @@
               <div>注册时间：<strong>${time(data.user.createdAt)}</strong></div>
               <div>最后活跃：<strong>${time(data.user.lastSeenAt)}</strong></div>
             </div>
+            <div class="operation-box">
+              <label>人工调整金币</label>
+              <input id="coinAdjustmentAmount" type="number" min="1" max="1000000" step="1" placeholder="输入金币数量">
+              <input id="coinAdjustmentNote" maxlength="240" placeholder="备注，例如：客服补偿、活动奖励">
+              <div class="operation-actions">
+                <button class="primary" onclick="adjustUserCoins('${data.user.id}', 1)">增加金币</button>
+                <button class="danger" onclick="adjustUserCoins('${data.user.id}', -1)">扣除金币</button>
+              </div>
+              <div class="operation-message" id="coinAdjustmentMessage"></div>
+            </div>
           </div>
           <div>
             <div class="panel">
@@ -657,6 +708,55 @@
         </div>
       `;
     }
+
+    async function adjustUserCoins(userId, direction) {
+      const amountInput = document.getElementById("coinAdjustmentAmount");
+      const noteInput = document.getElementById("coinAdjustmentNote");
+      const message = document.getElementById("coinAdjustmentMessage");
+      const amount = Number(amountInput.value);
+      if (!Number.isInteger(amount) || amount <= 0) {
+        message.textContent = "请输入大于 0 的整数金币数量。";
+        return;
+      }
+      const coinDelta = amount * direction;
+      const action = direction > 0 ? "增加" : "扣除";
+      if (!confirm(`确认给该用户${action} ${amount} 金币吗？`)) return;
+      message.textContent = "正在提交...";
+      try {
+        const result = await apiPost(`/v1/admin/users/${userId}`, {
+          coinDelta,
+          note: noteInput.value.trim() || `后台人工${action}金币`
+        });
+        message.textContent = `操作成功，当前余额 ${result.user.coins}。`;
+        await loadUserDetail(userId);
+        await loadUsers();
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    }
+
+    async function loadSettings() {
+      const data = await api("/v1/admin/settings");
+      document.getElementById("initialCoinsInput").value = data.settings.initialCoins;
+    }
+
+    document.getElementById("saveInitialCoins").onclick = async () => {
+      const input = document.getElementById("initialCoinsInput");
+      const message = document.getElementById("initialCoinsMessage");
+      const initialCoins = Number(input.value);
+      if (!Number.isInteger(initialCoins) || initialCoins < 0 || initialCoins > 1000000) {
+        message.textContent = "请输入 0 到 1,000,000 之间的整数。";
+        return;
+      }
+      message.textContent = "正在保存...";
+      try {
+        const data = await apiPost("/v1/admin/settings", { initialCoins });
+        input.value = data.settings.initialCoins;
+        message.textContent = `保存成功，新用户将获得 ${data.settings.initialCoins} 金币。`;
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    };
 
     async function loadRecharges() {
       const data = await api("/v1/admin/recharges");
@@ -713,7 +813,7 @@
       try {
         const overview = await api("/v1/admin/overview");
         renderOverview(overview.overview);
-        await Promise.all([loadUsers(), loadRecharges(), loadVip(), loadRewards()]);
+        await Promise.all([loadUsers(), loadRecharges(), loadVip(), loadRewards(), loadSettings()]);
       } catch (error) {
         document.getElementById("overviewCards").innerHTML = `<div class="card"><div class="value">${error.message}</div><div class="label">请检查 ADMIN_TOKEN</div></div>`;
       }
