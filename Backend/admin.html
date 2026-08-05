@@ -485,8 +485,20 @@
       document.getElementById("pageSub").textContent = titles[section][1];
     }
 
-    function money(cents) {
-      return `$${(Number(cents || 0) / 100).toFixed(2)}`;
+    function money(cents, currency) {
+      const amount = Number(cents || 0) / 100;
+      const normalizedCurrency = String(currency || "").toUpperCase();
+      if (!normalizedCurrency || normalizedCurrency === "UNKNOWN") {
+        return `${amount.toFixed(2)}（币种未知）`;
+      }
+      try {
+        return new Intl.NumberFormat("zh-CN", {
+          style: "currency",
+          currency: normalizedCurrency
+        }).format(amount);
+      } catch (_) {
+        return `${normalizedCurrency} ${amount.toFixed(2)}`;
+      }
     }
 
     function bytes(value) {
@@ -561,7 +573,7 @@
         ["今日新增", overview.newUsersToday],
         ["PRO 用户", `${overview.premiumUsers} · ${overview.premiumConversionPercent}%`],
         ["充值订单", overview.rechargeCount],
-        ["充值金额", money(overview.rechargeAmountCents)],
+        ["充值金额（USD）", money(overview.rechargeAmountCents, "USD")],
         ["今日 AI 对话", overview.aiConversationsToday],
         ["待审核分享", overview.pendingRewardSubmissions]
       ];
@@ -676,7 +688,7 @@
                 <tr>
                   <td>${item.type}</td>
                   <td class="${item.coins >= 0 ? "positive" : "negative"}">${item.coins}</td>
-                  <td>${money(item.amountCents)}</td>
+                  <td>${money(item.amountCents, item.currency)}</td>
                   <td>${item.note || "-"}</td>
                   <td>${time(item.createdAt)}</td>
                 </tr>
@@ -688,7 +700,7 @@
                 <tr>
                   <td>${item.planId}</td>
                   <td><span class="pill active">${item.status}</span></td>
-                  <td>${money(item.amountCents)}</td>
+                  <td>${money(item.amountCents, item.currency)}</td>
                   <td><code title="${item.platformTransactionId || "-"}">${item.platformTransactionId || "-"}</code></td>
                   <td>${time(item.startedAt)}</td>
                 </tr>
@@ -766,7 +778,7 @@
           <tr onclick="loadUserDetail('${item.userId}')">
             <td><code title="${item.userId}">${item.userId}</code></td>
             <td class="positive">${item.coins}</td>
-            <td>${money(item.amountCents)}</td>
+            <td>${money(item.amountCents, item.currency)}</td>
             <td>${item.note}</td>
             <td>${time(item.createdAt)}</td>
           </tr>
@@ -783,7 +795,7 @@
             <td><code title="${item.userId}">${item.userId}</code></td>
             <td>${item.planId}</td>
             <td><span class="pill active">${item.status}</span></td>
-            <td>${money(item.amountCents)}</td>
+            <td>${money(item.amountCents, item.currency)}</td>
             <td><code title="${item.platformTransactionId || "-"}">${item.platformTransactionId || "-"}</code></td>
             <td>${time(item.startedAt)}</td>
           </tr>

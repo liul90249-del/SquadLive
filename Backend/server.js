@@ -80,6 +80,15 @@ const appStoreCoinAmounts = {
   "com.liuzhigang.squadlive.coins.1800": 1800
 };
 
+const appStoreCoinPricesUSDCents = {
+  "com.liuzhigang.squadlive.coins.330": 499,
+  "com.liuzhigang.squadlive.coins.420": 599,
+  "com.liuzhigang.squadlive.coins.525": 699,
+  "com.liuzhigang.squadlive.coins.740": 899,
+  "com.liuzhigang.squadlive.coins.1450": 1499,
+  "com.liuzhigang.squadlive.coins.1800": 1999
+};
+
 const appStoreSubscriptionProducts = new Set([
   "com.liuzhigang.squadlive.pro.weekly",
   "com.liuzhigang.squadlive.pro.annual"
@@ -219,6 +228,14 @@ async function loadStore() {
     user.coins = Math.max(0, Number(user.coins ?? 300));
     user.shareRewardDays ||= {};
     if (user.deviceId) store.userIdsByDevice[user.deviceId] = user.id;
+  }
+  let migratedCoinRevenue = 0;
+  for (const transaction of Object.values(store.coinTransactions)) {
+    if (normalizeCoinPurchaseRevenue(transaction)) migratedCoinRevenue += 1;
+  }
+  if (migratedCoinRevenue > 0) {
+    await saveStore(store);
+    console.log(`Normalized ${migratedCoinRevenue} coin purchase record(s) to fixed USD pricing.`);
   }
   return store;
 }
@@ -376,6 +393,7 @@ function recordCoinTransaction(store, input) {
     type: input.type,
     coins: Number(input.coins || 0),
     amountCents: Number(input.amountCents || 0),
+    currency: String(input.currency || "").trim().toUpperCase(),
     source: input.source || "unknown",
     note: input.note || "",
     platformTransactionId: input.platformTransactionId || "",
@@ -383,8 +401,45 @@ function recordCoinTransaction(store, input) {
     environment: input.environment || "",
     createdAt: new Date().toISOString()
   };
+  normalizeCoinPurchaseRevenue(transaction);
   store.coinTransactions[transaction.id] = transaction;
   return transaction;
+}
+
+function coinPurchaseProductId(transaction) {
+  const candidates = [transaction?.productId, transaction?.note];
+  const directMatch = candidates.find((value) => appStoreCoinPricesUSDCents[String(value || "")]);
+  if (directMatch) return String(directMatch);
+
+  const coins = Math.abs(Number(transaction?.coins || 0));
+  return Object.keys(appStoreCoinAmounts).find((productId) => coins > 0 && coins % appStoreCoinAmounts[productId] === 0) || "";
+}
+
+function normalizeCoinPurchaseRevenue(transaction) {
+  if (!transaction || transaction.type !== "coin_purchase") return false;
+  const productId = coinPurchaseProductId(transaction);
+  const unitPriceCents = appStoreCoinPricesUSDCents[productId];
+  const unitCoins = appStoreCoinAmounts[productId];
+  if (!unitPriceCents || !unitCoins) return false;
+
+  const quantity = Math.max(1, Math.round(Math.abs(Number(transaction.coins || unitCoins)) / unitCoins));
+  const amountCents = unitPriceCents * quantity;
+  const changed = transaction.amountCents !== amountCents
+    || transaction.currency !== "USD"
+    || transaction.productId !== productId;
+  transaction.amountCents = amountCents;
+  transaction.currency = "USD";
+  transaction.productId = productId;
+  return changed;
+}
+
+function applePriceToMinorUnits(price) {
+  const milliunits = Number(price || 0);
+  return Number.isFinite(milliunits) && milliunits > 0 ? Math.round(milliunits / 10) : 0;
+}
+
+function appleCurrency(payload, fallback = "") {
+  return String(payload?.currency || fallback || "").trim().toUpperCase();
 }
 
 function walletOperationId(body) {
@@ -460,6 +515,7 @@ function recordVipSubscription(store, input) {
     planId: input.planId || "unknown",
     status: input.status || "active",
     amountCents: Number(input.amountCents || 0),
+    currency: String(input.currency || "").trim().toUpperCase(),
     platformTransactionId: input.platformTransactionId || "",
     startedAt: new Date().toISOString(),
     expiresAt: input.expiresAt || null
@@ -682,6 +738,13 @@ async function adminOverview(store) {
   const daily = publicDailyUsage(store);
   const resources = await resourceSnapshot();
   const todayUsage = daily.find((item) => item.date === todayKey()) || {};
+  const rechargeByCurrency = coinTransactions
+    .filter((item) => item.type === "coin_purchase")
+    .reduce((totals, item) => {
+      const currency = String(item.currency || "UNKNOWN").toUpperCase();
+      totals[currency] = Number(totals[currency] || 0) + Number(item.amountCents || 0);
+      return totals;
+    }, {});
   return {
     totalUsers: users.length,
     activeUsers5m: users.filter((user) => isActiveRecently(user.lastSeenAt)).length,
@@ -691,6 +754,7 @@ async function adminOverview(store) {
     rechargeAmountCents: coinTransactions
       .filter((item) => item.type === "coin_purchase")
       .reduce((sum, item) => sum + item.amountCents, 0),
+    rechargeByCurrency,
     vipSubscriptionCount: vipSubscriptions.length,
     activeVipSubscriptionCount: vipSubscriptions.filter((item) => item.status === "active").length,
     pendingRewardSubmissions: Object.values(store.rewardSubmissions).filter((item) => item.status === "pending").length,
@@ -803,6 +867,7 @@ function deepSeekSystemPrompt(body) {
   const directions = Array.isArray(body.activeDirections) ? body.activeDirections : [];
   const tones = Array.isArray(body.toneTopics) ? body.toneTopics.join(", ") : "General";
   const vibes = Array.isArray(body.vibeMoods) ? body.vibeMoods.join(", ") : "Warm";
+  const vibeBehavior = vibeBehaviorGuide(body.vibeMoods);
   const roleMode = body.roleMode || "Supportive";
   const listenerName = body.listener?.name || "Sarah";
   const listenerGender = body.listener?.gender || "unspecified";
@@ -821,10 +886,12 @@ Required response language code: ${inputLanguage}. Reply entirely in this langua
 Reply directly to the streamer based on what they just said.
 Tone topics: ${tones}.
 Vibe: ${vibes}.
+Vibe behavior: ${vibeBehavior}
+Vibe behavior overrides role mode and active directions whenever they conflict.
 Active directions: ${directions.join(", ") || "general, compliment"}.
 ${activeDirectionGuide(directions)}
 Always reply in the same language as the streamer's latest message. If they speak Chinese, reply in Chinese. If they speak English, reply in English. For mixed-language input, use the dominant language of the latest message.
-Naturally include a short compliment when appropriate: their voice sounds pleasant, they look good, their smile is nice, their camera presence is warm, or their energy is attractive.
+Unless Haters vibe is active, naturally include a short compliment when appropriate: their voice sounds pleasant, they look good, their smile is nice, their camera presence is warm, or their energy is attractive.
 Do not sound scripted. Do not repeat the same compliment style. Usually use 1-2 short sentences, but do not force an unnatural cutoff. When the topic genuinely benefits from detail, a deeper reply may use 3-4 concise sentences. Avoid long, repetitive paragraphs.
 Do not merely repeat or paraphrase the user's words. React to their meaning and move the conversation forward.
 Refer to visual context when it is relevant and natural. Treat visual labels as uncertain, say "it looks like" when needed, never invent details, and never infer sensitive traits, health, identity, or private information. Never say that you cannot see the stream.
@@ -849,6 +916,24 @@ function activeDirectionGuide(directions) {
     .map((direction) => guidance[String(direction).toLowerCase()])
     .filter(Boolean)
     .join(" ");
+}
+
+function vibeBehaviorGuide(vibes) {
+  const activeVibes = Array.isArray(vibes) ? vibes.map((value) => String(value)) : [];
+  if (activeVibes.includes("Haters")) {
+    return "Be skeptical, blunt, and lightly snarky. Challenge weak claims and tease the streamer without threats, slurs, discrimination, or attacks on protected traits. Do not add automatic compliments.";
+  }
+
+  const guidance = {
+    Hype: "React like an excited superfan with energetic encouragement and celebration.",
+    Happy: "Sound cheerful, warm, optimistic, and genuinely delighted by the conversation.",
+    Flirty: "Use playful, respectful flirting and light camera chemistry without becoming explicit or possessive.",
+    Funny: "Prioritize playful jokes, witty reactions, callbacks, and comedic timing.",
+    Curious: "Ask specific follow-up questions and explore details instead of giving generic praise."
+  };
+
+  const selectedGuidance = activeVibes.map((vibe) => guidance[vibe]).filter(Boolean);
+  return selectedGuidance.length > 0 ? selectedGuidance.join(" ") : "Stay warm and conversational.";
 }
 
 function conversationHistory(body) {
@@ -1168,7 +1253,8 @@ async function route(req, res) {
           userId: user.id,
           planId: productId,
           status,
-          amountCents: transaction?.price ? Math.round(Number(transaction.price) / 10) : Number(currentSubscription?.amountCents || 0),
+          amountCents: transaction?.price ? applePriceToMinorUnits(transaction.price) : Number(currentSubscription?.amountCents || 0),
+          currency: appleCurrency(transaction, currentSubscription?.currency),
           platformTransactionId: transactionId || currentSubscription?.platformTransactionId || "",
           originalTransactionId,
           startedAt: isoFromAppleMillis(transaction?.originalPurchaseDate) || currentSubscription?.startedAt || new Date().toISOString(),
@@ -1243,7 +1329,8 @@ async function route(req, res) {
       userId: user.id,
       type: "coin_purchase",
       coins: creditedCoins,
-      amountCents: payload.price ? Math.round(Number(payload.price) / 10) : 0,
+      amountCents: appStoreCoinPricesUSDCents[productId] * quantity,
+      currency: "USD",
       source: "app_store_verified",
       note: productId,
       platformTransactionId: transactionId,
@@ -1312,7 +1399,8 @@ async function route(req, res) {
         userId: user.id,
         planId: productId,
         status: payload.revocationDate ? "revoked" : (isActive ? "active" : "expired"),
-        amountCents: payload.price ? Math.round(Number(payload.price) / 10) : 0,
+        amountCents: applePriceToMinorUnits(payload.price),
+        currency: appleCurrency(payload),
         platformTransactionId: transactionId,
         originalTransactionId,
         startedAt: payload.originalPurchaseDate ? new Date(payload.originalPurchaseDate).toISOString() : new Date().toISOString(),
@@ -1349,6 +1437,7 @@ async function route(req, res) {
       type: "coin_purchase",
       coins: pack.coins,
       amountCents: pack.priceCents,
+      currency: "USD",
       source: "iap_mock",
       note: pack.id
     });
