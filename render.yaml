@@ -2,6 +2,9 @@ services:
   - type: web
     name: squadlive-backend
     runtime: node
+    repo: https://github.com/liul90249-del/SquadLive.git
+    branch: main
+    autoDeployTrigger: commit
     rootDir: Backend
     plan: starter
     buildCommand: npm install
