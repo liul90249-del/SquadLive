@@ -168,6 +168,37 @@
       font-size: 28px;
       font-weight: 950;
     }
+    .metric-values {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .metric-value-column {
+      min-width: 0;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,.035);
+      border: 1px solid rgba(255,255,255,.055);
+    }
+    .metric-value-column.today {
+      background: rgba(157,132,255,.10);
+      border-color: rgba(157,132,255,.20);
+    }
+    .metric-period {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 850;
+      letter-spacing: .6px;
+    }
+    .metric-value-column .value {
+      margin-top: 5px;
+      font-size: 21px;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
+    }
+    .metric-value-column.today .value { color: #c9c0ff; }
     .metric-help {
       position: absolute;
       top: 12px;
@@ -624,26 +655,37 @@
       return `<table><thead><tr>${headers.map((item) => `<th>${item}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
     }
 
-    function metricCard(label, value, tooltip) {
+    function metricCard(label, totalValue, todayValue, tooltip, totalLabel = "累计", todayLabel = "今日") {
       return `<div class="card">
         <span class="metric-help" tabindex="0" aria-label="${escapeHTML(label)} 指标说明" data-tooltip="${escapeHTML(tooltip)}">?</span>
         <div class="label">${escapeHTML(label)}</div>
-        <div class="value">${value}</div>
+        <div class="metric-values">
+          <div class="metric-value-column">
+            <span class="metric-period">${escapeHTML(totalLabel)}</span>
+            <div class="value">${totalValue}</div>
+          </div>
+          <div class="metric-value-column today">
+            <span class="metric-period">${escapeHTML(todayLabel)}</span>
+            <div class="value">${todayValue}</div>
+          </div>
+        </div>
       </div>`;
     }
 
     function renderOverview(overview) {
       const items = [
-        ["总用户数", overview.totalUsers, "当前后端用户表中的用户总数。相同设备 ID 会复用已有用户，不会重复计数。"],
-        ["5 分钟活跃", overview.activeUsers5m, "最近 5 分钟内有 lastSeenAt 活动记录的用户数量。"],
-        ["今日新增", overview.newUsersToday, "按服务器时区当天 00:00 至当前时间创建的用户数量。"],
-        ["PRO 用户", `${overview.premiumUsers} · ${overview.premiumConversionPercent}%`, "PRO 用户数，以及 PRO 用户数 ÷ 总用户数 × 100%，结果保留 1 位小数。"],
-        ["充值订单", overview.rechargeCount, "类型为 coin_purchase 的金币购买流水数量；人工加币和分享奖励不计入。"],
-        ["充值金额（USD）", money(overview.rechargeAmountCents, "USD"), "所有金币购买流水的美元合计。金额按商品 ID 的固定美元售价计算，不使用 Apple 返回的人民币本地化价格。"],
-        ["今日 AI 对话", overview.aiConversationsToday, "服务器时区当天创建的 AI 对话请求数量，一次用户消息对应一条对话记录。"],
-        ["待审核分享", overview.pendingRewardSubmissions, "当前状态为 pending、等待运营审核的分享奖励提交数量。"]
+        ["用户数", overview.totalUsers, overview.newUsersToday, "累计为后端用户总数；今日为服务器时区当天新创建的用户数。相同设备 ID 不重复计数。", "累计", "今日新增"],
+        ["活跃用户", overview.activeUsers5m, overview.activeUsersToday, "当前为最近 5 分钟有活动记录的用户数；今日为当天至少活跃过一次的去重用户数。", "当前 5 分钟", "今日去重"],
+        ["PRO 用户", `${overview.premiumUsers} · ${overview.premiumConversionPercent}%`, overview.premiumUsersToday, "累计显示当前 PRO 用户数及 PRO 用户数 ÷ 总用户数 × 100%；今日显示当天开始订阅的去重用户数。", "当前 / 转化率", "今日新增"],
+        ["充值订单", overview.rechargeCount, overview.rechargeCountToday, "类型为 coin_purchase 的金币购买流水数量；人工加币和分享奖励不计入。", "累计", "今日"],
+        ["充值金额（USD）", money(overview.rechargeAmountCents, "USD"), money(overview.rechargeAmountCentsToday, "USD"), "累计与今日金额均按金币商品 ID 的固定美元售价计算，不使用 Apple 返回的人民币本地化价格。", "累计", "今日"],
+        ["AI 对话", overview.aiConversationCount, overview.aiConversationsToday, "一次已保存的用户消息和 AI 回复记为一条 AI 对话记录。", "累计", "今日"],
+        ["分享提交", overview.rewardSubmissionCount, overview.rewardSubmissionsToday, "用户提交的分享奖励申请数量，包含待审核、已通过和已拒绝状态。", "累计", "今日"],
+        ["待审核分享", overview.pendingRewardSubmissions, overview.pendingRewardSubmissionsToday, "累计为当前仍处于 pending 状态的申请；今日为今天提交且仍待审核的申请。", "当前待审核", "今日新增"]
       ];
-      document.getElementById("overviewCards").innerHTML = items.map(([label, value, tooltip]) => metricCard(label, value, tooltip)).join("");
+      document.getElementById("overviewCards").innerHTML = items
+        .map(([label, totalValue, todayValue, tooltip, totalLabel, todayLabel]) => metricCard(label, totalValue, todayValue, tooltip, totalLabel, todayLabel))
+        .join("");
 
       const monitoring = overview.monitoring;
       const resources = monitoring.resources;

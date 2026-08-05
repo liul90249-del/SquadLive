@@ -736,11 +736,20 @@ async function adminOverview(store) {
   const users = Object.values(store.users);
   const coinTransactions = Object.values(store.coinTransactions);
   const vipSubscriptions = Object.values(store.vipSubscriptions);
+  const aiConversations = Object.values(store.aiConversations);
+  const rewardSubmissions = Object.values(store.rewardSubmissions);
   const daily = publicDailyUsage(store);
   const resources = await resourceSnapshot();
   const todayUsage = daily.find((item) => item.date === todayKey()) || {};
-  const rechargeByCurrency = coinTransactions
-    .filter((item) => item.type === "coin_purchase")
+  const rechargeTransactions = coinTransactions.filter((item) => item.type === "coin_purchase");
+  const todayRechargeTransactions = rechargeTransactions.filter((item) => isToday(item.createdAt));
+  const todayVipUserIds = new Set(
+    vipSubscriptions
+      .filter((item) => isToday(item.startedAt))
+      .map((item) => item.userId)
+      .filter(Boolean)
+  );
+  const rechargeByCurrency = rechargeTransactions
     .reduce((totals, item) => {
       const currency = String(item.currency || "UNKNOWN").toUpperCase();
       totals[currency] = Number(totals[currency] || 0) + Number(item.amountCents || 0);
@@ -749,20 +758,26 @@ async function adminOverview(store) {
   return {
     totalUsers: users.length,
     activeUsers5m: users.filter((user) => isActiveRecently(user.lastSeenAt)).length,
+    activeUsersToday: Number(todayUsage.activeUsers || 0),
     newUsersToday: users.filter((user) => isToday(user.createdAt)).length,
     premiumUsers: users.filter((user) => user.isPremium).length,
-    rechargeCount: coinTransactions.filter((item) => item.type === "coin_purchase").length,
-    rechargeAmountCents: coinTransactions
-      .filter((item) => item.type === "coin_purchase")
-      .reduce((sum, item) => sum + item.amountCents, 0),
+    premiumUsersToday: todayVipUserIds.size,
+    rechargeCount: rechargeTransactions.length,
+    rechargeCountToday: todayRechargeTransactions.length,
+    rechargeAmountCents: rechargeTransactions.reduce((sum, item) => sum + item.amountCents, 0),
+    rechargeAmountCentsToday: todayRechargeTransactions.reduce((sum, item) => sum + item.amountCents, 0),
     rechargeByCurrency,
     vipSubscriptionCount: vipSubscriptions.length,
     activeVipSubscriptionCount: vipSubscriptions.filter((item) => item.status === "active").length,
-    pendingRewardSubmissions: Object.values(store.rewardSubmissions).filter((item) => item.status === "pending").length,
+    rewardSubmissionCount: rewardSubmissions.length,
+    rewardSubmissionsToday: rewardSubmissions.filter((item) => isToday(item.createdAt)).length,
+    pendingRewardSubmissions: rewardSubmissions.filter((item) => item.status === "pending").length,
+    pendingRewardSubmissionsToday: rewardSubmissions.filter((item) => item.status === "pending" && isToday(item.createdAt)).length,
     premiumConversionPercent: users.length
       ? Number(((users.filter((user) => user.isPremium).length / users.length) * 100).toFixed(1))
       : 0,
-    aiConversationsToday: Object.values(store.aiConversations).filter((item) => isToday(item.createdAt)).length,
+    aiConversationCount: aiConversations.length,
+    aiConversationsToday: aiConversations.filter((item) => isToday(item.createdAt)).length,
     settings: {
       initialCoins: Number(store.settings?.initialCoins ?? 300)
     },
