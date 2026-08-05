@@ -32,6 +32,7 @@ const aiMaxConcurrency = Math.max(1, Number(process.env.AI_MAX_CONCURRENCY || 40
 const aiQueueLimit = Math.max(aiMaxConcurrency, Number(process.env.AI_QUEUE_LIMIT || 300));
 const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 512));
 const processStartedAt = Date.now();
+const deploymentRevision = "2026-08-05-usd-revenue-v2";
 
 let storePromise;
 let saveQueue = Promise.resolve();
@@ -1034,6 +1035,7 @@ async function route(req, res) {
     return jsonResponse(res, 200, {
       ok: true,
       service: "squadlive-backend",
+      revision: deploymentRevision,
       activeAIRequests,
       queuedAIRequests: pendingAIRequests.length
     });
