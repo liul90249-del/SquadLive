@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/assets/landing/squadlive-logo.png">
   <title>SquadLive 管理后台</title>
   <style>
     :root {
@@ -51,6 +52,14 @@
       margin-bottom: 18px;
       font-size: 19px;
       font-weight: 900;
+    }
+    .brand img {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      object-fit: cover;
+      border: 1px solid rgba(255,255,255,.16);
+      box-shadow: 0 5px 18px rgba(157,132,255,.22);
     }
     .mark {
       width: 32px;
@@ -147,6 +156,7 @@
     }
     .card {
       padding: 16px;
+      position: relative;
     }
     .card .label {
       color: var(--muted);
@@ -157,6 +167,54 @@
       margin-top: 8px;
       font-size: 28px;
       font-weight: 950;
+    }
+    .metric-help {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 20px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(255,255,255,.28);
+      border-radius: 50%;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 950;
+      line-height: 1;
+      cursor: help;
+      outline: none;
+    }
+    .metric-help::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      z-index: 20;
+      top: 28px;
+      right: 0;
+      width: 250px;
+      padding: 10px 12px;
+      border: 1px solid rgba(157,132,255,.45);
+      border-radius: 9px;
+      background: #0d1018;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.55;
+      text-align: left;
+      white-space: normal;
+      box-shadow: 0 12px 30px rgba(0,0,0,.42);
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(-3px);
+      pointer-events: none;
+      transition: opacity .16s ease, transform .16s ease, visibility .16s ease;
+    }
+    .metric-help:hover::after,
+    .metric-help:focus-visible::after {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0);
     }
     .alerts {
       display: grid;
@@ -328,7 +386,7 @@
 <body>
   <div class="layout">
     <aside>
-      <div class="brand"><span class="mark"></span>SquadLive</div>
+      <div class="brand"><img src="/assets/landing/squadlive-logo.png" alt="SquadLive logo">SquadLive</div>
       <div class="nav">
         <button class="active" data-section="overview"><i>📊</i>数据概览</button>
         <button data-section="users"><i>👤</i>用户管理</button>
@@ -566,37 +624,48 @@
       return `<table><thead><tr>${headers.map((item) => `<th>${item}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
     }
 
+    function metricCard(label, value, tooltip) {
+      return `<div class="card">
+        <span class="metric-help" tabindex="0" aria-label="${escapeHTML(label)} 指标说明" data-tooltip="${escapeHTML(tooltip)}">?</span>
+        <div class="label">${escapeHTML(label)}</div>
+        <div class="value">${value}</div>
+      </div>`;
+    }
+
     function renderOverview(overview) {
       const items = [
-        ["总用户数", overview.totalUsers],
-        ["5 分钟活跃", overview.activeUsers5m],
-        ["今日新增", overview.newUsersToday],
-        ["PRO 用户", `${overview.premiumUsers} · ${overview.premiumConversionPercent}%`],
-        ["充值订单", overview.rechargeCount],
-        ["充值金额（USD）", money(overview.rechargeAmountCents, "USD")],
-        ["今日 AI 对话", overview.aiConversationsToday],
-        ["待审核分享", overview.pendingRewardSubmissions]
+        ["总用户数", overview.totalUsers, "当前后端用户表中的用户总数。相同设备 ID 会复用已有用户，不会重复计数。"],
+        ["5 分钟活跃", overview.activeUsers5m, "最近 5 分钟内有 lastSeenAt 活动记录的用户数量。"],
+        ["今日新增", overview.newUsersToday, "按服务器时区当天 00:00 至当前时间创建的用户数量。"],
+        ["PRO 用户", `${overview.premiumUsers} · ${overview.premiumConversionPercent}%`, "PRO 用户数，以及 PRO 用户数 ÷ 总用户数 × 100%，结果保留 1 位小数。"],
+        ["充值订单", overview.rechargeCount, "类型为 coin_purchase 的金币购买流水数量；人工加币和分享奖励不计入。"],
+        ["充值金额（USD）", money(overview.rechargeAmountCents, "USD"), "所有金币购买流水的美元合计。金额按商品 ID 的固定美元售价计算，不使用 Apple 返回的人民币本地化价格。"],
+        ["今日 AI 对话", overview.aiConversationsToday, "服务器时区当天创建的 AI 对话请求数量，一次用户消息对应一条对话记录。"],
+        ["待审核分享", overview.pendingRewardSubmissions, "当前状态为 pending、等待运营审核的分享奖励提交数量。"]
       ];
-      document.getElementById("overviewCards").innerHTML = items.map(([label, value]) => `
-        <div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>
-      `).join("");
+      document.getElementById("overviewCards").innerHTML = items.map(([label, value, tooltip]) => metricCard(label, value, tooltip)).join("");
 
       const monitoring = overview.monitoring;
       const resources = monitoring.resources;
       const today = monitoring.today || {};
       const successRate = today.aiRequests ? ((today.aiSuccesses / today.aiRequests) * 100).toFixed(1) : "100.0";
       const systemItems = [
-        ["内存占用", `${resources.memory.percent}%`, `${bytes(resources.memory.rssBytes)} / ${bytes(resources.memory.limitBytes)}`],
-        ["磁盘占用", `${resources.disk.percent}%`, `数据文件 ${bytes(resources.disk.storeBytes)} · 总空间 ${bytes(resources.disk.totalBytes)}`],
-        ["AI 并发", `${resources.aiConcurrency.active}/${resources.aiConcurrency.limit}`, `排队 ${resources.aiConcurrency.queued} · 今日峰值 ${today.peakAIConcurrency || 0}`],
-        ["AI 成功率", `${successRate}%`, `超时 ${today.aiTimeouts || 0} · 不可用 ${today.aiUnavailable || 0}`],
-        ["平均 AI 延迟", `${today.averageAILatencyMs || 0} ms`, `今日最大 ${today.maxAILatencyMs || 0} ms`],
-        ["今日请求量", today.requests || 0, `4xx ${today.http4xx || 0} · 5xx ${today.http5xx || 0}`],
-        ["并发失败", today.aiQueueRejected || 0, `运行期间累计 ${resources.aiConcurrency.rejectedSinceRestart}`],
-        ["服务器运行时间", duration(resources.uptimeSeconds), `磁盘写入失败 ${resources.storeWriteFailures}`]
+        ["内存占用", `${resources.memory.percent}%`, `${bytes(resources.memory.rssBytes)} / ${bytes(resources.memory.limitBytes)}`, "当前 Node.js 进程内存占用 ÷ Render 配置的实例内存上限 × 100%。"],
+        ["磁盘占用", `${resources.disk.percent}%`, `数据文件 ${bytes(resources.disk.storeBytes)} · 总空间 ${bytes(resources.disk.totalBytes)}`, "持久化磁盘已使用空间 ÷ 磁盘总空间 × 100%。"],
+        ["AI 并发", `${resources.aiConcurrency.active}/${resources.aiConcurrency.limit}`, `排队 ${resources.aiConcurrency.queued} · 今日峰值 ${today.peakAIConcurrency || 0}`, "当前正在处理的 AI 请求数 ÷ AI_MAX_CONCURRENCY 并发上限。"],
+        ["AI 成功率", `${successRate}%`, `超时 ${today.aiTimeouts || 0} · 不可用 ${today.aiUnavailable || 0}`, "（今日 AI 请求数 − 今日 AI 降级/失败数）÷ 今日 AI 请求数 × 100%；没有请求时显示 100%。"],
+        ["平均 AI 延迟", `${today.averageAILatencyMs || 0} ms`, `今日最大 ${today.maxAILatencyMs || 0} ms`, "今日所有已完成 AI 请求从开始到收到结果的平均耗时，单位为毫秒。"],
+        ["今日请求量", today.requests || 0, `4xx ${today.http4xx || 0} · 5xx ${today.http5xx || 0}`, "服务器时区当天收到的 HTTP 请求总数，包含 AI、钱包和后台接口。"],
+        ["并发失败", today.aiQueueRejected || 0, `运行期间累计 ${resources.aiConcurrency.rejectedSinceRestart}`, "因 AI 并发队列达到上限而被拒绝的请求数量。"],
+        ["服务器运行时间", duration(resources.uptimeSeconds), `磁盘写入失败 ${resources.storeWriteFailures}`, "当前后端进程从最近一次启动到现在持续运行的时间。"]
       ];
-      document.getElementById("systemCards").innerHTML = systemItems.map(([label, value, note]) => `
-        <div class="card"><div class="label">${label}</div><div class="value">${value}</div><div class="metric-note">${note}</div></div>
+      document.getElementById("systemCards").innerHTML = systemItems.map(([label, value, note, tooltip]) => `
+        <div class="card">
+          <span class="metric-help" tabindex="0" aria-label="${escapeHTML(label)} 指标说明" data-tooltip="${escapeHTML(tooltip)}">?</span>
+          <div class="label">${escapeHTML(label)}</div>
+          <div class="value">${value}</div>
+          <div class="metric-note">${escapeHTML(note)}</div>
+        </div>
       `).join("");
 
       document.getElementById("systemAlerts").innerHTML = monitoring.warnings.map((warning) => `
