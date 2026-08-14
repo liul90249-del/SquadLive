@@ -33,6 +33,10 @@ services:
         value: "300"
       - key: INSTANCE_MEMORY_MB
         value: "512"
+      - key: IP_GEOLOCATION_ENABLED
+        value: "true"
+      - key: IP_GEOLOCATION_BASE_URL
+        value: https://ipwho.is
     disk:
       name: squadlive-data
       mountPath: /var/data

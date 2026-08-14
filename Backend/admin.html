@@ -543,7 +543,7 @@
 
     const titles = {
       overview: ["数据概览", "实时查看产品核心运营数据"],
-      users: ["用户管理", "查看用户信息、金币、设备 ID、充值记录和 VIP 状态"],
+      users: ["用户管理", "查看用户信息、金币、设备 ID、IP 国家/地区、充值记录和 VIP 状态"],
       recharges: ["充值记录", "查看整个产品的金币充值流水"],
       vip: ["VIP 订阅", "查看会员订阅记录和状态"],
       rewards: ["分享审核", "查看用户提交的分享链接和奖励记录"],
@@ -738,11 +738,16 @@
 
     function renderUsers(targetId, users) {
       document.getElementById(targetId).innerHTML = table(
-        ["用户", "设备 ID", "金币", "VIP", "AI 对话", "注册时间", "最后活跃"],
+        ["用户", "设备 ID", "IP / 地区", "金币", "VIP", "AI 对话", "注册时间", "最后活跃"],
         users.map((user) => `
           <tr onclick="loadUserDetail('${user.id}')">
             <td>${user.displayName ? `<strong>${escapeHTML(user.displayName)}</strong><br>` : ""}<code title="${user.id}">${user.id}</code></td>
             <td><code title="${user.deviceId}">${user.deviceId}</code></td>
+            <td>
+              ${user.lastIPAddress ? `<code title="${escapeHTML(user.lastIPAddress)}">${escapeHTML(user.lastIPAddress)}</code><br>` : "-<br>"}
+              ${escapeHTML([user.networkCountryCode, user.networkCity].filter(Boolean).join(" · ") || "待解析")}
+              ${user.possibleAppleNetwork ? '<br><span class="pill vip">疑似 Apple 网络</span>' : ""}
+            </td>
             <td>${user.coins}</td>
             <td>${user.isPremium ? '<span class="pill vip">VIP</span>' : '<span class="pill">普通</span>'}</td>
             <td><span class="pill active">${user.aiConversationCount || 0}</span></td>
@@ -776,10 +781,29 @@
               <div>用户 ID：<br><code title="${data.user.id}">${data.user.id}</code></div>
               <div>用户名称：<strong>${escapeHTML(data.user.displayName || "-")}</strong></div>
               <div>设备 ID：<br><code title="${data.user.deviceId}">${data.user.deviceId}</code></div>
+              <div>最近 IP：<br><code title="${escapeHTML(data.user.lastIPAddress || "")}">${escapeHTML(data.user.lastIPAddress || "-")}</code></div>
+              <div>国家 / 地区：<strong>${escapeHTML([data.user.networkCountry, data.user.networkRegion, data.user.networkCity].filter(Boolean).join(" · ") || data.user.networkCountryCode || "待解析")}</strong></div>
+              <div>网络组织：<strong>${escapeHTML(data.user.networkOrganization || data.user.networkISP || "待解析")}</strong></div>
+              <div>ASN：<strong>${escapeHTML(data.user.networkASN || "-")}</strong></div>
+              <div>Apple 网络判断：${data.user.possibleAppleNetwork ? '<span class="pill vip">网络组织疑似 Apple</span>' : '<span class="pill">未发现 Apple 标识</span>'}</div>
+              <div>IP 更新时间：<strong>${time(data.user.lastIPSeenAt)}</strong></div>
               <div>金币数量：<strong>${data.user.coins}</strong></div>
               <div>VIP 状态：<strong>${data.user.isPremium ? "VIP 用户" : "普通用户"}</strong></div>
               <div>注册时间：<strong>${time(data.user.createdAt)}</strong></div>
               <div>最后活跃：<strong>${time(data.user.lastSeenAt)}</strong></div>
+            </div>
+            ${data.user.possibleAppleNetwork ? '<div class="operation-message">提示：网络组织名称包含 Apple 仅代表该出口网络可能归属 Apple，不能证明该用户是 App Review 审核员。</div>' : ""}
+            <div class="panel" style="margin-top:16px">
+              <div class="panel-head"><h2>最近 IP 历史</h2><span class="pill active">最多 10 条</span></div>
+              ${table(["IP", "国家/城市", "网络组织", "首次出现", "最后出现"], (data.user.ipHistory || []).map((item) => `
+                <tr>
+                  <td><code>${escapeHTML(item.ip || "-")}</code>${item.possibleAppleNetwork ? '<br><span class="pill vip">疑似 Apple</span>' : ""}</td>
+                  <td>${escapeHTML([item.countryCode || item.country, item.city].filter(Boolean).join(" · ") || "待解析")}</td>
+                  <td>${escapeHTML(item.organization || item.isp || item.asn || "-")}</td>
+                  <td>${time(item.firstSeenAt)}</td>
+                  <td>${time(item.lastSeenAt)}</td>
+                </tr>
+              `), "暂无 IP 记录")}
             </div>
             <div class="operation-box">
               <label>人工调整金币</label>

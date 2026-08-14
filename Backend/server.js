@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import { Environment, SignedDataVerifier } from "@apple/app-store-server-library";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -31,14 +32,18 @@ const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
 const aiMaxConcurrency = Math.max(1, Number(process.env.AI_MAX_CONCURRENCY || 40));
 const aiQueueLimit = Math.max(aiMaxConcurrency, Number(process.env.AI_QUEUE_LIMIT || 300));
 const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 512));
+const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
+const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-08-05-usd-revenue-v2";
+const deploymentRevision = "2026-08-14-user-ip-insights-v1";
 
 let storePromise;
 let saveQueue = Promise.resolve();
 let metricsSaveTimer;
 let activeAIRequests = 0;
 const pendingAIRequests = [];
+const ipLookupCache = new Map();
+const pendingIPLookups = new Map();
 const runtimeMetrics = {
   maxActiveAIRequests: 0,
   queueRejected: 0,
@@ -343,11 +348,181 @@ function newId(prefix) {
   return `${prefix}_${randomUUID()}`;
 }
 
-function getOrCreateUser(store, deviceId = "anonymous") {
+function normalizedIPAddress(value) {
+  let candidate = String(value || "").trim();
+  if (!candidate) return "";
+  if (candidate.includes(",")) candidate = candidate.split(",")[0].trim();
+  if (candidate.startsWith("::ffff:")) candidate = candidate.slice(7);
+  if (candidate.startsWith("[") && candidate.includes("]")) candidate = candidate.slice(1, candidate.indexOf("]"));
+  if (isIP(candidate)) return candidate;
+  const ipv4WithPort = candidate.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+  return ipv4WithPort && isIP(ipv4WithPort[1]) ? ipv4WithPort[1] : "";
+}
+
+function clientIPAddress(req) {
+  const candidates = [
+    req.headers["cf-connecting-ip"],
+    req.headers["true-client-ip"],
+    req.headers["x-forwarded-for"],
+    req.headers["x-real-ip"],
+    req.socket?.remoteAddress
+  ];
+  for (const candidate of candidates) {
+    const address = normalizedIPAddress(Array.isArray(candidate) ? candidate[0] : candidate);
+    if (address) return address;
+  }
+  return "";
+}
+
+function requestCountryCode(req) {
+  const value = req.headers["cf-ipcountry"]
+    || req.headers["x-vercel-ip-country"]
+    || req.headers["cloudfront-viewer-country"]
+    || "";
+  const code = String(Array.isArray(value) ? value[0] : value).trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(code) ? code : "";
+}
+
+function isPrivateIPAddress(address) {
+  return address === "127.0.0.1"
+    || address === "::1"
+    || address.startsWith("10.")
+    || address.startsWith("192.168.")
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(address)
+    || address.startsWith("fc")
+    || address.startsWith("fd")
+    || address.startsWith("fe80:");
+}
+
+function appleNetworkAssessment(network = {}) {
+  const text = [network.organization, network.isp, network.domain, network.asn]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  const matched = /(^|\W)apple(\W|$)|apple inc|apple computer/.test(text);
+  return {
+    possibleAppleNetwork: matched,
+    appleNetworkNote: matched
+      ? "Network organization mentions Apple; this does not prove the user is an Apple reviewer."
+      : ""
+  };
+}
+
+function applyNetworkDetails(user, address, details) {
+  if (!user || user.lastIPAddress !== address) return;
+  const assessment = appleNetworkAssessment(details);
+  user.networkCountryCode = details.countryCode || user.networkCountryCode || "";
+  user.networkCountry = details.country || user.networkCountry || "";
+  user.networkRegion = details.region || "";
+  user.networkCity = details.city || "";
+  user.networkTimezone = details.timezone || "";
+  user.networkASN = details.asn || "";
+  user.networkOrganization = details.organization || "";
+  user.networkISP = details.isp || "";
+  user.networkDomain = details.domain || "";
+  user.possibleAppleNetwork = assessment.possibleAppleNetwork;
+  user.appleNetworkNote = assessment.appleNetworkNote;
+  user.networkLookupStatus = "complete";
+  user.networkUpdatedAt = new Date().toISOString();
+  const historyItem = user.ipHistory?.find((item) => item.ip === address);
+  if (historyItem) {
+    historyItem.countryCode = user.networkCountryCode;
+    historyItem.country = user.networkCountry;
+    historyItem.region = user.networkRegion;
+    historyItem.city = user.networkCity;
+    historyItem.asn = user.networkASN;
+    historyItem.organization = user.networkOrganization;
+    historyItem.isp = user.networkISP;
+    historyItem.possibleAppleNetwork = user.possibleAppleNetwork;
+  }
+}
+
+async function lookupIPAddress(address) {
+  const cached = ipLookupCache.get(address);
+  if (cached && Date.now() - cached.cachedAt < 24 * 60 * 60 * 1000) return cached.details;
+  const endpoint = `${ipGeolocationBaseURL.replace(/\/$/, "")}/${encodeURIComponent(address)}`;
+  const response = await fetch(endpoint, {
+    headers: { accept: "application/json", "user-agent": "SquadLive-Backend/1.0" },
+    signal: AbortSignal.timeout(3500)
+  });
+  if (!response.ok) throw new Error(`IP lookup returned HTTP ${response.status}`);
+  const payload = await response.json();
+  if (payload.success === false) throw new Error(payload.message || "IP lookup failed");
+  const details = {
+    countryCode: String(payload.country_code || payload.countryCode || "").toUpperCase(),
+    country: String(payload.country || ""),
+    region: String(payload.region || payload.regionName || ""),
+    city: String(payload.city || ""),
+    timezone: String(payload.timezone?.id || payload.timezone || ""),
+    asn: String(payload.connection?.asn || payload.asn || ""),
+    organization: String(payload.connection?.org || payload.org || payload.organization || ""),
+    isp: String(payload.connection?.isp || payload.isp || ""),
+    domain: String(payload.connection?.domain || payload.domain || "")
+  };
+  ipLookupCache.set(address, { cachedAt: Date.now(), details });
+  return details;
+}
+
+function scheduleIPAddressLookup(store, user, address) {
+  if (!ipGeolocationEnabled || !address || isPrivateIPAddress(address)) return;
+  if (user.networkLookupStatus === "complete"
+      && user.networkUpdatedAt
+      && Date.now() - new Date(user.networkUpdatedAt).getTime() < 7 * 24 * 60 * 60 * 1000) return;
+  if (pendingIPLookups.has(address)) {
+    pendingIPLookups.get(address).then((details) => {
+      applyNetworkDetails(user, address, details);
+      return saveStore(store);
+    }).catch(() => {});
+    return;
+  }
+  user.networkLookupStatus = "pending";
+  const lookup = lookupIPAddress(address);
+  pendingIPLookups.set(address, lookup);
+  lookup.then(async (details) => {
+    applyNetworkDetails(user, address, details);
+    await saveStore(store);
+  }).catch(async (error) => {
+    if (user.lastIPAddress === address) {
+      user.networkLookupStatus = "failed";
+      user.networkLookupError = String(error.message || "Lookup failed").slice(0, 160);
+      user.networkUpdatedAt = new Date().toISOString();
+      await saveStore(store);
+    }
+  }).finally(() => pendingIPLookups.delete(address));
+}
+
+function recordUserNetwork(store, user, req) {
+  if (!user || !req) return;
+  const address = clientIPAddress(req);
+  if (!address) return;
+  const now = new Date().toISOString();
+  const countryCode = requestCountryCode(req);
+  user.firstIPAddress ||= address;
+  user.lastIPAddress = address;
+  user.lastIPSeenAt = now;
+  user.ipHistory ||= [];
+  let item = user.ipHistory.find((entry) => entry.ip === address);
+  if (!item) {
+    item = { ip: address, firstSeenAt: now, lastSeenAt: now };
+    user.ipHistory.unshift(item);
+    user.ipHistory = user.ipHistory.slice(0, 10);
+    user.networkLookupStatus = "pending";
+    user.networkUpdatedAt = null;
+  } else {
+    item.lastSeenAt = now;
+  }
+  if (countryCode) {
+    item.countryCode = countryCode;
+    user.networkCountryCode = countryCode;
+  }
+  scheduleIPAddressLookup(store, user, address);
+}
+
+function getOrCreateUser(store, deviceId = "anonymous", req = null) {
   const existingId = store.userIdsByDevice[deviceId];
   const existing = existingId ? store.users[existingId] : null;
   if (existing) {
     existing.lastSeenAt = new Date().toISOString();
+    recordUserNetwork(store, existing, req);
     recordDailyActiveUser(store, existing.id);
     return existing;
   }
@@ -363,6 +538,7 @@ function getOrCreateUser(store, deviceId = "anonymous") {
     shareRewardDays: {}
   };
   store.users[user.id] = user;
+  recordUserNetwork(store, user, req);
   store.userIdsByDevice[deviceId] = user.id;
   recordDailyMetric(store, "newUsers");
   recordDailyActiveUser(store, user.id);
@@ -448,10 +624,10 @@ function walletOperationId(body) {
   return value.length >= 8 && value.length <= 120 ? value : null;
 }
 
-function walletUser(store, body) {
+function walletUser(store, body, req = null) {
   const deviceId = String(body.deviceId || "").trim();
   if (!deviceId || deviceId.length > 200) return null;
-  return getOrCreateUser(store, deviceId);
+  return getOrCreateUser(store, deviceId, req);
 }
 
 function walletOperationResponse(store, operationId, user) {
@@ -607,6 +783,27 @@ function userPublic(user) {
     isPremium: Boolean(user.isPremium),
     createdAt: user.createdAt,
     lastSeenAt: user.lastSeenAt || user.createdAt
+  };
+}
+
+function adminUserPublic(user) {
+  return {
+    ...userPublic(user),
+    lastIPAddress: user.lastIPAddress || "",
+    lastIPSeenAt: user.lastIPSeenAt || null,
+    networkCountryCode: user.networkCountryCode || "",
+    networkCountry: user.networkCountry || "",
+    networkRegion: user.networkRegion || "",
+    networkCity: user.networkCity || "",
+    networkTimezone: user.networkTimezone || "",
+    networkASN: user.networkASN || "",
+    networkOrganization: user.networkOrganization || "",
+    networkISP: user.networkISP || "",
+    networkDomain: user.networkDomain || "",
+    networkLookupStatus: user.networkLookupStatus || "not_started",
+    networkUpdatedAt: user.networkUpdatedAt || null,
+    possibleAppleNetwork: Boolean(user.possibleAppleNetwork),
+    appleNetworkNote: user.appleNetworkNote || "",
   };
 }
 
@@ -794,7 +991,11 @@ function userDetail(store, userId) {
   const user = store.users[userId];
   if (!user) return null;
   return {
-    user: userPublic(user),
+    user: {
+      ...adminUserPublic(user),
+      firstIPAddress: user.firstIPAddress || "",
+      ipHistory: Array.isArray(user.ipHistory) ? user.ipHistory.slice(0, 10) : []
+    },
     coinTransactions: Object.values(store.coinTransactions)
       .filter((item) => item.userId === userId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -1090,15 +1291,15 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/v1/users/bootstrap") {
     const body = await readJSON(req);
-    const user = getOrCreateUser(store, body.deviceId || "anonymous");
+    const user = getOrCreateUser(store, body.deviceId || "anonymous", req);
     await saveStore(store);
-    return jsonResponse(res, 200, { user });
+    return jsonResponse(res, 200, { user: userPublic(user) });
   }
 
   const userMatch = url.pathname.match(/^\/v1\/users\/([^/]+)$/);
   if (req.method === "GET" && userMatch) {
     const user = store.users[userMatch[1]];
-    return user ? jsonResponse(res, 200, { user }) : jsonResponse(res, 404, { error: "User not found" });
+    return user ? jsonResponse(res, 200, { user: userPublic(user) }) : jsonResponse(res, 404, { error: "User not found" });
   }
 
   if (req.method === "POST" && url.pathname === "/v1/ai/deepseek") {
@@ -1107,10 +1308,11 @@ async function route(req, res) {
     recordDailyMetric(store, "aiRequests");
     let user = body.userId ? store.users[body.userId] : null;
     if (!user && body.deviceId) {
-      user = getOrCreateUser(store, String(body.deviceId).slice(0, 200));
+      user = getOrCreateUser(store, String(body.deviceId).slice(0, 200), req);
     }
     if (user) {
       user.lastSeenAt = new Date().toISOString();
+      recordUserNetwork(store, user, req);
       if (typeof body.userName === "string" && body.userName.trim()) {
         user.displayName = body.userName.trim().slice(0, 80);
       }
@@ -1167,7 +1369,7 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/v1/wallet/balance") {
     const body = await readJSON(req);
-    const user = walletUser(store, body);
+    const user = walletUser(store, body, req);
     if (!user) return jsonResponse(res, 400, { error: "Invalid device account" });
     await saveStore(store);
     return jsonResponse(res, 200, { user: userPublic(user) });
@@ -1181,7 +1383,7 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/v1/audience/commit") {
     const body = await readJSON(req);
-    const user = walletUser(store, body);
+    const user = walletUser(store, body, req);
     if (!user) return jsonResponse(res, 400, { error: "Invalid device account" });
     const operationId = walletOperationId(body);
     if (!operationId) return jsonResponse(res, 400, { error: "Invalid wallet operation ID" });
@@ -1313,7 +1515,7 @@ async function route(req, res) {
       return jsonResponse(res, 403, { error: "Transaction does not belong to this account" });
     }
 
-    const user = getOrCreateUser(store, deviceId);
+    const user = getOrCreateUser(store, deviceId, req);
     const existingClaim = store.appleTransactions[transactionId];
     if (existingClaim) {
       if (existingClaim.userId !== user.id) {
@@ -1383,7 +1585,7 @@ async function route(req, res) {
       return jsonResponse(res, 403, { error: "Subscription does not belong to this account" });
     }
 
-    const user = getOrCreateUser(store, deviceId);
+    const user = getOrCreateUser(store, deviceId, req);
     const existingClaim = store.appleTransactions[transactionId];
     if (existingClaim && existingClaim.userId !== user.id) {
       return jsonResponse(res, 409, { error: "Transaction has already been claimed" });
@@ -1482,7 +1684,7 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/v1/rewards/share-submissions") {
     const body = await readJSON(req);
-    const user = walletUser(store, body);
+    const user = walletUser(store, body, req);
     if (!user) return jsonResponse(res, 400, { error: "Invalid device account" });
     const operationId = walletOperationId(body);
     if (!operationId) return jsonResponse(res, 400, { error: "Invalid wallet operation ID" });
@@ -1601,7 +1803,7 @@ async function route(req, res) {
       const query = (url.searchParams.get("query") || "").trim().toLowerCase();
       const users = Object.values(store.users)
         .map((user) => ({
-          ...userPublic(user),
+          ...adminUserPublic(user),
           aiConversationCount: Object.values(store.aiConversations).filter((item) => item.userId === user.id).length
         }))
         .filter((user) => {

@@ -26,10 +26,13 @@ The blueprint declares:
 - Secret `APPLE_APP_ID` containing the numeric App Store app ID
 - A 1 GB persistent disk mounted at `/var/data`
 - `AI_MAX_CONCURRENCY=40`, `AI_QUEUE_LIMIT=300`, and `INSTANCE_MEMORY_MB=512`
+- `IP_GEOLOCATION_ENABLED=true` to resolve user IP addresses into country, city, ASN, and network organization for the protected admin dashboard
 
 Confirm these are present in the Render dashboard after deployment. If the service is downgraded to a Free instance without a persistent disk, local JSON data can be lost.
 
 The admin dashboard at `/admin` includes daily request and AI usage, average/max AI latency, timeout and provider failure counts, queue pressure, process memory, disk usage, upgrade warnings, configurable new-user starting coins, and audited manual user coin adjustments. The current JSON store is protected against same-process concurrent overwrites, but PostgreSQL remains the recommended next step before running multiple instances.
+
+The user dashboard stores the most recent IP and up to 10 recent IP addresses for operational analytics and abuse prevention. Country and network organization lookup runs asynchronously through `IP_GEOLOCATION_BASE_URL` (default: `https://ipwho.is`) and never blocks purchases or AI replies. A “possible Apple network” badge means only that the resolved ISP/organization contains the word Apple; it does not identify an App Review employee. Set `IP_GEOLOCATION_ENABLED=false` to disable third-party IP enrichment while retaining proxy-provided IP/country information.
 
 ## Basic Deployment
 
