@@ -788,6 +788,8 @@
               <div>Apple 网络判断：${data.user.possibleAppleNetwork ? '<span class="pill vip">网络组织疑似 Apple</span>' : '<span class="pill">未发现 Apple 标识</span>'}</div>
               <div>IP 更新时间：<strong>${time(data.user.lastIPSeenAt)}</strong></div>
               <div>金币数量：<strong>${data.user.coins}</strong></div>
+              <div>已开始直播：<strong>${data.user.liveSessionsStarted || 0} 场</strong></div>
+              <div>首场免费：<strong>${data.user.firstLiveFreeAvailable ? "可用" : (data.user.firstLiveFreeUsedAt ? `已使用（${time(data.user.firstLiveFreeUsedAt)}）` : "不适用")}</strong></div>
               <div>VIP 状态：<strong>${data.user.isPremium ? "VIP 用户" : "普通用户"}</strong></div>
               <div>注册时间：<strong>${time(data.user.createdAt)}</strong></div>
               <div>最后活跃：<strong>${time(data.user.lastSeenAt)}</strong></div>

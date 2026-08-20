@@ -35,7 +35,7 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-08-14-user-ip-insights-v1";
+const deploymentRevision = "2026-08-20-first-live-free-v1";
 
 let storePromise;
 let saveQueue = Promise.resolve();
@@ -233,6 +233,8 @@ async function loadStore() {
   for (const user of Object.values(store.users)) {
     user.coins = Math.max(0, Number(user.coins ?? 300));
     user.shareRewardDays ||= {};
+    if (typeof user.firstLiveFreeEligible !== "boolean") user.firstLiveFreeEligible = false;
+    user.liveSessionsStarted = Math.max(0, Number(user.liveSessionsStarted ?? 1));
     if (user.deviceId) store.userIdsByDevice[user.deviceId] = user.id;
   }
   let migratedCoinRevenue = 0;
@@ -533,6 +535,8 @@ function getOrCreateUser(store, deviceId = "anonymous", req = null) {
     deviceId,
     coins: initialCoins,
     isPremium: false,
+    firstLiveFreeEligible: true,
+    liveSessionsStarted: 0,
     createdAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
     shareRewardDays: {}
@@ -642,6 +646,10 @@ function recordWalletOperation(store, input) {
     type: input.type,
     coins: Number(input.coins || 0),
     balanceAfter: Number(input.balanceAfter || 0),
+    viewers: Number(input.viewers || 0),
+    context: input.context || "",
+    regularCost: Number(input.regularCost ?? Math.abs(Number(input.coins || 0))),
+    firstLiveFree: Boolean(input.firstLiveFree),
     createdAt: new Date().toISOString(),
     note: input.note || ""
   };
@@ -781,6 +789,8 @@ function userPublic(user) {
     displayName: user.displayName || "",
     coins: user.coins,
     isPremium: Boolean(user.isPremium),
+    liveSessionsStarted: Math.max(0, Number(user.liveSessionsStarted || 0)),
+    firstLiveFreeAvailable: Boolean(user.firstLiveFreeEligible && !user.firstLiveFreeUsedAt && Number(user.liveSessionsStarted || 0) === 0),
     createdAt: user.createdAt,
     lastSeenAt: user.lastSeenAt || user.createdAt
   };
@@ -804,6 +814,8 @@ function adminUserPublic(user) {
     networkUpdatedAt: user.networkUpdatedAt || null,
     possibleAppleNetwork: Boolean(user.possibleAppleNetwork),
     appleNetworkNote: user.appleNetworkNote || "",
+    firstLiveFreeEligible: Boolean(user.firstLiveFreeEligible),
+    firstLiveFreeUsedAt: user.firstLiveFreeUsedAt || null,
   };
 }
 
@@ -1389,24 +1401,84 @@ async function route(req, res) {
     if (!operationId) return jsonResponse(res, 400, { error: "Invalid wallet operation ID" });
     const viewers = Math.max(0, Number(body.viewers || 0));
     const context = body.context === "live" ? "live" : "lobby";
-    const cost = context === "live" ? liveViewerPacks.get(viewers) : viewerCost(viewers);
-    if (typeof cost !== "number" || cost <= 0) {
+    const regularCost = context === "live" ? liveViewerPacks.get(viewers) : viewerCost(viewers);
+    if (typeof regularCost !== "number" || regularCost < 0 || (context === "live" && regularCost === 0)) {
       return jsonResponse(res, 400, { error: "Unsupported viewer package" });
     }
+
+    const existingOperation = walletOperationResponse(store, operationId, user);
+    if (existingOperation) {
+      return jsonResponse(res, 200, {
+        user: userPublic(user),
+        viewers: existingOperation.viewers || viewers,
+        cost: Math.abs(existingOperation.coins),
+        regularCost: existingOperation.regularCost ?? regularCost,
+        firstLiveFree: Boolean(existingOperation.firstLiveFree),
+        duplicate: true,
+        operationId
+      });
+    }
+    if (store.walletOperations[operationId] && store.walletOperations[operationId].userId !== user.id) {
+      return jsonResponse(res, 409, { error: "Wallet operation belongs to another account" });
+    }
+
+    const firstLiveFree = context === "lobby"
+      && user.firstLiveFreeEligible === true
+      && !user.firstLiveFreeUsedAt
+      && Number(user.liveSessionsStarted || 0) === 0;
+    const cost = firstLiveFree ? 0 : regularCost;
     let result;
     try {
-      result = spendWalletCoins(store, user, cost, operationId, `${context}:${viewers} viewers`);
+      if (cost > 0) {
+        result = spendWalletCoins(store, user, cost, operationId, `${context}:${viewers} viewers`);
+        Object.assign(result.operation, { viewers, context, regularCost, firstLiveFree: false });
+      } else {
+        result = {
+          operation: recordWalletOperation(store, {
+            id: operationId,
+            userId: user.id,
+            type: firstLiveFree ? "first_live_free" : "live_session_start",
+            coins: 0,
+            balanceAfter: user.coins,
+            viewers,
+            context,
+            regularCost,
+            firstLiveFree,
+            note: firstLiveFree
+              ? `First live free: waived ${regularCost} coins for ${viewers} viewers`
+              : `${context}:${viewers} viewers`
+          }),
+          duplicate: false
+        };
+      }
     } catch (error) {
       if (error.status === 402) {
-        return jsonResponse(res, 402, { error: error.message, cost, coins: error.coins });
+        return jsonResponse(res, 402, { error: error.message, cost, regularCost, coins: error.coins });
       }
       throw error;
+    }
+    if (context === "lobby" && !result.duplicate) {
+      user.liveSessionsStarted = Math.max(0, Number(user.liveSessionsStarted || 0)) + 1;
+      if (firstLiveFree) {
+        user.firstLiveFreeUsedAt = new Date().toISOString();
+        recordCoinTransaction(store, {
+          userId: user.id,
+          type: "first_live_free",
+          coins: 0,
+          amountCents: 0,
+          source: "promotion",
+          note: `Waived ${regularCost} coins for ${viewers} viewers`,
+          platformTransactionId: operationId
+        });
+      }
     }
     await saveStore(store);
     return jsonResponse(res, 200, {
       user: userPublic(user),
       viewers,
       cost,
+      regularCost,
+      firstLiveFree,
       duplicate: result.duplicate,
       operationId
     });

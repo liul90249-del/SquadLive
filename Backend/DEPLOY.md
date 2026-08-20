@@ -171,9 +171,12 @@ The backend is the source of truth for coin balances after this deployment:
 - `POST /v1/wallet/balance` returns the current server balance for the device account.
 - Verified StoreKit claims return the complete server balance instead of asking the client to add coins locally.
 - Lobby and in-live audience purchases are charged through `POST /v1/audience/commit`.
+- A newly created user receives one server-authoritative free lobby start; the first live is marked as used when the start is committed, and lobby audience costs apply from the second live onward. In-live viewer purchases are never covered by this promotion.
 - Share rewards are granted through `POST /v1/rewards/share-submissions`.
 - Wallet operation IDs make retries idempotent and prevent duplicate charges or duplicate daily rewards.
 - The first valid share submission of each calendar day grants 100 coins. Daily reset uses `REWARD_TIME_ZONE` and defaults to `Asia/Shanghai`.
 - If the backend is unavailable, paid actions are blocked and the cached balance is display-only.
+
+The first-live promotion is bound to the backend user account, not local app storage. Existing users migrated from older store data are intentionally ineligible, so reinstalling the app cannot reset the promotion.
 
 Balances that existed only in an older app's local preferences are intentionally not trusted or uploaded. Verified purchases and server-recorded rewards remain in the backend ledger; manually altered local balances are replaced during the next successful wallet sync.
