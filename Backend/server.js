@@ -35,7 +35,7 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-08-20-live-engagement-funnel-v1";
+const deploymentRevision = "2026-08-21-live-start-reliability-v1";
 
 let storePromise;
 let saveQueue = Promise.resolve();
@@ -291,7 +291,8 @@ function dailyUsage(store, date = new Date()) {
     liveStartedUserIds: {},
     liveEngagedUserIds: {},
     liveSessionsEnded: 0,
-    liveDurationTotalSeconds: 0
+    liveDurationTotalSeconds: 0,
+    liveStartFailures: 0
   };
   return store.dailyUsage[day];
 }
@@ -827,11 +828,13 @@ function adminUserPublic(user) {
 }
 
 function userLiveSummary(store, userId) {
-  const sessions = Object.values(store.liveSessions)
+  const allSessions = Object.values(store.liveSessions)
     .filter((session) => session.userId === userId)
-    .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
+    .sort((a, b) => String(b.startedAt || b.startFailedAt || b.createdAt || "").localeCompare(String(a.startedAt || a.startFailedAt || a.createdAt || "")));
+  const sessions = allSessions.filter((session) => session.startedAt);
   const engagedSessions = sessions.filter((session) => session.userInteracted);
   const latest = sessions[0];
+  const failedSessions = allSessions.filter((session) => session.startFailureReason);
   return {
     liveSessionCount: sessions.length,
     engagedLiveSessionCount: engagedSessions.length,
@@ -839,7 +842,10 @@ function userLiveSummary(store, userId) {
     lastLiveAt: latest?.startedAt || null,
     lastLiveDurationSeconds: Math.max(0, Number(latest?.durationSeconds || 0)),
     lastLiveUserInteracted: Boolean(latest?.userInteracted),
-    lastLiveAIReplyDisplayed: Boolean(latest?.aiReplyDisplayed)
+    lastLiveAIReplyDisplayed: Boolean(latest?.aiReplyDisplayed),
+    liveStartFailureCount: failedSessions.reduce((sum, session) => sum + Math.max(1, Number(session.startFailureCount || 0)), 0),
+    lastLiveStartFailureAt: failedSessions[0]?.startFailedAt || null,
+    lastLiveStartFailureReason: failedSessions[0]?.startFailureReason || ""
   };
 }
 
@@ -870,6 +876,11 @@ function publicDailyUsage(store) {
       aiUnavailable: Number(usage.aiUnavailable || 0),
       aiQueueRejected: Number(usage.aiQueueRejected || 0),
       peakAIConcurrency: Number(usage.peakAIConcurrency || 0),
+      liveStartedUsers: Object.keys(usage.liveStartedUserIds || {}).length,
+      liveEngagedUsers: Object.keys(usage.liveEngagedUserIds || {}).length,
+      liveSessionsEnded: Number(usage.liveSessionsEnded || 0),
+      liveDurationTotalSeconds: Number(usage.liveDurationTotalSeconds || 0),
+      liveStartFailures: Number(usage.liveStartFailures || 0),
       averageAILatencyMs: usage.aiRequests
         ? Math.round(Number(usage.aiLatencyTotalMs || 0) / Number(usage.aiRequests))
         : 0,
@@ -984,9 +995,10 @@ async function adminOverview(store) {
       .filter(Boolean)
   );
   const liveSessions = Object.values(store.liveSessions || {});
-  const todayLiveSessions = liveSessions.filter((session) => isToday(session.startedAt));
-  const liveUserIds = new Set(liveSessions.map((session) => session.userId).filter(Boolean));
-  const engagedLiveUserIds = new Set(liveSessions.filter((session) => session.userInteracted).map((session) => session.userId).filter(Boolean));
+  const startedLiveSessions = liveSessions.filter((session) => session.startedAt);
+  const todayLiveSessions = startedLiveSessions.filter((session) => isToday(session.startedAt));
+  const liveUserIds = new Set(startedLiveSessions.map((session) => session.userId).filter(Boolean));
+  const engagedLiveUserIds = new Set(startedLiveSessions.filter((session) => session.userInteracted).map((session) => session.userId).filter(Boolean));
   const todayLiveUserIds = new Set(todayLiveSessions.map((session) => session.userId).filter(Boolean));
   const todayEngagedLiveUserIds = new Set(todayLiveSessions.filter((session) => session.userInteracted).map((session) => session.userId).filter(Boolean));
   const rechargeByCurrency = rechargeTransactions
@@ -1024,6 +1036,8 @@ async function adminOverview(store) {
     engagedLiveUsersToday: todayEngagedLiveUserIds.size,
     liveEngagementPercent: liveUserIds.size ? Number(((engagedLiveUserIds.size / liveUserIds.size) * 100).toFixed(1)) : 0,
     liveEngagementPercentToday: todayLiveUserIds.size ? Number(((todayEngagedLiveUserIds.size / todayLiveUserIds.size) * 100).toFixed(1)) : 0,
+    liveStartFailureCount: Object.values(store.liveEvents || {}).filter((event) => event.type === "live_start_failed").length,
+    liveStartFailuresToday: Object.values(store.liveEvents || {}).filter((event) => event.type === "live_start_failed" && isToday(event.createdAt)).length,
     settings: {
       initialCoins: Number(store.settings?.initialCoins ?? 300)
     },
@@ -1415,7 +1429,7 @@ async function route(req, res) {
     const eventId = String(body.eventId || "").slice(0, 100);
     const sessionId = String(body.sessionId || "").slice(0, 100);
     const type = String(body.type || "");
-    const supportedTypes = new Set(["live_started", "user_spoke", "user_typed", "ai_reply_displayed", "live_ended"]);
+    const supportedTypes = new Set(["live_started", "live_start_failed", "user_spoke", "user_typed", "ai_reply_displayed", "live_ended"]);
     if (!eventId || !sessionId || !supportedTypes.has(type)) {
       return jsonResponse(res, 400, { error: "Invalid live event" });
     }
@@ -1430,7 +1444,8 @@ async function route(req, res) {
     const session = existingSession || {
       id: sessionId,
       userId: user.id,
-      startedAt: now,
+      createdAt: now,
+      startedAt: null,
       durationSeconds: 0,
       userInteracted: false,
       aiReplyDisplayed: false
@@ -1439,6 +1454,25 @@ async function route(req, res) {
     if (type === "live_started") {
       session.startedAt ||= now;
       dailyUsage(store).liveStartedUserIds[user.id] = true;
+      if (user.firstLiveFreeEligible === true && !user.firstLiveFreeUsedAt && Number(user.liveSessionsStarted || 0) === 0) {
+        user.liveSessionsStarted = 1;
+        user.firstLiveFreeUsedAt = now;
+        recordCoinTransaction(store, {
+          userId: user.id,
+          type: "first_live_free",
+          coins: 0,
+          amountCents: 0,
+          source: "promotion",
+          note: "First live started while audience commit was unavailable",
+          platformTransactionId: sessionId
+        });
+      }
+    }
+    if (type === "live_start_failed") {
+      session.startFailedAt = now;
+      session.startFailureReason = String(body.reason || "unknown").trim().slice(0, 240);
+      session.startFailureCount = Math.max(0, Number(session.startFailureCount || 0)) + 1;
+      dailyUsage(store).liveStartFailures = Number(dailyUsage(store).liveStartFailures || 0) + 1;
     }
     if (type === "user_spoke" || type === "user_typed") {
       session.userInteracted = true;
@@ -1463,6 +1497,10 @@ async function route(req, res) {
       }
     }
     store.liveEvents[eventId] = { id: eventId, sessionId, userId: user.id, type, createdAt: now };
+    const liveEventIds = Object.keys(store.liveEvents);
+    for (const oldEventId of liveEventIds.slice(0, Math.max(0, liveEventIds.length - 20_000))) {
+      delete store.liveEvents[oldEventId];
+    }
     user.lastSeenAt = now;
     recordDailyActiveUser(store, user.id);
     await saveStore(store);
