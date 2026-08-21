@@ -679,7 +679,9 @@
         ["PRO 用户", `${overview.premiumUsers} · ${overview.premiumConversionPercent}%`, overview.premiumUsersToday, "累计显示当前 PRO 用户数及 PRO 用户数 ÷ 总用户数 × 100%；今日显示当天开始订阅的去重用户数。", "当前 / 转化率", "今日新增"],
         ["充值订单", overview.rechargeCount, overview.rechargeCountToday, "类型为 coin_purchase 的金币购买流水数量；人工加币和分享奖励不计入。", "累计", "今日"],
         ["充值金额（USD）", money(overview.rechargeAmountCents, "USD"), money(overview.rechargeAmountCentsToday, "USD"), "累计与今日金额均按金币商品 ID 的固定美元售价计算，不使用 Apple 返回的人民币本地化价格。", "累计", "今日"],
-        ["AI 对话", overview.aiConversationCount, overview.aiConversationsToday, "一次已保存的用户消息和 AI 回复记为一条 AI 对话记录。", "累计", "今日"],
+        ["开播用户", overview.liveUserCount, overview.liveUsersToday, "至少提交过一次 live_started 事件的去重用户数。需要安装包含直播漏斗上报的新 App 版本后才开始统计。", "累计", "今日"],
+        ["直播互动率", `${overview.liveEngagementPercent}%`, `${overview.liveEngagementPercentToday}%`, "至少说话或发送文字的开播用户数 ÷ 开播用户数 × 100%。系统主动欢迎不算用户互动。", "累计", "今日"],
+        ["AI 对话", overview.aiConversationCount, overview.aiConversationsToday, "用户主动说话或发送文字后保存的 AI 回复数量；系统开场欢迎不计入。", "累计", "今日"],
         ["分享提交", overview.rewardSubmissionCount, overview.rewardSubmissionsToday, "用户提交的分享奖励申请数量，包含待审核、已通过和已拒绝状态。", "累计", "今日"],
         ["待审核分享", overview.pendingRewardSubmissions, overview.pendingRewardSubmissionsToday, "累计为当前仍处于 pending 状态的申请；今日为今天提交且仍待审核的申请。", "当前待审核", "今日新增"]
       ];
@@ -738,7 +740,7 @@
 
     function renderUsers(targetId, users) {
       document.getElementById(targetId).innerHTML = table(
-        ["用户", "设备 ID", "IP / 地区", "金币", "VIP", "AI 对话", "注册时间", "最后活跃"],
+        ["用户", "设备 ID", "IP / 地区", "金币", "VIP", "直播/互动", "AI 对话", "注册时间", "最后活跃"],
         users.map((user) => `
           <tr onclick="loadUserDetail('${user.id}')">
             <td>${user.displayName ? `<strong>${escapeHTML(user.displayName)}</strong><br>` : ""}<code title="${user.id}">${user.id}</code></td>
@@ -750,6 +752,7 @@
             </td>
             <td>${user.coins}</td>
             <td>${user.isPremium ? '<span class="pill vip">VIP</span>' : '<span class="pill">普通</span>'}</td>
+            <td>${user.liveSessionCount || 0} / ${user.engagedLiveSessionCount || 0}${user.liveSessionCount ? `<br><span class="pill ${user.lastLiveUserInteracted ? "active" : ""}">${user.lastLiveUserInteracted ? "最近有互动" : "最近未互动"}</span>` : ""}</td>
             <td><span class="pill active">${user.aiConversationCount || 0}</span></td>
             <td>${time(user.createdAt)}</td>
             <td>${time(user.lastSeenAt)}</td>
@@ -789,6 +792,9 @@
               <div>IP 更新时间：<strong>${time(data.user.lastIPSeenAt)}</strong></div>
               <div>金币数量：<strong>${data.user.coins}</strong></div>
               <div>已开始直播：<strong>${data.user.liveSessionsStarted || 0} 场</strong></div>
+              <div>已上报直播：<strong>${data.user.liveSessionCount || 0} 场</strong></div>
+              <div>有用户互动：<strong>${data.user.engagedLiveSessionCount || 0} 场 · ${data.user.liveEngagementPercent || 0}%</strong></div>
+              <div>最近直播：<strong>${data.user.lastLiveAt ? `${time(data.user.lastLiveAt)} · ${duration(data.user.lastLiveDurationSeconds || 0)} · ${data.user.lastLiveUserInteracted ? "有互动" : "未互动"}` : "暂无新版本漏斗数据"}</strong></div>
               <div>首场免费：<strong>${data.user.firstLiveFreeAvailable ? "可用" : (data.user.firstLiveFreeUsedAt ? `已使用（${time(data.user.firstLiveFreeUsedAt)}）` : "不适用")}</strong></div>
               <div>VIP 状态：<strong>${data.user.isPremium ? "VIP 用户" : "普通用户"}</strong></div>
               <div>注册时间：<strong>${time(data.user.createdAt)}</strong></div>

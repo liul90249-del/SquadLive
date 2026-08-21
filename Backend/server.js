@@ -35,7 +35,7 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-08-20-first-live-free-v1";
+const deploymentRevision = "2026-08-20-live-engagement-funnel-v1";
 
 let storePromise;
 let saveQueue = Promise.resolve();
@@ -226,6 +226,8 @@ async function loadStore() {
   store.walletOperations ||= {};
   store.vipSubscriptions ||= {};
   store.aiConversations ||= {};
+  store.liveSessions ||= {};
+  store.liveEvents ||= {};
   store.dailyUsage ||= {};
   store.userIdsByDevice ||= {};
   store.settings ||= {};
@@ -285,7 +287,11 @@ function dailyUsage(store, date = new Date()) {
     aiLatencyTotalMs: 0,
     aiLatencyMaxMs: 0,
     peakAIConcurrency: 0,
-    activeUserIds: {}
+    activeUserIds: {},
+    liveStartedUserIds: {},
+    liveEngagedUserIds: {},
+    liveSessionsEnded: 0,
+    liveDurationTotalSeconds: 0
   };
   return store.dailyUsage[day];
 }
@@ -771,6 +777,7 @@ function recordAIConversation(store, input) {
     aiText: String(input.aiText || "").trim().slice(0, 1200),
     listenerName: String(input.listenerName || "AI Friend").slice(0, 80),
     source: input.source || "unknown",
+    interactionType: input.interactionType || "user",
     createdAt: new Date().toISOString()
   };
   store.aiConversations[conversation.id] = conversation;
@@ -816,6 +823,23 @@ function adminUserPublic(user) {
     appleNetworkNote: user.appleNetworkNote || "",
     firstLiveFreeEligible: Boolean(user.firstLiveFreeEligible),
     firstLiveFreeUsedAt: user.firstLiveFreeUsedAt || null,
+  };
+}
+
+function userLiveSummary(store, userId) {
+  const sessions = Object.values(store.liveSessions)
+    .filter((session) => session.userId === userId)
+    .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
+  const engagedSessions = sessions.filter((session) => session.userInteracted);
+  const latest = sessions[0];
+  return {
+    liveSessionCount: sessions.length,
+    engagedLiveSessionCount: engagedSessions.length,
+    liveEngagementPercent: sessions.length ? Number(((engagedSessions.length / sessions.length) * 100).toFixed(1)) : 0,
+    lastLiveAt: latest?.startedAt || null,
+    lastLiveDurationSeconds: Math.max(0, Number(latest?.durationSeconds || 0)),
+    lastLiveUserInteracted: Boolean(latest?.userInteracted),
+    lastLiveAIReplyDisplayed: Boolean(latest?.aiReplyDisplayed)
   };
 }
 
@@ -946,6 +970,7 @@ async function adminOverview(store) {
   const coinTransactions = Object.values(store.coinTransactions);
   const vipSubscriptions = Object.values(store.vipSubscriptions);
   const aiConversations = Object.values(store.aiConversations);
+  const userAIConversations = aiConversations.filter((item) => item.interactionType !== "system_opening");
   const rewardSubmissions = Object.values(store.rewardSubmissions);
   const daily = publicDailyUsage(store);
   const resources = await resourceSnapshot();
@@ -958,6 +983,12 @@ async function adminOverview(store) {
       .map((item) => item.userId)
       .filter(Boolean)
   );
+  const liveSessions = Object.values(store.liveSessions || {});
+  const todayLiveSessions = liveSessions.filter((session) => isToday(session.startedAt));
+  const liveUserIds = new Set(liveSessions.map((session) => session.userId).filter(Boolean));
+  const engagedLiveUserIds = new Set(liveSessions.filter((session) => session.userInteracted).map((session) => session.userId).filter(Boolean));
+  const todayLiveUserIds = new Set(todayLiveSessions.map((session) => session.userId).filter(Boolean));
+  const todayEngagedLiveUserIds = new Set(todayLiveSessions.filter((session) => session.userInteracted).map((session) => session.userId).filter(Boolean));
   const rechargeByCurrency = rechargeTransactions
     .reduce((totals, item) => {
       const currency = String(item.currency || "UNKNOWN").toUpperCase();
@@ -985,8 +1016,14 @@ async function adminOverview(store) {
     premiumConversionPercent: users.length
       ? Number(((users.filter((user) => user.isPremium).length / users.length) * 100).toFixed(1))
       : 0,
-    aiConversationCount: aiConversations.length,
-    aiConversationsToday: aiConversations.filter((item) => isToday(item.createdAt)).length,
+    aiConversationCount: userAIConversations.length,
+    aiConversationsToday: userAIConversations.filter((item) => isToday(item.createdAt)).length,
+    liveUserCount: liveUserIds.size,
+    liveUsersToday: todayLiveUserIds.size,
+    engagedLiveUserCount: engagedLiveUserIds.size,
+    engagedLiveUsersToday: todayEngagedLiveUserIds.size,
+    liveEngagementPercent: liveUserIds.size ? Number(((engagedLiveUserIds.size / liveUserIds.size) * 100).toFixed(1)) : 0,
+    liveEngagementPercentToday: todayLiveUserIds.size ? Number(((todayEngagedLiveUserIds.size / todayLiveUserIds.size) * 100).toFixed(1)) : 0,
     settings: {
       initialCoins: Number(store.settings?.initialCoins ?? 300)
     },
@@ -1005,6 +1042,7 @@ function userDetail(store, userId) {
   return {
     user: {
       ...adminUserPublic(user),
+      ...userLiveSummary(store, userId),
       firstIPAddress: user.firstIPAddress || "",
       ipHistory: Array.isArray(user.ipHistory) ? user.ipHistory.slice(0, 10) : []
     },
@@ -1362,11 +1400,73 @@ async function route(req, res) {
         userText: body.text,
         aiText: result.answer,
         listenerName: body.listener?.name,
-        source: result.source
+        source: result.source,
+        interactionType: body.interactionType === "system_opening" ? "system_opening" : "user"
       });
       await saveStore(store);
     }
     return jsonResponse(res, 200, result);
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/live/events") {
+    const body = await readJSON(req);
+    const user = walletUser(store, body, req);
+    if (!user) return jsonResponse(res, 400, { error: "Invalid device account" });
+    const eventId = String(body.eventId || "").slice(0, 100);
+    const sessionId = String(body.sessionId || "").slice(0, 100);
+    const type = String(body.type || "");
+    const supportedTypes = new Set(["live_started", "user_spoke", "user_typed", "ai_reply_displayed", "live_ended"]);
+    if (!eventId || !sessionId || !supportedTypes.has(type)) {
+      return jsonResponse(res, 400, { error: "Invalid live event" });
+    }
+    if (store.liveEvents[eventId]) {
+      return jsonResponse(res, 200, { received: true, duplicate: true });
+    }
+    const existingSession = store.liveSessions[sessionId];
+    if (existingSession && existingSession.userId !== user.id) {
+      return jsonResponse(res, 409, { error: "Live session belongs to another account" });
+    }
+    const now = new Date().toISOString();
+    const session = existingSession || {
+      id: sessionId,
+      userId: user.id,
+      startedAt: now,
+      durationSeconds: 0,
+      userInteracted: false,
+      aiReplyDisplayed: false
+    };
+    store.liveSessions[sessionId] = session;
+    if (type === "live_started") {
+      session.startedAt ||= now;
+      dailyUsage(store).liveStartedUserIds[user.id] = true;
+    }
+    if (type === "user_spoke" || type === "user_typed") {
+      session.userInteracted = true;
+      session.firstInteractionAt ||= now;
+      session.firstInteractionType ||= type;
+      dailyUsage(store).liveEngagedUserIds[user.id] = true;
+    }
+    if (type === "ai_reply_displayed") {
+      session.aiReplyDisplayed = true;
+      session.firstAIReplyAt ||= now;
+    }
+    if (type === "live_ended") {
+      const previousDuration = Math.max(0, Number(session.durationSeconds || 0));
+      const durationSeconds = Math.max(previousDuration, Math.min(86_400, Number(body.durationSeconds || 0)));
+      session.durationSeconds = durationSeconds;
+      session.endedAt = now;
+      const usage = dailyUsage(store);
+      if (!session.endCountedAt) {
+        usage.liveSessionsEnded = Number(usage.liveSessionsEnded || 0) + 1;
+        usage.liveDurationTotalSeconds = Number(usage.liveDurationTotalSeconds || 0) + durationSeconds;
+        session.endCountedAt = now;
+      }
+    }
+    store.liveEvents[eventId] = { id: eventId, sessionId, userId: user.id, type, createdAt: now };
+    user.lastSeenAt = now;
+    recordDailyActiveUser(store, user.id);
+    await saveStore(store);
+    return jsonResponse(res, 200, { received: true, duplicate: false });
   }
 
   if (req.method === "POST" && url.pathname === "/v1/activity/ping") {
@@ -1876,7 +1976,8 @@ async function route(req, res) {
       const users = Object.values(store.users)
         .map((user) => ({
           ...adminUserPublic(user),
-          aiConversationCount: Object.values(store.aiConversations).filter((item) => item.userId === user.id).length
+          ...userLiveSummary(store, user.id),
+          aiConversationCount: Object.values(store.aiConversations).filter((item) => item.userId === user.id && item.interactionType !== "system_opening").length
         }))
         .filter((user) => {
           if (!query) return true;
