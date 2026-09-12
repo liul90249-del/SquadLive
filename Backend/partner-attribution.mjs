@@ -3,7 +3,7 @@ const sha=s=>createHash('sha256').update(s).digest('hex');
 const fail=(message,status=409)=>Object.assign(new Error(message),{status});
 // Only call recordVerified after Apple's SignedDataVerifier succeeds.
 // Durable records share the existing single-process store and its serialized writes.
-export function createPartnerAttribution({getStore,saveStore,client,product,bundleId,skus,now=()=>Date.now()}) {
+export function createPartnerAttribution({getStore,saveStore,client,product,bundleId,skus,verifyEligibility,now=()=>Date.now()}) {
  let draining=false;
  const hasWalletPurchase=(s,identity)=>{
   const walletId=identity.walletUserId||identity.customerId;
@@ -49,6 +49,10 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
    if(!old){
     if(hasWalletPurchase(s,identity))throw fail('A referral must be bound before your first purchase');
    }
+   if(!old&&product==='nutriscan'){
+    if(typeof verifyEligibility!=='function')throw fail('NutriScan eligibility verification is not configured',503);
+    if((await verifyEligibility(identity))?.verified!==true)throw fail('NutriScan eligibility verification is incomplete',503);
+   }
    // Reserve before remote calls so concurrent anonymous identities cannot bind one wallet twice.
    s.partnerWalletOwners[walletId]=identity.customerId;await saveStore(s);
    await client.identify(identity.customerId,identity.registeredAt);
@@ -58,6 +62,12 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
    if(!b||b.customer_id!==identity.customerId||b.product!==product)throw fail('Invalid attribution response',502);
    s.partnerBindings[identity.customerId]={code,binding_id:b.id,partner_id:b.partner_id,bound_at:b.bound_at,expires_at:b.expires_at,commission_bps:b.commission_bps};
    if(!old && hasWalletPurchase(s,identity)){s.partnerBindings[identity.customerId].review_required=true;await saveStore(s);throw fail('Purchase occurred during binding; manual review required')}
+   if(!old&&product==='nutriscan'){
+    try{if((await verifyEligibility(identity))?.verified!==true)throw fail('Eligibility verification incomplete',503)}catch(error){
+     s.partnerBindings[identity.customerId].review_required=true;await saveStore(s);
+     throw fail('Eligibility changed during binding; manual review required');
+    }
+   }
    await saveStore(s);
    await client.activate({customer_id:identity.customerId,code,is_new_customer:true,is_self_referral:false});
    return this.status(identity);

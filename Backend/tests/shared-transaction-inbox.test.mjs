@@ -58,3 +58,17 @@ test('App evidence rejects fake signatures, another app, missing identity and fu
  await assert.rejects(f.service.receive('nutriscan','app-transactions','x'.repeat(150)),/signature/);
  assert.deepEqual(await readdir(f.options.directory),[]);
 });
+test('Apple history is stored durably and a paid history can never be reset by replay',async t=>{
+ const f=await fixture(t);let paid=true;
+ const create=()=>createTransactionInbox({...f.options,historyFactory:()=>({check:async()=>({complete:true,has_paid:paid,amount_unknown:false,eligible:!paid,checked_at:Date.now()})})});
+ const service=create();assert.equal((await service.refreshVerifiedAppHistory('nutriscan',appProof,'signed',{})).history_status,'previously_paid');
+ paid=false;assert.equal((await create().refreshVerifiedAppHistory('nutriscan',appProof,'replay',{})).history_status,'previously_paid');
+ const file=join(f.options.directory,'partner-inbox','nutriscan','Production','app-transactions',createHash('sha256').update(appProof.appTransactionId).digest('hex')+'.json');
+ const value=JSON.parse(await readFile(file,'utf8'));assert.equal(value.purchase_history.has_paid,true);assert.equal(value.purchase_history.eligible,false);assert.equal(value.commission_eligible,false);
+});
+test('History lookup failure preserves evidence but never acknowledges successful qualification',async t=>{
+ const f=await fixture(t),service=createTransactionInbox({...f.options,historyFactory:()=>({check:async()=>{throw Error('offline')}})});
+ await assert.rejects(service.refreshVerifiedAppHistory('nutriscan',appProof,'signed',{}),/offline/);
+ const root=join(f.options.directory,'partner-inbox','nutriscan','Production','app-transactions');
+ const saved=JSON.parse(await readFile(join(root,(await readdir(root))[0]),'utf8'));assert.equal(saved.purchase_history,null);assert.equal(saved.commission_eligible,false);
+});

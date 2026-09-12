@@ -43,7 +43,7 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-09-12-shared-inbox-v6";
+const deploymentRevision = "2026-09-12-history-gate-v7";
 const appleIssuer = "https://appleid.apple.com";
 const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 

@@ -2,6 +2,7 @@ import {mkdir,readFile,open,rename,statfs} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {Environment,SignedDataVerifier} from '@apple/app-store-server-library';
+import {createPurchaseHistory,historyClientFromEnvironment} from './apple-purchase-history.mjs';
 import {reserveSubscriptionOwner} from './subscription-owner.mjs';
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 export const inboxProducts=Object.freeze({nutriscan:{bundle:'com.liuzhigang.NutriScan',appId:6786940107,skus:new Set(['com.liuzhigang.nutriscan.pro.annuala','com.liuzhigang.nutriscan.pro.monthlya','com.liuzhigang.nutriscan.pro.annualpromoa'])}});
@@ -11,7 +12,7 @@ async function atomic(file,value){
  await rename(temporary,file);
 }
 const hash=s=>createHash('sha256').update(s).digest('hex');
-export function createTransactionInbox({directory,certDirectory,now=()=>Date.now()}){
+export function createTransactionInbox({directory,certDirectory,now=()=>Date.now(),env=process.env,historyFactory}){
  let active=0,queue=Promise.resolve();const verifiers=new Map();
  async function configure(product){
   const config=inboxProducts[product];if(!config)throw fail('Product is not connected',404);
@@ -53,9 +54,29 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    if(old&&(old.app_transaction_id!==t.appTransactionId||old.original_purchase_date!==t.originalPurchaseDate))throw fail('App transaction history conflict',409);
    await atomic(file,{app_transaction_id:t.appTransactionId,product,environment:t.receiptType,
     original_purchase_date:t.originalPurchaseDate,first_received_at:old?.first_received_at||now(),
-    updated_at:now(),signed_app_transaction:proof,attribution_status:'identity_verification_pending',commission_eligible:false});
+    updated_at:now(),signed_app_transaction:proof,purchase_history:old?.purchase_history||null,attribution_status:'identity_verification_pending',commission_eligible:false});
    // This is verified purchase-date evidence, not authentication or first use.
    return {received:true,transaction_id:t.appTransactionId,environment:t.receiptType,commission_eligible:false};
+  });queue=op.catch(()=>{});return op;
+ }
+ async function refreshAppHistory(product,t,proof,verifier){
+  await recordApp(product,t,proof);
+  const config=inboxProducts[product];
+  const history=historyFactory?historyFactory({product,environment:t.receiptType,verifier}):createPurchaseHistory({
+   client:historyClientFromEnvironment(env,{bundleId:config.bundle,environment:t.receiptType}),
+   verifier,bundleId:config.bundle,appId:config.appId,environment:t.receiptType,now});
+  const result=await history.check(t.appTransactionId);
+  if(!result||result.complete!==true||typeof result.has_paid!=='boolean'||typeof result.amount_unknown!=='boolean'||
+    !Number.isSafeInteger(result.checked_at))throw fail('Apple purchase history is incomplete',503);
+  const op=queue.then(async()=>{
+   const file=join(directory,'partner-inbox',product,t.receiptType,'app-transactions',hash(t.appTransactionId)+'.json');
+   const evidence=JSON.parse(await readFile(file,'utf8'));
+   // Once verified as paid, a later empty or out-of-order response cannot undo it.
+   const paid=evidence.purchase_history?.has_paid===true||result.has_paid;
+   evidence.purchase_history={...result,has_paid:paid,eligible:!paid&&result.amount_unknown===false&&result.eligible===true&&t.receiptType==='Production'};
+   await atomic(file,evidence);
+   return {received:true,transaction_id:t.appTransactionId,environment:t.receiptType,
+    history_status:paid?'previously_paid':result.amount_unknown?'review_required':'checked',commission_eligible:false};
   });queue=op.catch(()=>{});return op;
  }
  async function receive(product,kind,proof){
@@ -66,8 +87,8 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    const all=await configure(product);let payload,verifier;
    for(const v of all){try{payload=await (kind==='notifications'?v.verifyAndDecodeNotification(proof):kind==='app-transactions'?v.verifyAndDecodeAppTransaction(proof):v.verifyAndDecodeTransaction(proof));verifier=v;break}catch{}}
    if(!payload)throw fail('Apple signature verification failed');
-   if(kind==='transactions')return record(product,payload,proof);
-   if(kind==='app-transactions')return recordApp(product,payload,proof);
+   if(kind==='transactions')return await record(product,payload,proof);
+   if(kind==='app-transactions')return await refreshAppHistory(product,payload,proof,verifier);
    const id=payload.notificationUUID;if(!id)throw fail('Missing notification identifier');
    if(payload.notificationType==='TEST'){
     if(!directory)throw fail('Persistent transaction storage is not configured',503);
@@ -77,8 +98,8 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    }
    const signed=payload.data?.signedTransactionInfo;if(!signed)throw fail('Missing signed transaction');
    let t;try{t=await verifier.verifyAndDecodeTransaction(signed)}catch{throw fail('Apple transaction signature verification failed')}
-   return record(product,t,signed,{refund:['REFUND','REVOKE'].includes(payload.notificationType),notificationId:id});
+   return await record(product,t,signed,{refund:['REFUND','REVOKE'].includes(payload.notificationType),notificationId:id});
   }finally{active--}
  }
- return {recordVerified:record,recordVerifiedApp:recordApp,receive};
+ return {recordVerified:record,recordVerifiedApp:recordApp,refreshVerifiedAppHistory:refreshAppHistory,receive};
 }
