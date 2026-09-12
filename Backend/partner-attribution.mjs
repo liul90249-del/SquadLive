@@ -5,6 +5,13 @@ const fail=(message,status=409)=>Object.assign(new Error(message),{status});
 // Durable records share the existing single-process store and its serialized writes.
 export function createPartnerAttribution({getStore,saveStore,client,product,bundleId,skus,now=()=>Date.now()}) {
  let draining=false;
+ const hasWalletPurchase=(s,identity)=>{
+  const walletId=identity.walletUserId||identity.customerId;
+  return Object.values(s.partnerReceipts||{}).some(r=>{
+   const owner=s.partnerAnonymousAccounts?.[r.customer_id]?.walletUserId||r.customer_id;
+   return (r.customer_id===identity.customerId||owner===walletId)&&r.environment==='Production'&&r.price!==0;
+  })||Object.values(s.appleTransactions||{}).some(r=>r.userId===walletId&&r.environment==='Production');
+ };
  const init=s=>{s.partnerTokens||={};s.partnerReceipts||={};s.partnerBindings||={};return s};
  return {
   async account(user) {
@@ -37,11 +44,10 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
    s.partnerWalletOwners||={};
    const reserved=s.partnerWalletOwners[walletId];
    if((reserved&&reserved!==identity.customerId)||(walletId!==identity.customerId&&s.partnerBindings[walletId]))throw fail('This installation already has a referral identity; restore its private credential');
+   if(!old && (!Number.isSafeInteger(identity.registeredAt)||identity.registeredAt<=0||identity.registeredAt>now()/1000))throw fail('Invalid account first-use timestamp');
    if(!old && now()/1000-identity.registeredAt>7*86400)throw fail('New-account binding window expired');
    if(!old){
-    const prior=Object.values(s.partnerReceipts).some(r=>r.customer_id===identity.customerId&&r.environment==='Production'&&r.price!==0);
-    const legacy=Object.values(s.appleTransactions||{}).some(r=>r.userId===walletId&&r.environment==='Production');
-    if(prior||legacy)throw fail('A referral must be bound before your first purchase');
+    if(hasWalletPurchase(s,identity))throw fail('A referral must be bound before your first purchase');
    }
    // Reserve before remote calls so concurrent anonymous identities cannot bind one wallet twice.
    s.partnerWalletOwners[walletId]=identity.customerId;await saveStore(s);
@@ -51,7 +57,7 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
    const b=result.binding;
    if(!b||b.customer_id!==identity.customerId||b.product!==product)throw fail('Invalid attribution response',502);
    s.partnerBindings[identity.customerId]={code,binding_id:b.id,partner_id:b.partner_id,bound_at:b.bound_at,expires_at:b.expires_at,commission_bps:b.commission_bps};
-   if(!old && Object.values(s.partnerReceipts).some(r=>r.customer_id===identity.customerId&&r.environment==='Production'&&r.price!==0)){s.partnerBindings[identity.customerId].review_required=true;await saveStore(s);throw fail('Purchase occurred during binding; manual review required')}
+   if(!old && hasWalletPurchase(s,identity)){s.partnerBindings[identity.customerId].review_required=true;await saveStore(s);throw fail('Purchase occurred during binding; manual review required')}
    await saveStore(s);
    await client.activate({customer_id:identity.customerId,code,is_new_customer:true,is_self_referral:false});
    return this.status(identity);

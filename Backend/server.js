@@ -41,7 +41,7 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-09-12-anonymous-links-v2";
+const deploymentRevision = "2026-09-12-wallet-binding-v3";
 const appleIssuer = "https://appleid.apple.com";
 const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 
