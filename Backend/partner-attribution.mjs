@@ -87,7 +87,14 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
     else if(r.currency!=='USD'||!Number.isSafeInteger(r.price)||r.price<=0||r.price%10!==0||r.price/10>100000000)r.status='amount_review';
     else r.status='pending';
    }
-   s.partnerReceipts[key]=r;await saveStore(s);return {status:r.status,transaction_id:r.transaction_id};
+   s.partnerReceipts[key]=r;await saveStore(s);return {status:r.status,transaction_id:r.transaction_id,revoked:!!r.revoked};
+  },
+  async recordClaim(t,signedTransaction) {
+   const result=await this.recordVerified(t,signedTransaction);
+   // A historical proof cannot erase a refund already verified by the server.
+   // A current revocation proof still reaches the subscription revocation handler.
+   if(result.revoked&&!t.revocationDate)throw fail('This App Store transaction was refunded or revoked',409);
+   return result;
   },
   async drain() {
    if(draining||!client)return;draining=true;

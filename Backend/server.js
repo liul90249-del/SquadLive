@@ -41,7 +41,7 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-09-12-wallet-binding-v3";
+const deploymentRevision = "2026-09-12-refund-replay-v4";
 const appleIssuer = "https://appleid.apple.com";
 const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 
@@ -1866,7 +1866,7 @@ async function route(req, res) {
       return jsonResponse(res, 409, { error: "This App Store transaction was revoked" });
     }
     const user = await verifiedPurchaseUser(store,req,payload,deviceId);
-    await partnerAttribution.recordVerified(payload,body.signedTransaction);
+    await partnerAttribution.recordClaim(payload,body.signedTransaction);
     const existingClaim = store.appleTransactions[transactionId];
     if (existingClaim) {
       if (existingClaim.userId !== user.id) {
@@ -1936,7 +1936,7 @@ async function route(req, res) {
       return jsonResponse(res, 400, { error: "Unsupported App Store subscription" });
     }
     const user = await verifiedPurchaseUser(store,req,payload,deviceId);
-    await partnerAttribution.recordVerified(payload,body.signedTransaction);
+    await partnerAttribution.recordClaim(payload,body.signedTransaction);
     const existingClaim = store.appleTransactions[transactionId];
     if (existingClaim && existingClaim.userId !== user.id) {
       return jsonResponse(res, 409, { error: "Transaction has already been claimed" });

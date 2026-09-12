@@ -40,3 +40,21 @@ test('Purchase before binding blocks code adoption; retry errors retain pending 
  const f=fixture();const a=await f.service.account(f.state.users.u);await f.service.recordVerified(f.transaction(a.account_token),'proof');await assert.rejects(f.service.bind(f.identity,'PC123456789ABC',true));
  const g=fixture();const b=await g.service.account(g.state.users.u);await g.service.bind(g.identity,'PC123456789ABC',true);await g.service.recordVerified(g.transaction(b.account_token),'proof');g.setFailure(true);await g.service.drain();assert.equal(g.state.partnerReceipts['Production:t'].status,'pending');assert.equal(g.state.partnerReceipts['Production:t'].attempts,1);
 });
+
+test('Refund tombstones reject old entitlement claims for coins and subscriptions across restart',async()=>{
+ for(const environment of ['Sandbox','Production'])for(const subscription of [false,true]){
+  const f=fixture();const a=await f.service.account(f.state.users.u);
+  const t=f.transaction(a.account_token,{environment,...(subscription?{productId:'weekly',type:'Auto-Renewable Subscription'}:{})});
+  await f.service.recordVerified(t,'apple-refund-notification',{refund:true});
+  const restarted=createPartnerAttribution(f.options);
+  await assert.rejects(restarted.recordClaim(t,'old-signed-purchase'),/refunded or revoked/);
+  assert.equal(f.state.partnerReceipts[environment+':t'].revoked,true);
+  const revocation=await restarted.recordClaim({...t,revocationDate:current},'current-revocation-proof');
+  assert.equal(revocation.revoked,true);
+ }
+});
+test('Valid first and repeated claims remain accepted before a refund',async()=>{
+ const f=fixture();const a=await f.service.account(f.state.users.u);const t=f.transaction(a.account_token);
+ assert.equal((await f.service.recordClaim(t,'valid-proof')).revoked,false);
+ assert.equal((await f.service.recordClaim(t,'valid-proof')).revoked,false);
+});
