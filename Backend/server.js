@@ -43,7 +43,7 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-09-12-shared-inbox-v5";
+const deploymentRevision = "2026-09-12-shared-inbox-v6";
 const appleIssuer = "https://appleid.apple.com";
 const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 
@@ -1354,10 +1354,10 @@ async function route(req, res) {
   if (req.method === "OPTIONS") return jsonResponse(res, 204, {});
   const url = new URL(req.url, `http://${req.headers.host}`);
 
-  const inboxRoute=/^\/v1\/partners\/([a-z]+)\/(transactions|notifications)$/.exec(url.pathname);
+  const inboxRoute=/^\/v1\/partners\/([a-z]+)\/(transactions|notifications|app-transactions)$/.exec(url.pathname);
   if(req.method==='POST'&&inboxRoute){
     const body=await readJSON(req);
-    return jsonResponse(res,200,await sharedInbox.receive(inboxRoute[1],inboxRoute[2],inboxRoute[2]==='notifications'?body.signedPayload:body.signed_transaction));
+    return jsonResponse(res,200,await sharedInbox.receive(inboxRoute[1],inboxRoute[2],inboxRoute[2]==='notifications'?body.signedPayload:inboxRoute[2]==='app-transactions'?body.signed_app_transaction:body.signed_transaction));
   }
   if (req.method === "GET" && landingAssets.has(url.pathname)) {
     const asset = landingAssets.get(url.pathname);

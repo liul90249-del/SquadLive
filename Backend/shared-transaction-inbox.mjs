@@ -2,6 +2,7 @@ import {mkdir,readFile,open,rename,statfs} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {Environment,SignedDataVerifier} from '@apple/app-store-server-library';
+import {reserveSubscriptionOwner} from './subscription-owner.mjs';
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 export const inboxProducts=Object.freeze({nutriscan:{bundle:'com.liuzhigang.NutriScan',appId:6786940107,skus:new Set(['com.liuzhigang.nutriscan.pro.annuala','com.liuzhigang.nutriscan.pro.monthlya','com.liuzhigang.nutriscan.pro.annualpromoa'])}});
 async function atomic(file,value){
@@ -30,19 +31,43 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    try{old=JSON.parse(await readFile(file,'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}
    const incoming={product,environment:t.environment,transaction_id:t.transactionId,original_id:t.originalTransactionId,sku:t.productId,account_token:t.appAccountToken?.toLowerCase()||null,purchased_at:t.purchaseDate,price:t.price??null,currency:t.currency??null};
    if(old&&Object.keys(incoming).some(k=>old[k]!==incoming[k]))throw fail('Transaction ownership or amount conflict',409);
-   const receipt={...incoming,revoked:!!(old?.revoked||refund||t.revocationDate),signed_transaction:old?.revoked?old.signed_transaction:proof,notification_id:notificationId||old?.notification_id||null,received_at:old?.received_at||now(),updated_at:now(),attribution_status:'not_bound',commission_eligible:false};
+   const subscriptionOwner=await reserveSubscriptionOwner(root,incoming,atomic);
+   const receipt={...incoming,subscription_owner_token:subscriptionOwner,revoked:!!(old?.revoked||refund||t.revocationDate),signed_transaction:old?.revoked?old.signed_transaction:proof,notification_id:notificationId||old?.notification_id||null,received_at:old?.received_at||now(),updated_at:now(),attribution_status:'not_bound',commission_eligible:false};
    await atomic(file,receipt);
    return {received:true,duplicate:!!old,transaction_id:t.transactionId,environment:t.environment,revoked:receipt.revoked,attribution_status:'not_bound',commission_eligible:false};
   });queue=op.catch(()=>{});return op;
  }
+ async function recordApp(product,t,proof){
+  const config=inboxProducts[product];
+  if(!config||t.bundleId!==config.bundle||!['Sandbox','Production'].includes(t.receiptType)||
+    (t.receiptType==='Production'&&t.appAppleId!==config.appId)||
+    typeof t.appTransactionId!=='string'||!/^\d{1,128}$/.test(t.appTransactionId)||
+    !Number.isSafeInteger(t.originalPurchaseDate)||t.originalPurchaseDate<=0||t.originalPurchaseDate>now()+300000)
+    throw fail('Invalid verified app transaction metadata');
+  if(!directory)throw fail('Persistent transaction storage is not configured',503);
+  const op=queue.then(async()=>{
+   const root=join(directory,'partner-inbox',product,t.receiptType,'app-transactions');await mkdir(root,{recursive:true});
+   const capacity=await statfs(root);if(Number(capacity.bavail)*Number(capacity.bsize)<64*1024*1024)throw fail('Transaction storage capacity is low',503);
+   const file=join(root,hash(t.appTransactionId)+'.json');let old;
+   try{old=JSON.parse(await readFile(file,'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}
+   if(old&&(old.app_transaction_id!==t.appTransactionId||old.original_purchase_date!==t.originalPurchaseDate))throw fail('App transaction history conflict',409);
+   await atomic(file,{app_transaction_id:t.appTransactionId,product,environment:t.receiptType,
+    original_purchase_date:t.originalPurchaseDate,first_received_at:old?.first_received_at||now(),
+    updated_at:now(),signed_app_transaction:proof,attribution_status:'identity_verification_pending',commission_eligible:false});
+   // This is verified purchase-date evidence, not authentication or first use.
+   return {received:true,transaction_id:t.appTransactionId,environment:t.receiptType,commission_eligible:false};
+  });queue=op.catch(()=>{});return op;
+ }
  async function receive(product,kind,proof){
+  if(!['transactions','notifications','app-transactions'].includes(kind))throw fail('Unsupported payload type',404);
   if(typeof proof!=='string'||proof.length<100||proof.length>131072)throw fail('Invalid signed payload');
   if(active>=2)throw fail('Verification is busy; retry later',429);active++;
   try{
    const all=await configure(product);let payload,verifier;
-   for(const v of all){try{payload=await (kind==='notifications'?v.verifyAndDecodeNotification(proof):v.verifyAndDecodeTransaction(proof));verifier=v;break}catch{}}
+   for(const v of all){try{payload=await (kind==='notifications'?v.verifyAndDecodeNotification(proof):kind==='app-transactions'?v.verifyAndDecodeAppTransaction(proof):v.verifyAndDecodeTransaction(proof));verifier=v;break}catch{}}
    if(!payload)throw fail('Apple signature verification failed');
    if(kind==='transactions')return record(product,payload,proof);
+   if(kind==='app-transactions')return recordApp(product,payload,proof);
    const id=payload.notificationUUID;if(!id)throw fail('Missing notification identifier');
    if(payload.notificationType==='TEST'){
     if(!directory)throw fail('Persistent transaction storage is not configured',503);
@@ -55,5 +80,5 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    return record(product,t,signed,{refund:['REFUND','REVOKE'].includes(payload.notificationType),notificationId:id});
   }finally{active--}
  }
- return {recordVerified:record,receive};
+ return {recordVerified:record,recordVerifiedApp:recordApp,receive};
 }
