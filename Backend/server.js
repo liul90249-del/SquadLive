@@ -4,6 +4,11 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { createAppleIdentityVerifier } from "./apple-identity.mjs";
+import { createBenefitAuth } from "./benefit-auth.mjs";
+import { createBenefitGateway } from "./benefit-gateway.mjs";
+import { createPartnerAttribution } from "./partner-attribution.mjs";
+import { PartnerClient } from "./partner-client.mjs";
 import { isIP } from "node:net";
 import { Environment, SignedDataVerifier } from "@apple/app-store-server-library";
 
@@ -35,7 +40,9 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-08-21-live-start-reliability-v1";
+const deploymentRevision = "2026-09-12-partner-attribution-v1";
+const appleIssuer = "https://appleid.apple.com";
+const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 
 let storePromise;
 let saveQueue = Promise.resolve();
@@ -101,6 +108,26 @@ const appStoreSubscriptionProducts = new Set([
 ]);
 
 let appleVerifierPromise;
+const verifyAppleIdentityToken = createAppleIdentityVerifier({audience: appleAuthAudience});
+const partnerClient = process.env.PARTNER_API_ORIGIN && process.env.PARTNER_EVENT_KEY
+ ? new PartnerClient({origin:process.env.PARTNER_API_ORIGIN,product:'squadlive',key:process.env.PARTNER_EVENT_KEY}) : null;
+const partnerAttribution = createPartnerAttribution({getStore,saveStore,client:partnerClient,product:'squadlive',bundleId:appleBundleId,
+ skus:Object.fromEntries([...Object.keys(appStoreCoinAmounts).map(s=>[s,'iap']),...[...appStoreSubscriptionProducts].map(s=>[s,'subscription'])])});
+const benefitAuth = createBenefitAuth({verifyApple:verifyAppleIdentityToken,resolveUser:async subject => {
+ const store = await getStore(); return store.users[store.userIdsByAppleSubject[subject]];
+},onAuthenticated:user=>partnerAttribution.account(user)});
+const benefitGateway = partnerClient ? createBenefitGateway({partnerClient,verifyIdentity:benefitAuth.verify,confirmBinding:(identity,code,confirmed)=>partnerAttribution.bind(identity,code,confirmed)}) : null;
+async function verifiedPurchaseUser(store,req,payload,deviceId) {
+ const token=String(payload.appAccountToken||'').toLowerCase();
+ const id=store.partnerTokens?.[token];
+ if(id){
+  let identity;try{identity=await benefitAuth.verify(new Request('https://app.local',{headers:{authorization:req.headers.authorization||''}}))}catch{throw Object.assign(new Error('Verify your Apple account again before syncing purchases'),{status:401})}
+  if(identity.customerId!==id)throw Object.assign(new Error('Transaction belongs to another account'),{status:403});
+  return store.users[id];
+ }
+ if(token!==deviceId.toLowerCase())throw Object.assign(new Error('Transaction does not belong to this account'),{status:403});
+ return getOrCreateUser(store,deviceId,req);
+}
 
 async function getAppleTransactionVerifiers() {
   appleVerifierPromise ||= Promise.all([
@@ -193,6 +220,7 @@ function jsonResponse(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,OPTIONS",
     "access-control-allow-headers": "content-type,authorization"
@@ -230,6 +258,7 @@ async function loadStore() {
   store.liveEvents ||= {};
   store.dailyUsage ||= {};
   store.userIdsByDevice ||= {};
+  store.userIdsByAppleSubject ||= {};
   store.settings ||= {};
   store.settings.initialCoins = Math.max(0, Math.min(1_000_000, Number(store.settings.initialCoins ?? 300)));
   for (const user of Object.values(store.users)) {
@@ -564,8 +593,19 @@ function getOrCreateUser(store, deviceId = "anonymous", req = null) {
   return user;
 }
 
+function canMergeUnlinkedDeviceUser(store, user) {
+  if (!user || user.appleSubject) return false;
+  if (Number(user.liveSessionsStarted || 0) > 0) return false;
+  if (Object.values(store.walletOperations).some((operation) => operation.userId === user.id)) return false;
+  if (Object.values(store.appleTransactions).some((transaction) => transaction.userId === user.id)) return false;
+  const transactions = Object.values(store.coinTransactions).filter((transaction) => transaction.userId === user.id);
+  return transactions.every((transaction) => transaction.type === "signup_bonus")
+    && transactions.length <= 1;
+}
+
 function requireAdmin(req, res) {
-  const configuredToken = process.env.ADMIN_TOKEN || "change-this-admin-token";
+  const configuredToken = process.env.ADMIN_TOKEN;
+  if (!configuredToken) { jsonResponse(res, 503, { error: "Admin access is not configured" }); return false; }
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
   if (token !== configuredToken) {
     jsonResponse(res, 401, { error: "Unauthorized" });
@@ -645,6 +685,7 @@ function walletOperationResponse(store, operationId, user) {
   const operation = store.walletOperations[operationId];
   return operation && operation.userId === user.id ? operation : null;
 }
+
 
 function recordWalletOperation(store, input) {
   const operation = {
@@ -732,6 +773,8 @@ function refreshUserPremiumStatus(store, user) {
 function findUserForAppleSubscription(store, transaction, renewalInfo, originalTransactionId) {
   const accountToken = String(transaction?.appAccountToken || renewalInfo?.appAccountToken || "").toLowerCase();
   if (accountToken) {
+    const stableUser = store.users[store.partnerTokens?.[accountToken]];
+    if (stableUser) return stableUser;
     const matchedDeviceId = Object.keys(store.userIdsByDevice)
       .find((deviceId) => deviceId.toLowerCase() === accountToken);
     const userId = matchedDeviceId ? store.userIdsByDevice[matchedDeviceId] : null;
@@ -797,6 +840,7 @@ function userPublic(user) {
     displayName: user.displayName || "",
     coins: user.coins,
     isPremium: Boolean(user.isPremium),
+    accountLinked: Boolean(user.appleSubject),
     liveSessionsStarted: Math.max(0, Number(user.liveSessionsStarted || 0)),
     firstLiveFreeAvailable: Boolean(user.firstLiveFreeEligible && !user.firstLiveFreeUsedAt && Number(user.liveSessionsStarted || 0) === 0),
     createdAt: user.createdAt,
@@ -1317,7 +1361,14 @@ async function route(req, res) {
       service: "squadlive-backend",
       revision: deploymentRevision,
       activeAIRequests,
-      queuedAIRequests: pendingAIRequests.length
+      queuedAIRequests: pendingAIRequests.length,
+      payments: {
+        appStoreVerificationConfigured: Boolean(appleAppId),
+        appStoreOnlineChecks: appleOnlineChecks,
+        notificationsEndpoint: `${url.origin}/v1/storekit/notifications`,
+        notificationVerificationConfigured: Boolean(appleAppId || process.env.NODE_ENV !== "production"),
+        productionReady: process.env.NODE_ENV !== "production" || Boolean(appleAppId)
+      }
     });
   }
 
@@ -1351,7 +1402,79 @@ async function route(req, res) {
     return res.end(html);
   }
 
+  if (url.pathname === '/v1/partner/attribution') {
+    if(!partnerClient)return jsonResponse(res,503,{error:'Referral service is not configured'});
+    let identity;try{identity=await benefitAuth.verify(new Request('https://app.local',{headers:{authorization:req.headers.authorization||''}}))}catch{return jsonResponse(res,401,{error:'Please verify your Apple account'})}
+    if(req.method==='GET')return jsonResponse(res,200,await partnerAttribution.status(identity));
+    if(req.method!=='POST')return jsonResponse(res,405,{error:'Method not allowed'});
+    const body=await readJSON(req),code=String(body.code||'').trim().toUpperCase();
+    if(body.action==='preview')return jsonResponse(res,200,await partnerAttribution.preview(identity,code));
+    if(body.action==='bind')return jsonResponse(res,200,await partnerAttribution.bind(identity,code,body.confirmed));
+    return jsonResponse(res,400,{error:'Invalid action'});
+  }
+
+  if (url.pathname.startsWith('/v1/benefits')) {
+    res.setHeader('Cache-Control','no-store');
+    if (!benefitGateway) return jsonResponse(res,503,{error:'Invite benefits are not available yet'});
+    if (req.method === 'POST' && url.pathname === '/v1/benefits/challenge') {
+      try { return jsonResponse(res,200,benefitAuth.challenge()); }
+      catch { return jsonResponse(res,429,{error:'Please try again later'}); }
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/benefits/session') {
+      try { return jsonResponse(res,200,await benefitAuth.login(await readJSON(req))); }
+      catch { return jsonResponse(res,401,{error:'Sign in with the Apple account linked in Settings'}); }
+    }
+    if (url.pathname !== '/v1/benefits') return jsonResponse(res,404,{error:'Not found'});
+    if (!['GET','POST'].includes(req.method)) return jsonResponse(res,405,{error:'Method not allowed'});
+    const body = req.method === 'POST' ? JSON.stringify(await readJSON(req)) : undefined;
+    const result = await benefitGateway(new Request('https://app.local/v1/benefits',{method:req.method,headers:{authorization:req.headers.authorization || '', 'content-type':'application/json'},body}));
+    return jsonResponse(res,result.status,await result.json());
+  }
+
   const store = await getStore();
+
+  if (req.method === "POST" && url.pathname === "/v1/auth/apple") {
+    const body = await readJSON(req);
+    const deviceId = String(body.deviceId || "").trim();
+    if (!deviceId || deviceId.length > 200) return jsonResponse(res, 400, { error: "Invalid device account" });
+    let identity;
+    try {
+      identity = await verifyAppleIdentityToken(body.identityToken);
+    } catch (error) {
+      return jsonResponse(res, 401, { error: error.message || "Invalid Apple identity" });
+    }
+    const subject = identity.sub;
+    const linkedUserId = store.userIdsByAppleSubject[subject];
+    const linkedUser = linkedUserId ? store.users[linkedUserId] : null;
+    const existingDeviceUserId = store.userIdsByDevice[deviceId];
+    const existingDeviceUser = existingDeviceUserId ? store.users[existingDeviceUserId] : null;
+    const currentUser = existingDeviceUser || linkedUser || getOrCreateUser(store, deviceId, req);
+    if (currentUser.appleSubject && currentUser.appleSubject !== subject) {
+      return jsonResponse(res,409,{error:'This wallet is linked to a different Apple account'});
+    }
+    if (linkedUser && linkedUser.id !== currentUser.id) {
+      if (canMergeUnlinkedDeviceUser(store, currentUser)) {
+        delete store.users[currentUser.id];
+        store.userIdsByDevice[deviceId] = linkedUser.id;
+        linkedUser.lastSeenAt = new Date().toISOString();
+        recordUserNetwork(store, linkedUser, req);
+        await saveStore(store);
+        return jsonResponse(res, 200, { user: userPublic(linkedUser), linked: true, migrated: true });
+      }
+      return jsonResponse(res, 409, {
+        error: "This device already has a different wallet. Contact support before linking accounts.",
+        existingDeviceUser: userPublic(currentUser),
+        appleUser: userPublic(linkedUser)
+      });
+    }
+    currentUser.appleSubject = subject;
+    currentUser.appleEmail = typeof identity.email === "string" ? identity.email.slice(0, 320) : currentUser.appleEmail || "";
+    if (body.displayName && !currentUser.displayName) currentUser.displayName = String(body.displayName).trim().slice(0, 80);
+    store.userIdsByAppleSubject[subject] = currentUser.id;
+    store.userIdsByDevice[deviceId] = currentUser.id;
+    await saveStore(store);
+    return jsonResponse(res, 200, { user: userPublic(currentUser), linked: Boolean(linkedUser), migrated: false });
+  }
 
   if (req.method === "POST" && url.pathname === "/v1/users/bootstrap") {
     const body = await readJSON(req);
@@ -1650,10 +1773,11 @@ async function route(req, res) {
     const transactionId = String(transaction?.transactionId || "");
     const originalTransactionId = String(transaction?.originalTransactionId || renewalInfo?.originalTransactionId || "");
     const productId = String(transaction?.productId || renewalInfo?.productId || "");
-    if (productId && !appStoreSubscriptionProducts.has(productId)) {
+    if (productId && !appStoreSubscriptionProducts.has(productId) && !appStoreCoinAmounts[productId]) {
       return jsonResponse(res, 400, { error: "Unsupported App Store subscription" });
     }
 
+    if(transaction)await partnerAttribution.recordVerified(transaction,data.signedTransactionInfo,{refund:notificationType==='REFUND'||notificationType==='REVOKE'});
     const status = subscriptionStateFromNotification(notificationType, subtype, transaction, renewalInfo);
     const expiresAt = isoFromAppleMillis(transaction?.expiresDate);
     const gracePeriodExpiresAt = isoFromAppleMillis(renewalInfo?.gracePeriodExpiresDate);
@@ -1721,11 +1845,8 @@ async function route(req, res) {
     if (payload.revocationDate) {
       return jsonResponse(res, 409, { error: "This App Store transaction was revoked" });
     }
-    if (String(payload.appAccountToken || "").toLowerCase() !== normalizedAccountToken) {
-      return jsonResponse(res, 403, { error: "Transaction does not belong to this account" });
-    }
-
-    const user = getOrCreateUser(store, deviceId, req);
+    const user = await verifiedPurchaseUser(store,req,payload,deviceId);
+    await partnerAttribution.recordVerified(payload,body.signedTransaction);
     const existingClaim = store.appleTransactions[transactionId];
     if (existingClaim) {
       if (existingClaim.userId !== user.id) {
@@ -1740,8 +1861,11 @@ async function route(req, res) {
       });
     }
 
-    const quantity = Math.min(10, Math.max(1, Number(payload.quantity || 1)));
-    const creditedCoins = baseCoinAmount * quantity;
+    const quantity = Number(payload.quantity || 1);
+    if (!Number.isInteger(quantity) || quantity !== 1) {
+      return jsonResponse(res, 400, { error: "Consumable purchases must contain exactly one item" });
+    }
+    const creditedCoins = baseCoinAmount;
     user.coins += creditedCoins;
     user.lastSeenAt = new Date().toISOString();
     store.appleTransactions[transactionId] = {
@@ -1791,11 +1915,8 @@ async function route(req, res) {
     if (!transactionId || !originalTransactionId || !appStoreSubscriptionProducts.has(productId) || payload.type !== "Auto-Renewable Subscription") {
       return jsonResponse(res, 400, { error: "Unsupported App Store subscription" });
     }
-    if (String(payload.appAccountToken || "").toLowerCase() !== normalizedAccountToken) {
-      return jsonResponse(res, 403, { error: "Subscription does not belong to this account" });
-    }
-
-    const user = getOrCreateUser(store, deviceId, req);
+    const user = await verifiedPurchaseUser(store,req,payload,deviceId);
+    await partnerAttribution.recordVerified(payload,body.signedTransaction);
     const existingClaim = store.appleTransactions[transactionId];
     if (existingClaim && existingClaim.userId !== user.id) {
       return jsonResponse(res, 409, { error: "Transaction has already been claimed" });
@@ -1986,6 +2107,10 @@ async function route(req, res) {
   if (url.pathname.startsWith("/v1/admin/")) {
     if (!requireAdmin(req, res)) return;
 
+    if (req.method === 'GET' && url.pathname === '/v1/admin/partner-attribution') {
+      const receipts=Object.values(store.partnerReceipts||{}).map(({signed_transaction,account_token,...record})=>record);
+      return jsonResponse(res,200,{bindings:store.partnerBindings||{},receipts:receipts.sort((a,b)=>b.created_at-a.created_at).slice(0,500)});
+    }
     if (req.method === "GET" && url.pathname === "/v1/admin/overview") {
       return jsonResponse(res, 200, { overview: await adminOverview(store) });
     }
@@ -2106,10 +2231,13 @@ server.listen(port, () => {
   console.log(`SquadLive backend listening on http://localhost:${port}`);
 });
 
+const partnerRetryTimer = setInterval(()=>partnerAttribution.drain().catch(()=>console.error('Partner delivery retry failed')),30000);
+partnerRetryTimer.unref();
 let isShuttingDown = false;
 async function shutdown(signal) {
   if (isShuttingDown) return;
   isShuttingDown = true;
+  clearInterval(partnerRetryTimer);
   console.log(`Received ${signal}; flushing data before shutdown.`);
   if (metricsSaveTimer) {
     clearTimeout(metricsSaveTimer);
