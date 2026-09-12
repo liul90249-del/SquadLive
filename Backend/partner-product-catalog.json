@@ -1,0 +1,170 @@
+{
+  "squadlive": {
+    "name": "SquadLive",
+    "appStoreId": "6792211208",
+    "skus": {
+      "com.liuzhigang.squadlive.pro.weekly": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      },
+      "com.liuzhigang.squadlive.pro.annual": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      },
+      "com.liuzhigang.squadlive.coins.330": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "not_verified"
+      },
+      "com.liuzhigang.squadlive.coins.420": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "not_verified"
+      },
+      "com.liuzhigang.squadlive.coins.525": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "not_verified"
+      },
+      "com.liuzhigang.squadlive.coins.740": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "not_verified"
+      },
+      "com.liuzhigang.squadlive.coins.1450": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "not_verified"
+      },
+      "com.liuzhigang.squadlive.coins.1800": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "not_verified"
+      }
+    },
+    "catalogOnly": true
+  },
+  "sparkle": {
+    "name": "Sparkle Color",
+    "appStoreId": "6799303009",
+    "skus": {
+      "com.LuminaArt.LuminaArt.diamonds100": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "waiting_for_review"
+      },
+      "com.LuminaArt.LuminaArt.diamonds550": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "waiting_for_review"
+      },
+      "com.LuminaArt.LuminaArt.diamonds1200": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "waiting_for_review"
+      },
+      "com.LuminaArt.LuminaArt.diamonds3000": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "waiting_for_review"
+      },
+      "com.LuminaArt.LuminaArt.diamonds7000": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "waiting_for_review"
+      },
+      "com.LuminaArt.LuminaArt.diamonds20000": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "waiting_for_review"
+      },
+      "com.LuminaArt.LuminaArt.starterpack": {
+        "kind": "iap",
+        "appleType": "Consumable",
+        "appleStatus": "waiting_for_review"
+      }
+    },
+    "catalogOnly": true
+  },
+  "nutriscan": {
+    "name": "Cal NutriScan",
+    "appStoreId": "6786940107",
+    "skus": {
+      "com.liuzhigang.nutriscan.pro.annuala": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      },
+      "com.liuzhigang.nutriscan.pro.monthlya": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      },
+      "com.liuzhigang.nutriscan.pro.annualpromoa": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      }
+    },
+    "catalogOnly": true
+  },
+  "cleaner": {
+    "name": "Smart Cleaner",
+    "appStoreId": "6761738282",
+    "skus": {
+      "com.hecathehe.PhoneCleaner.weekly": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      },
+      "com.hecathehe.PhoneCleaner.yearly": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      }
+    },
+    "catalogOnly": true
+  },
+  "subguard": {
+    "name": "SubGuard AI",
+    "appStoreId": "6762180214",
+    "skus": {
+      "com.liuzhigang.subguard.pro.yearly": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      },
+      "com.liuzhigang.subguardpro.lifetime": {
+        "kind": "iap",
+        "appleType": "Non-Consumable",
+        "appleStatus": "not_verified"
+      }
+    },
+    "catalogOnly": true
+  },
+  "dailyme": {
+    "name": "DailyMe",
+    "appStoreId": "6763536504",
+    "skus": {
+      "com.dailyme.premium.weekly": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      },
+      "com.dailyme.premium.yearly2": {
+        "kind": "subscription",
+        "appleType": "Auto-Renewable Subscription",
+        "appleStatus": "approved"
+      }
+    },
+    "catalogOnly": true
+  },
+  "catswipe": {
+    "name": "CatSwipe",
+    "appStoreId": "6763565286",
+    "skus": {},
+    "catalogOnly": true
+  }
+}

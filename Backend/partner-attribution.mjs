@@ -64,7 +64,11 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
   },
   async recordVerified(t,signedTransaction,{refund=false}={}) {
    if(t.bundleId!==bundleId||!skus[t.productId]||!['Production','Sandbox'].includes(t.environment)||!t.transactionId||!t.originalTransactionId||!Number.isSafeInteger(t.purchaseDate)||t.purchaseDate<=0||t.purchaseDate>now()+300000)throw fail('Invalid verified transaction metadata',400);
-   const expectedType=skus[t.productId]==='subscription'?'Auto-Renewable Subscription':'Consumable';
+   const sku=skus[t.productId];
+   const kind=typeof sku==='string'?sku:sku.kind;
+   const expectedType=typeof sku==='string'?(kind==='subscription'?'Auto-Renewable Subscription':'Consumable'):sku.appleType;
+   if(!['subscription','iap'].includes(kind)||!['Auto-Renewable Subscription','Consumable','Non-Consumable'].includes(expectedType))throw fail('Invalid product configuration',500);
+   if((kind==='subscription')!==(expectedType==='Auto-Renewable Subscription'))throw fail('Product kind and Apple type disagree',500);
    if(t.type!==expectedType)throw fail('Transaction type does not match product',400);
    const s=init(await getStore()),key=t.environment+':'+t.transactionId;
    const accountToken=String(t.appAccountToken||'').toLowerCase();
@@ -72,7 +76,7 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
    const owner=Object.values(s.partnerReceipts).find(r=>r.environment===t.environment&&r.original_transaction_id===t.originalTransactionId&&r.customer_id);
    if(existing&&(existing.sku!==t.productId||existing.original_transaction_id!==t.originalTransactionId||existing.customer_id!==customer))throw fail('Transaction ownership conflict');
    if(owner&&customer&&owner.customer_id!==customer)throw fail('Subscription ownership conflict');
-   const r=existing||{transaction_id:t.transactionId,original_transaction_id:t.originalTransactionId,customer_id:customer,account_token:accountToken,sku:t.productId,environment:t.environment,purchased_at:Math.floor(t.purchaseDate/1000),price:t.price??null,currency:t.currency??null,kind:skus[t.productId],created_at:now(),attempts:0};
+   const r=existing||{transaction_id:t.transactionId,original_transaction_id:t.originalTransactionId,customer_id:customer,account_token:accountToken,sku:t.productId,environment:t.environment,purchased_at:Math.floor(t.purchaseDate/1000),price:t.price??null,currency:t.currency??null,kind,created_at:now(),attempts:0};
    if(existing&&(r.price!==(t.price??null)||r.currency!==(t.currency??null)))throw fail('Transaction amount conflict');
    r.proof_hash=sha(signedTransaction);r.signed_transaction=signedTransaction;
    r.revoked ||= refund||!!t.revocationDate;

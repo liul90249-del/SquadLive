@@ -58,3 +58,27 @@ test('Valid first and repeated claims remain accepted before a refund',async()=>
  assert.equal((await f.service.recordClaim(t,'valid-proof')).revoked,false);
  assert.equal((await f.service.recordClaim(t,'valid-proof')).revoked,false);
 });
+
+test('Non-consumable lifetime purchases use iap commission and reject consumable mismatches',async()=>{
+ const f=fixture();f.options.skus.lifetime={kind:'iap',appleType:'Non-Consumable'};
+ const a=await f.service.account(f.state.users.u);await f.service.bind(f.identity,'PC123456789ABC',true);
+ const t=f.transaction(a.account_token,{productId:'lifetime',type:'Non-Consumable'});
+ assert.equal((await f.service.recordClaim(t,'verified-lifetime')).status,'pending');
+ await f.service.drain();assert.equal(f.calls[0][1].purchase_kind,'iap');
+ await assert.rejects(f.service.recordClaim({...t,type:'Consumable'},'wrong-type'),/type does not match/);
+ await f.service.recordVerified(t,'refund',{refund:true});
+ await assert.rejects(f.service.recordClaim(t,'old-lifetime-proof'),/refunded or revoked/);
+});
+test('An explicit product catalog rejects cross-product SKUs and preserves subscription classification',async()=>{
+ const f=fixture();f.options.skus={weekly:{kind:'subscription',appleType:'Auto-Renewable Subscription'}};
+ const service=createPartnerAttribution(f.options);const a=await service.account(f.state.users.u);
+ await service.bind(f.identity,'PC123456789ABC',true);
+ await assert.rejects(service.recordClaim(f.transaction(a.account_token),'foreign-coins'),/metadata/);
+ await service.recordClaim(f.transaction(a.account_token,{productId:'weekly',type:'Auto-Renewable Subscription'}),'subscription');
+ await service.drain();assert.equal(f.calls[0][1].purchase_kind,'subscription');
+});
+
+test('Mismatched product configuration cannot classify lifetime purchases as subscriptions',async()=>{
+ const f=fixture();f.options.skus.lifetime={kind:'subscription',appleType:'Non-Consumable'};
+ await assert.rejects(f.service.recordClaim(f.transaction('unknown',{productId:'lifetime',type:'Non-Consumable'}),'proof'),/disagree/);
+});
