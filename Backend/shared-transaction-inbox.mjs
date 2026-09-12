@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {Environment,SignedDataVerifier} from '@apple/app-store-server-library';
 import {createPurchaseHistory,historyClientFromEnvironment} from './apple-purchase-history.mjs';
+import {createDeviceAttest} from './app-attest.mjs';
 import {createAnonymousInstallation} from './anonymous-installation.mjs';
 import {reserveSubscriptionOwner} from './subscription-owner.mjs';
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
@@ -16,6 +17,7 @@ const hash=s=>createHash('sha256').update(s).digest('hex');
 export function createTransactionInbox({directory,certDirectory,now=()=>Date.now(),env=process.env,historyFactory}){
  let active=0,queue=Promise.resolve();const verifiers=new Map();
  const installations=createAnonymousInstallation({directory,now});
+ const deviceAttest=createDeviceAttest({directory,now});
  async function configure(product){
   const config=inboxProducts[product];if(!config)throw fail('Product is not connected',404);
   if(!verifiers.has(product))verifiers.set(product,Promise.all(['AppleIncRootCertificate.cer','AppleRootCA-G2.cer','AppleRootCA-G3.cer'].map(p=>readFile(join(certDirectory,p)))).then(roots=>[
@@ -111,5 +113,13 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    return await record(product,t,signed,{refund:['REFUND','REVOKE'].includes(payload.notificationType),notificationId:id});
   }finally{active--}
  }
- return {recordVerified:record,recordVerifiedApp:recordApp,refreshVerifiedAppHistory:refreshAppHistory,receive};
+ async function device(body,credential){
+  if(!body||typeof body!=='object'||Array.isArray(body))throw fail('Invalid device request');
+  const identity=await installations.authenticate({product:'nutriscan',environment:body.environment,appTransactionId:body.app_transaction_id,credential});
+  if(body.action==='status')return deviceAttest.status(identity);
+  if(body.action==='challenge')return deviceAttest.challenge(identity,body.kind);
+  if(body.action==='verify')return deviceAttest.verify(identity,body);
+  throw fail('Unknown device verification action');
+ }
+ return {device,recordVerified:record,recordVerifiedApp:recordApp,refreshVerifiedAppHistory:refreshAppHistory,receive};
 }

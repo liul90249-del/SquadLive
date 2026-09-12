@@ -1354,6 +1354,9 @@ async function route(req, res) {
   if (req.method === "OPTIONS") return jsonResponse(res, 204, {});
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  if(req.method==='POST'&&url.pathname==='/v1/partners/nutriscan/device'){
+    return jsonResponse(res,200,await sharedInbox.device(await readJSON(req),req.headers['x-installation-credential']));
+  }
   const inboxRoute=/^\/v1\/partners\/([a-z]+)\/(transactions|notifications|app-transactions)$/.exec(url.pathname);
   if(req.method==='POST'&&inboxRoute){
     const body=await readJSON(req);
