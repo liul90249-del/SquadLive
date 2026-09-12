@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {Environment,SignedDataVerifier} from '@apple/app-store-server-library';
 import {createPurchaseHistory,historyClientFromEnvironment} from './apple-purchase-history.mjs';
+import {createAnonymousInstallation} from './anonymous-installation.mjs';
 import {reserveSubscriptionOwner} from './subscription-owner.mjs';
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 export const inboxProducts=Object.freeze({nutriscan:{bundle:'com.liuzhigang.NutriScan',appId:6786940107,skus:new Set(['com.liuzhigang.nutriscan.pro.annuala','com.liuzhigang.nutriscan.pro.monthlya','com.liuzhigang.nutriscan.pro.annualpromoa'])}});
@@ -14,6 +15,7 @@ async function atomic(file,value){
 const hash=s=>createHash('sha256').update(s).digest('hex');
 export function createTransactionInbox({directory,certDirectory,now=()=>Date.now(),env=process.env,historyFactory}){
  let active=0,queue=Promise.resolve();const verifiers=new Map();
+ const installations=createAnonymousInstallation({directory,now});
  async function configure(product){
   const config=inboxProducts[product];if(!config)throw fail('Product is not connected',404);
   if(!verifiers.has(product))verifiers.set(product,Promise.all(['AppleIncRootCertificate.cer','AppleRootCA-G2.cer','AppleRootCA-G3.cer'].map(p=>readFile(join(certDirectory,p)))).then(roots=>[
@@ -79,8 +81,9 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
     history_status:paid?'previously_paid':result.amount_unknown?'review_required':'checked',commission_eligible:false};
   });queue=op.catch(()=>{});return op;
  }
- async function receive(product,kind,proof){
+ async function receive(product,kind,proof,credential){
   if(!['transactions','notifications','app-transactions'].includes(kind))throw fail('Unsupported payload type',404);
+  if(credential!==undefined&&(typeof credential!=='string'||!/^ni_[a-f0-9]{64}$/.test(credential)))throw fail('Invalid private installation credential');
   if(typeof proof!=='string'||proof.length<100||proof.length>131072)throw fail('Invalid signed payload');
   if(active>=2)throw fail('Verification is busy; retry later',429);active++;
   try{
@@ -88,7 +91,14 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    for(const v of all){try{payload=await (kind==='notifications'?v.verifyAndDecodeNotification(proof):kind==='app-transactions'?v.verifyAndDecodeAppTransaction(proof):v.verifyAndDecodeTransaction(proof));verifier=v;break}catch{}}
    if(!payload)throw fail('Apple signature verification failed');
    if(kind==='transactions')return await record(product,payload,proof);
-   if(kind==='app-transactions')return await refreshAppHistory(product,payload,proof,verifier);
+   if(kind==='app-transactions'){
+    const result=await refreshAppHistory(product,payload,proof,verifier);
+    if(credential!==undefined){
+     const installation=await installations.registerVerifiedApp({product,environment:payload.receiptType,appTransactionId:payload.appTransactionId,credential});
+     return {...result,installation};
+    }
+    return result;
+   }
    const id=payload.notificationUUID;if(!id)throw fail('Missing notification identifier');
    if(payload.notificationType==='TEST'){
     if(!directory)throw fail('Persistent transaction storage is not configured',503);
