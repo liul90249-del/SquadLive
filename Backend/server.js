@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { createAppleIdentityVerifier } from "./apple-identity.mjs";
 import { createBenefitAuth } from "./benefit-auth.mjs";
 import { createBenefitGateway } from "./benefit-gateway.mjs";
+import { createAnonymousAuth } from "./anonymous-auth.mjs";
 import { createPartnerAttribution } from "./partner-attribution.mjs";
 import { PartnerClient } from "./partner-client.mjs";
 import { isIP } from "node:net";
@@ -40,7 +41,7 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-09-12-partner-attribution-v1";
+const deploymentRevision = "2026-09-12-anonymous-links-v2";
 const appleIssuer = "https://appleid.apple.com";
 const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 
@@ -116,14 +117,19 @@ const partnerAttribution = createPartnerAttribution({getStore,saveStore,client:p
 const benefitAuth = createBenefitAuth({verifyApple:verifyAppleIdentityToken,resolveUser:async subject => {
  const store = await getStore(); return store.users[store.userIdsByAppleSubject[subject]];
 },onAuthenticated:user=>partnerAttribution.account(user)});
-const benefitGateway = partnerClient ? createBenefitGateway({partnerClient,verifyIdentity:benefitAuth.verify,confirmBinding:(identity,code,confirmed)=>partnerAttribution.bind(identity,code,confirmed)}) : null;
+const anonymousAuth = createAnonymousAuth({getStore,saveStore,resolveWallet:getOrCreateUser,account:user=>partnerAttribution.account(user)});
+async function verifyPartnerIdentity(req) {
+ if(req.headers.get('authorization')?.startsWith('Bearer anon_'))return anonymousAuth.verify(req);
+ return benefitAuth.verify(req);
+}
+const benefitGateway = partnerClient ? createBenefitGateway({partnerClient,verifyIdentity:verifyPartnerIdentity,confirmBinding:(identity,code,confirmed)=>partnerAttribution.bind(identity,code,confirmed)}) : null;
 async function verifiedPurchaseUser(store,req,payload,deviceId) {
  const token=String(payload.appAccountToken||'').toLowerCase();
  const id=store.partnerTokens?.[token];
  if(id){
-  let identity;try{identity=await benefitAuth.verify(new Request('https://app.local',{headers:{authorization:req.headers.authorization||''}}))}catch{throw Object.assign(new Error('Verify your Apple account again before syncing purchases'),{status:401})}
+  let identity;try{identity=await verifyPartnerIdentity(new Request('https://app.local',{headers:{authorization:req.headers.authorization||''}}))}catch{throw Object.assign(new Error('Installation authorization unavailable; reopen the app and retry'),{status:401})}
   if(identity.customerId!==id)throw Object.assign(new Error('Transaction belongs to another account'),{status:403});
-  return store.users[id];
+  return store.users[store.partnerAnonymousAccounts?.[id]?.walletUserId || id];
  }
  if(token!==deviceId.toLowerCase())throw Object.assign(new Error('Transaction does not belong to this account'),{status:403});
  return getOrCreateUser(store,deviceId,req);
@@ -773,7 +779,8 @@ function refreshUserPremiumStatus(store, user) {
 function findUserForAppleSubscription(store, transaction, renewalInfo, originalTransactionId) {
   const accountToken = String(transaction?.appAccountToken || renewalInfo?.appAccountToken || "").toLowerCase();
   if (accountToken) {
-    const stableUser = store.users[store.partnerTokens?.[accountToken]];
+    const stableID = store.partnerTokens?.[accountToken];
+    const stableUser = store.users[store.partnerAnonymousAccounts?.[stableID]?.walletUserId || stableID];
     if (stableUser) return stableUser;
     const matchedDeviceId = Object.keys(store.userIdsByDevice)
       .find((deviceId) => deviceId.toLowerCase() === accountToken);
@@ -1365,7 +1372,7 @@ async function route(req, res) {
       payments: {
         appStoreVerificationConfigured: Boolean(appleAppId),
         appStoreOnlineChecks: appleOnlineChecks,
-        notificationsEndpoint: `${url.origin}/v1/storekit/notifications`,
+        notificationsEndpoint: 'https://squadlive.onrender.com/v1/storekit/notifications',
         notificationVerificationConfigured: Boolean(appleAppId || process.env.NODE_ENV !== "production"),
         productionReady: process.env.NODE_ENV !== "production" || Boolean(appleAppId)
       }
@@ -1402,9 +1409,22 @@ async function route(req, res) {
     return res.end(html);
   }
 
+  if(req.method==='POST' && url.pathname==='/v1/partner/session') {
+    if(!partnerClient)return jsonResponse(res,503,{error:'Referral service is not configured'});
+    return jsonResponse(res,200,await anonymousAuth.session(await readJSON(req),req));
+  }
+  if(req.method==='GET' && ['/apple-app-site-association','/.well-known/apple-app-site-association'].includes(url.pathname)) {
+    return jsonResponse(res,200,{applinks:{details:[{appIDs:['D9QJA58T8W.'+appleBundleId],components:[{'/':'/invite'}]}]}});
+  }
+  if(req.method==='GET' && url.pathname==='/invite') {
+    const code=url.searchParams.get('code')||'';
+    if(!/^PC[A-F0-9]{12}$/.test(code))return jsonResponse(res,400,{error:'Invalid referral link'});
+    res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});
+    return res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>SquadLive invitation</title><main style="font:18px system-ui;max-width:600px;margin:60px auto;padding:24px"><h1>Open SquadLive</h1><p>Opening this referral link associates eligible new users with the person who shared it. Existing referrals remain unchanged. No reward is granted until verified.</p><p><a href="https://apps.apple.com/app/id6792211208">Download on the App Store</a></p><p>After installing, return to the original sharing page and tap Open SquadLive. If needed, enter this code in the app: <b>'+code+'</b>.</p></main>');
+  }
   if (url.pathname === '/v1/partner/attribution') {
     if(!partnerClient)return jsonResponse(res,503,{error:'Referral service is not configured'});
-    let identity;try{identity=await benefitAuth.verify(new Request('https://app.local',{headers:{authorization:req.headers.authorization||''}}))}catch{return jsonResponse(res,401,{error:'Please verify your Apple account'})}
+    let identity;try{identity=await verifyPartnerIdentity(new Request('https://app.local',{headers:{authorization:req.headers.authorization||''}}))}catch{return jsonResponse(res,401,{error:'Installation authorization required'})}
     if(req.method==='GET')return jsonResponse(res,200,await partnerAttribution.status(identity));
     if(req.method!=='POST')return jsonResponse(res,405,{error:'Method not allowed'});
     const body=await readJSON(req),code=String(body.code||'').trim().toUpperCase();

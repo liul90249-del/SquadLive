@@ -9,7 +9,7 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
  return {
   async account(user) {
    const s=init(await getStore());
-   if(!user.appleSubject)throw fail('Verified Apple account required',401);
+   if(!user.appleSubject&&!user.anonymous)throw fail('Verified Apple account required',401);
    user.partnerAccountToken ||= randomUUID();
    const old=s.partnerTokens[user.partnerAccountToken];
    if(old&&old!==user.id)throw fail('Account token conflict');
@@ -33,11 +33,18 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
    if(confirmed!==true)throw fail('Please confirm your referral code first',400);
    await this.preview(identity,code);
    const s=init(await getStore()),old=s.partnerBindings[identity.customerId];
+   const walletId=identity.walletUserId||identity.customerId;
+   s.partnerWalletOwners||={};
+   const reserved=s.partnerWalletOwners[walletId];
+   if((reserved&&reserved!==identity.customerId)||(walletId!==identity.customerId&&s.partnerBindings[walletId]))throw fail('This installation already has a referral identity; restore its private credential');
+   if(!old && now()/1000-identity.registeredAt>7*86400)throw fail('New-account binding window expired');
    if(!old){
     const prior=Object.values(s.partnerReceipts).some(r=>r.customer_id===identity.customerId&&r.environment==='Production'&&r.price!==0);
-    const legacy=Object.values(s.appleTransactions||{}).some(r=>r.userId===identity.customerId&&r.environment==='Production');
+    const legacy=Object.values(s.appleTransactions||{}).some(r=>r.userId===walletId&&r.environment==='Production');
     if(prior||legacy)throw fail('A referral must be bound before your first purchase');
    }
+   // Reserve before remote calls so concurrent anonymous identities cannot bind one wallet twice.
+   s.partnerWalletOwners[walletId]=identity.customerId;await saveStore(s);
    await client.identify(identity.customerId,identity.registeredAt);
    const result=await client.bind({customer_id:identity.customerId,code,is_self_referral:false});
    // Canonical server binding controls ownership and the start/end timestamps.
@@ -85,7 +92,7 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
      try {
       if(sending==='refund_pending')await client.refund(r.transaction_id);
       else {
-       const u=s.users[r.customer_id],b=s.partnerBindings[r.customer_id];
+       const u=s.partnerAnonymousAccounts?.[r.customer_id]||s.users[r.customer_id],b=s.partnerBindings[r.customer_id];
        if(!u||!b||b.review_required)throw fail('Awaiting verified attribution');
        await client.identify(u.id,Math.floor(Date.parse(u.createdAt)/1000));
        await client.activate({customer_id:u.id,code:b.code,is_new_customer:true,is_self_referral:false});
