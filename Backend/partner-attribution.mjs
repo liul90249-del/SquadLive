@@ -5,6 +5,13 @@ const fail=(message,status=409)=>Object.assign(new Error(message),{status});
 // Durable records share the existing single-process store and its serialized writes.
 export function createPartnerAttribution({getStore,saveStore,client,product,bundleId,skus,verifyEligibility,now=()=>Date.now()}) {
  let draining=false;
+ const bindingQueues=new Map();
+ async function serializeBinding(key,operation){
+  const previous=bindingQueues.get(key)||Promise.resolve();
+  const pending=previous.catch(()=>{}).then(operation);
+  bindingQueues.set(key,pending);
+  try{return await pending}finally{if(bindingQueues.get(key)===pending)bindingQueues.delete(key)}
+ }
  const hasWalletPurchase=(s,identity)=>{
   const walletId=identity.walletUserId||identity.customerId;
   return Object.values(s.partnerReceipts||{}).some(r=>{
@@ -37,6 +44,7 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
    return {code,product,already_bound:!!old,requires_confirmation:true};
   },
   async bind(identity,code,confirmed) {
+   return serializeBinding(identity.walletUserId||identity.customerId,async()=>{
    if(confirmed!==true)throw fail('Please confirm your referral code first',400);
    await this.preview(identity,code);
    const s=init(await getStore()),old=s.partnerBindings[identity.customerId];
@@ -71,6 +79,7 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
    await saveStore(s);
    await client.activate({customer_id:identity.customerId,code,is_new_customer:true,is_self_referral:false});
    return this.status(identity);
+   });
   },
   async recordVerified(t,signedTransaction,{refund=false}={}) {
    if(t.bundleId!==bundleId||!skus[t.productId]||!['Production','Sandbox'].includes(t.environment)||!t.transactionId||!t.originalTransactionId||!Number.isSafeInteger(t.purchaseDate)||t.purchaseDate<=0||t.purchaseDate>now()+300000)throw fail('Invalid verified transaction metadata',400);

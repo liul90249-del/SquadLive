@@ -82,3 +82,15 @@ test('Mismatched product configuration cannot classify lifetime purchases as sub
  const f=fixture();f.options.skus.lifetime={kind:'subscription',appleType:'Non-Consumable'};
  await assert.rejects(f.service.recordClaim(f.transaction('unknown',{productId:'lifetime',type:'Non-Consumable'}),'proof'),/disagree/);
 });
+
+ test('Concurrent different-code binds for one wallet cannot overwrite first ownership',async()=>{
+  const f=fixture();let remoteBinds=0;
+  const original=f.options.client.bind;
+  f.options.client.bind=async body=>{remoteBinds++;await new Promise(resolve=>setTimeout(resolve,10));return original(body)};
+  const results=await Promise.allSettled([
+   f.service.bind(f.identity,'PC123456789ABC',true),
+   f.service.bind(f.identity,'PC123456789ABD',true)
+  ]);
+  assert.equal(results[0].status,'fulfilled');assert.equal(results[1].status,'rejected');
+  assert.equal(remoteBinds,1);assert.equal(f.state.partnerBindings.u.code,'PC123456789ABC');
+ });
