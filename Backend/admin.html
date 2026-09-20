@@ -957,9 +957,9 @@
             <td><code title="${item.id}">${item.id}</code></td>
             <td><code title="${item.userId}">${item.userId}</code></td>
             <td>${item.platform}</td>
-            <td>${item.status}</td>
+            <td>${escapeHTML(item.status)}</td>
             <td>${item.baseRewardCoins}</td>
-            <td>${item.proofLink ? `<a href="${item.proofLink}" target="_blank">打开</a>` : "-"}</td>
+            <td>${item.proofLink ? `<a href="${escapeHTML(item.proofLink)}" target="_blank" rel="noopener noreferrer">打开</a>` : "-"}</td>
             <td>${time(item.createdAt)}</td>
           </tr>
         `)
@@ -972,7 +972,7 @@
         renderOverview(overview.overview);
         await Promise.all([loadUsers(), loadRecharges(), loadVip(), loadRewards(), loadSettings()]);
       } catch (error) {
-        document.getElementById("overviewCards").innerHTML = `<div class="card"><div class="value">${error.message}</div><div class="label">请检查 ADMIN_TOKEN</div></div>`;
+        document.getElementById("overviewCards").innerHTML = `<div class="card"><div class="value">${escapeHTML(error.message)}</div><div class="label">请检查 ADMIN_TOKEN</div></div>`;
       }
     }
 

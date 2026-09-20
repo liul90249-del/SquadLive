@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, stat, statfs, writeFile } from "node:fs/promis
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createAppleIdentityVerifier } from "./apple-identity.mjs";
 import { createBenefitAuth } from "./benefit-auth.mjs";
 import { createBenefitGateway } from "./benefit-gateway.mjs";
@@ -43,7 +43,7 @@ const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-09-12-history-gate-v7";
+const deploymentRevision = "2026-09-20-multilingual-vision-v8";
 const appleIssuer = "https://appleid.apple.com";
 const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 
@@ -238,7 +238,23 @@ function jsonResponse(res, status, body) {
 
 async function readJSON(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  const maximumBytes = 8 * 1024 * 1024;
+  const declaredLength = Number(req.headers["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    const error = new Error("Request body is too large");
+    error.status = 413;
+    throw error;
+  }
+  let receivedBytes = 0;
+  for await (const chunk of req) {
+    receivedBytes += chunk.length;
+    if (receivedBytes > maximumBytes) {
+      const error = new Error("Request body is too large");
+      error.status = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   if (!raw) return {};
   try {
@@ -612,10 +628,15 @@ function canMergeUnlinkedDeviceUser(store, user) {
 }
 
 function requireAdmin(req, res) {
-  const configuredToken = process.env.ADMIN_TOKEN;
+  const configuredToken = String(process.env.ADMIN_TOKEN || "").trim();
   if (!configuredToken) { jsonResponse(res, 503, { error: "Admin access is not configured" }); return false; }
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
-  if (token !== configuredToken) {
+  const configuredBuffer = Buffer.from(configuredToken);
+  const tokenBuffer = Buffer.from(token);
+  const isValid = configuredToken.length >= 16
+    && configuredBuffer.length === tokenBuffer.length
+    && timingSafeEqual(configuredBuffer, tokenBuffer);
+  if (!isValid) {
     jsonResponse(res, 401, { error: "Unauthorized" });
     return false;
   }
@@ -694,6 +715,15 @@ function walletOperationResponse(store, operationId, user) {
   return operation && operation.userId === user.id ? operation : null;
 }
 
+function audienceOperationMatches(operation, viewers, context, regularCost) {
+  const expectedCost = operation?.firstLiveFree ? 0 : regularCost;
+  return operation
+    && ["coin_spend", "first_live_free", "live_session_start"].includes(operation.type)
+    && Number(operation.viewers) === viewers
+    && operation.context === context
+    && Number(operation.regularCost) === regularCost
+    && Number(operation.coins) === -expectedCost;
+}
 
 function recordWalletOperation(store, input) {
   const operation = {
@@ -1145,9 +1175,23 @@ function viewerCost(viewers) {
   return Math.ceil(highest.cost + ((viewers - highest.viewers) * highest.cost) / highest.viewers);
 }
 
-function localAIReply(text) {
+function localAIReply(text, inputLanguage = "en") {
   const lower = String(text || "").toLowerCase();
-  const usesChinese = /[\u3400-\u9fff]/u.test(lower);
+  const language = String(inputLanguage || "en").toLowerCase();
+  const localizedFallbacks = {
+    "zh-hans": "我听到了。可以再具体说一点吗？",
+    "zh-hant": "我聽到了。可以再具體說一點嗎？",
+    ja: "聞いています。もう少し詳しく教えてもらえますか？",
+    ko: "듣고 있어요. 조금 더 자세히 말해 주시겠어요?",
+    es: "Te escucho. ¿Puedes contarme un poco más?",
+    fr: "Je vous écoute. Pouvez-vous m’en dire un peu plus ?",
+    de: "Ich höre dir zu. Kannst du etwas mehr erzählen?",
+    pt: "Estou ouvindo. Pode contar um pouco mais?",
+    ru: "Я слушаю. Расскажите немного подробнее.",
+    ar: "أنا أستمع إليك. هل يمكنك أن تخبرني بالمزيد؟"
+  };
+  if (localizedFallbacks[language]) return localizedFallbacks[language];
+  const usesChinese = language.startsWith("zh");
   if (lower.includes("voice") || lower.includes("sound") || lower.includes("好听")) {
     return usesChinese ? "你的声音很好听，让直播间感觉很温暖。" : "Your voice sounds warm and pleasant.";
   }
@@ -1207,8 +1251,8 @@ function deepSeekSystemPrompt(body) {
   const listenerGender = body.listener?.gender || "unspecified";
   const replyStyle = body.listener?.replyStyle || "warm, natural, and supportive";
   const sceneContext = String(body.sceneContext || "").trim().slice(0, 500);
-  const inputLanguage = String(body.inputLanguage || "").trim().slice(0, 24)
-    || (/[a-z]/iu.test(String(body.text || "")) ? "en" : "zh-Hans");
+  const requestedLanguage = String(body.inputLanguage || "en").trim().slice(0, 24);
+  const inputLanguage = /^[a-z]{2,3}(?:-[A-Za-z]{2,8})?$/u.test(requestedLanguage) ? requestedLanguage : "en";
   return `
 You are ${listenerName}, a virtual friend in SquadLive.
 Act like an attentive, emotionally intelligent member of the live audience. Stay focused on what the streamer says, how the conversation develops, and any safe visual context provided below.
@@ -1224,11 +1268,12 @@ Vibe behavior: ${vibeBehavior}
 Vibe behavior overrides role mode and active directions whenever they conflict.
 Active directions: ${directions.join(", ") || "general, compliment"}.
 ${activeDirectionGuide(directions)}
-Always reply in the same language as the streamer's latest message. If they speak Chinese, reply in Chinese. If they speak English, reply in English. For mixed-language input, use the dominant language of the latest message.
-Unless Haters vibe is active, naturally include a short compliment when appropriate: their voice sounds pleasant, they look good, their smile is nice, their camera presence is warm, or their energy is attractive.
+Always reply in the language identified by the required response language code. Do not switch languages because of device settings, earlier messages, names, or visual labels.
+Answer the actual question or intent first. If the speech transcript is incomplete, garbled, or ambiguous, ask one brief clarification instead of guessing.
+Unless Haters vibe is active, include a compliment only when it is relevant to what the streamer just said or to reliable visual context. Do not force a compliment into every reply.
 Do not sound scripted. Do not repeat the same compliment style. Usually use 1-2 short sentences, but do not force an unnatural cutoff. When the topic genuinely benefits from detail, a deeper reply may use 3-4 concise sentences. Avoid long, repetitive paragraphs.
 Do not merely repeat or paraphrase the user's words. React to their meaning and move the conversation forward.
-Refer to visual context when it is relevant and natural. Treat visual labels as uncertain, say "it looks like" when needed, never invent details, and never infer sensitive traits, health, identity, or private information. Never say that you cannot see the stream.
+Use visual context only when it directly helps with the streamer's latest message. Treat visual labels as uncertain, say "it looks like" when needed, never invent details, and never infer sensitive traits, health, identity, or private information. Never say that you cannot see the stream.
 If the user says it is nice to meet you, warmly say it is nice to meet them too and ask one natural follow-up question.
 `.trim();
 }
@@ -1300,7 +1345,7 @@ function conciseReply(answer, userText, replyDepth = 0.62) {
 
 async function callDeepSeek(body) {
   const fallback = (reason, providerStatus = null) => ({
-    answer: localAIReply(body.text),
+    answer: localAIReply(body.text, body.inputLanguage),
     source: "fallback",
     reason,
     providerStatus
@@ -1315,7 +1360,7 @@ async function callDeepSeek(body) {
         "content-type": "application/json",
         authorization: `Bearer ${process.env.DEEPSEEK_API_KEY.trim()}`
       },
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(8000),
       body: JSON.stringify({
         model: deepSeekModel,
         thinking: { type: "disabled" },
@@ -1379,7 +1424,7 @@ async function route(req, res) {
       payments: {
         appStoreVerificationConfigured: Boolean(appleAppId),
         appStoreOnlineChecks: appleOnlineChecks,
-        notificationsEndpoint: 'https://squadlive.onrender.com/v1/storekit/notifications',
+        notificationsEndpoint: `${url.origin}/v1/storekit/notifications`,
         notificationVerificationConfigured: Boolean(appleAppId || process.env.NODE_ENV !== "production"),
         productionReady: process.env.NODE_ENV !== "production" || Boolean(appleAppId)
       }
@@ -1696,6 +1741,9 @@ async function route(req, res) {
 
     const existingOperation = walletOperationResponse(store, operationId, user);
     if (existingOperation) {
+      if (!audienceOperationMatches(existingOperation, viewers, context, regularCost)) {
+        return jsonResponse(res, 409, { error: "Wallet operation parameters do not match the original request" });
+      }
       return jsonResponse(res, 200, {
         user: userPublic(user),
         viewers: existingOperation.viewers || viewers,
@@ -2100,8 +2148,7 @@ async function route(req, res) {
 
   const reviewMatch = url.pathname.match(/^\/v1\/rewards\/([^/]+)\/review$/);
   if (req.method === "POST" && reviewMatch) {
-    const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-    if (token !== process.env.ADMIN_TOKEN) return jsonResponse(res, 401, { error: "Unauthorized" });
+    if (!requireAdmin(req, res)) return;
     const body = await readJSON(req);
     const submission = store.rewardSubmissions[reviewMatch[1]];
     if (!submission) return jsonResponse(res, 404, { error: "Submission not found" });

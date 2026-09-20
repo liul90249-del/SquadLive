@@ -8,6 +8,7 @@
 - `DEEPSEEK_API_KEY`
 - Strong `ADMIN_TOKEN`
 - Numeric App Store app ID in `APPLE_APP_ID`
+- `APPLE_AUTH_AUDIENCE` matching the iOS bundle ID for Sign in with Apple
 - Persistent storage through a mounted disk or managed PostgreSQL
 
 ## Render Deployment
@@ -24,6 +25,7 @@ The blueprint declares:
 - Secret env vars for `DEEPSEEK_API_KEY` and `ADMIN_TOKEN`
 - `APPLE_BUNDLE_ID=com.liuzhigang.AI-Live-Streaming`
 - Secret `APPLE_APP_ID` containing the numeric App Store app ID
+- `APPLE_AUTH_AUDIENCE=com.liuzhigang.AI-Live-Streaming` for Sign in with Apple identity verification
 - A 1 GB persistent disk mounted at `/var/data`
 - `AI_MAX_CONCURRENCY=40`, `AI_QUEUE_LIMIT=300`, and `INSTANCE_MEMORY_MB=512`
 - `IP_GEOLOCATION_ENABLED=true` to resolve user IP addresses into country, city, ASN, and network organization for the protected admin dashboard
@@ -52,6 +54,7 @@ DEEPSEEK_API_KEY=your_deepseek_key
 ADMIN_TOKEN=use-a-long-random-token
 APPLE_BUNDLE_ID=com.liuzhigang.AI-Live-Streaming
 APPLE_APP_ID=your_numeric_app_store_id
+APPLE_AUTH_AUDIENCE=com.liuzhigang.AI-Live-Streaming
 EOF
 
 npm run start
@@ -148,6 +151,10 @@ Verified StoreKit purchases use:
 
 Before relying on the backend as the sole subscription authority, configure App Store Server Notifications V2 so renewals, billing retry, grace-period changes, refunds, and revocations are received even when the app is not running.
 
+In App Store Connect, configure both Production and Sandbox notification URLs as `https://squadlive.onrender.com/v1/storekit/notifications` and select the V2 notification format. Confirm `/health` reports `productionReady: true` and `notificationVerificationConfigured: true` after `APPLE_APP_ID` is set in Render.
+
+Sign in with Apple is available from the iOS Settings screen. The backend verifies Apple's rotating JWKS keys, binds the Apple subject to the existing device wallet, and refuses to merge two different wallets automatically. Support must reconcile a conflict before linking.
+
 In App Store Connect, configure the production and sandbox notification URLs to:
 
 ```text
@@ -180,3 +187,5 @@ The backend is the source of truth for coin balances after this deployment:
 The first-live promotion is bound to the backend user account, not local app storage. Existing users migrated from older store data are intentionally ineligible, so reinstalling the app cannot reset the promotion.
 
 Balances that existed only in an older app's local preferences are intentionally not trusted or uploaded. Verified purchases and server-recorded rewards remain in the backend ledger; manually altered local balances are replaced during the next successful wallet sync.
+
+Run `scripts/storekit-regression.sh` from the repository root before each TestFlight release. It checks the payment health contract and prints the required Sandbox/TestFlight purchase, retry, restore, refund, and account-linking matrix.

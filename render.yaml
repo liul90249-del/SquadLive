@@ -23,6 +23,8 @@ services:
         value: com.liuzhigang.AI-Live-Streaming
       - key: APPLE_APP_ID
         sync: false
+      - key: APPLE_AUTH_AUDIENCE
+        value: com.liuzhigang.AI-Live-Streaming
       - key: REWARD_TIME_ZONE
         value: Asia/Shanghai
       - key: APPLE_IAP_ONLINE_CHECKS

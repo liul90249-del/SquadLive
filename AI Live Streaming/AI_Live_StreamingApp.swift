@@ -8,6 +8,7 @@
 import SwiftUI
 #if os(iOS)
 import FirebaseCore
+import FirebaseAnalytics
 import StoreKit
 import UIKit
 #endif
@@ -40,9 +41,11 @@ private enum SquadLiveAppShortcut {
     static func handle(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
         switch shortcutItem.type {
         case reviewType:
+            SquadLiveAnalytics.log("app_shortcut_used", parameters: ["shortcut": "rate"])
             requestReviewWhenReady()
             return true
         case feedbackType:
+            SquadLiveAnalytics.log("app_shortcut_used", parameters: ["shortcut": "feedback"])
             openFeedbackEmail()
             return true
         default:
@@ -164,6 +167,26 @@ private final class SquadLiveAppDelegate: NSObject, UIApplicationDelegate {
 }
 #endif
 
+enum SquadLiveAnalytics {
+    static func log(_ name: String, parameters: [String: Any] = [:]) {
+#if os(iOS)
+        Analytics.logEvent(name, parameters: parameters.isEmpty ? nil : parameters)
+#endif
+    }
+
+    static func setPremium(_ isPremium: Bool) {
+#if os(iOS)
+        Analytics.setUserProperty(isPremium ? "pro" : "free", forName: "membership_tier")
+#endif
+    }
+
+    static func setCoinBalance(_ balance: Int) {
+#if os(iOS)
+        Analytics.setUserProperty(balance >= 100 ? "100_plus" : "under_100", forName: "coin_balance_band")
+#endif
+    }
+}
+
 @main
 struct SquadLiveApp: App {
 #if os(iOS)
@@ -173,6 +196,8 @@ struct SquadLiveApp: App {
     init() {
 #if os(iOS)
         FirebaseApp.configure()
+        Analytics.setAnalyticsCollectionEnabled(true)
+        SquadLiveAnalytics.log("app_opened")
 #endif
     }
 
