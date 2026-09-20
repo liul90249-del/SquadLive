@@ -42,6 +42,7 @@ const aiQueueLimit = Math.max(aiMaxConcurrency, Number(process.env.AI_QUEUE_LIMI
 const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 512));
 const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
+const publicBaseURL = String(process.env.PUBLIC_BASE_URL || "https://squadlive.onrender.com").replace(/\/$/, "");
 const processStartedAt = Date.now();
 const deploymentRevision = "2026-09-20-multilingual-vision-v8";
 const appleIssuer = "https://appleid.apple.com";
@@ -1424,7 +1425,7 @@ async function route(req, res) {
       payments: {
         appStoreVerificationConfigured: Boolean(appleAppId),
         appStoreOnlineChecks: appleOnlineChecks,
-        notificationsEndpoint: `${url.origin}/v1/storekit/notifications`,
+        notificationsEndpoint: `${publicBaseURL}/v1/storekit/notifications`,
         notificationVerificationConfigured: Boolean(appleAppId || process.env.NODE_ENV !== "production"),
         productionReady: process.env.NODE_ENV !== "production" || Boolean(appleAppId)
       }
