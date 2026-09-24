@@ -21,7 +21,7 @@ async function atomic(file,value){
  await rename(temporary,file);
 }
 const hash=s=>createHash('sha256').update(s).digest('hex');
-export function createTransactionInbox({directory,certDirectory,now=()=>Date.now(),env=process.env,historyFactory}){
+export function createTransactionInbox({directory,certDirectory,now=()=>Date.now(),env=process.env,historyFactory,onVerified}){
  let active=0,queue=Promise.resolve();const verifiers=new Map();
  async function configure(product){
   const config=inboxProducts[product];if(!config)throw fail('Product is not connected',404);
@@ -97,7 +97,11 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    const all=await configure(product);let payload,verifier;
    for(const v of all){try{payload=await (kind==='notifications'?v.verifyAndDecodeNotification(proof):kind==='app-transactions'?v.verifyAndDecodeAppTransaction(proof):v.verifyAndDecodeTransaction(proof));verifier=v;break}catch{}}
    if(!payload)throw fail('Apple signature verification failed');
-   if(kind==='transactions')return await record(product,payload,proof);
+   if(kind==='transactions'){
+    const stored=await record(product,payload,proof);
+    const attribution=onVerified?await onVerified(product,payload,proof,{refund:false}):null;
+    return attribution?{...stored,...attribution}:stored;
+   }
    if(kind==='app-transactions')return await refreshAppHistory(product,payload,proof,verifier);
    const id=payload.notificationUUID;if(!id)throw fail('Missing notification identifier');
    if(payload.notificationType==='TEST'){
@@ -108,7 +112,10 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    }
    const signed=payload.data?.signedTransactionInfo;if(!signed)throw fail('Missing signed transaction');
    let t;try{t=await verifier.verifyAndDecodeTransaction(signed)}catch{throw fail('Apple transaction signature verification failed')}
-   return await record(product,t,signed,{refund:['REFUND','REVOKE'].includes(payload.notificationType),notificationId:id});
+   const refund=['REFUND','REVOKE'].includes(payload.notificationType);
+   const stored=await record(product,t,signed,{refund,notificationId:id});
+   const attribution=onVerified?await onVerified(product,t,signed,{refund}):null;
+   return attribution?{...stored,...attribution}:stored;
   }finally{active--}
  }
  return {recordVerified:record,recordVerifiedApp:recordApp,refreshVerifiedAppHistory:refreshAppHistory,receive};

@@ -1,5 +1,7 @@
 import http from "node:http";
 import {createTransactionInbox} from "./shared-transaction-inbox.mjs";
+import {inboxProducts} from "./shared-transaction-inbox.mjs";
+import {createSharedProductReferrals} from "./shared-product-referrals.mjs";
 import { mkdir, readFile, rename, stat, statfs, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -18,7 +20,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 8787);
 const dataDir = process.env.DATA_DIR || join(__dirname, "data");
 const storePath = join(dataDir, "store.json");
-const sharedInbox=createTransactionInbox({directory:process.env.DATA_DIR,certDirectory:join(__dirname,"certs")});
+let sharedProductReferrals;
+const sharedInbox=createTransactionInbox({directory:process.env.DATA_DIR,certDirectory:join(__dirname,"certs"),
+ onVerified:(product,transaction,proof,options)=>sharedProductReferrals?.recordVerified(product,transaction,proof,options)});
 const homePagePath = join(__dirname, "index.html");
 const adminPagePath = join(__dirname, "admin.html");
 const supportPagePath = join(__dirname, "support.html");
@@ -115,6 +119,13 @@ let appleVerifierPromise;
 const verifyAppleIdentityToken = createAppleIdentityVerifier({audience: appleAuthAudience});
 const partnerClient = process.env.PARTNER_API_ORIGIN && process.env.PARTNER_EVENT_KEY
  ? new PartnerClient({origin:process.env.PARTNER_API_ORIGIN,product:'squadlive',key:process.env.PARTNER_EVENT_KEY}) : null;
+let sharedPartnerEventKeys={};
+try{sharedPartnerEventKeys=JSON.parse(process.env.PARTNER_EVENT_KEYS||'{}')}catch{console.error('PARTNER_EVENT_KEYS is invalid JSON')}
+const sharedPartnerClients=Object.fromEntries(Object.keys(inboxProducts).flatMap(product=>{
+ const key=sharedPartnerEventKeys[product];
+ return process.env.PARTNER_API_ORIGIN&&key?[[product,new PartnerClient({origin:process.env.PARTNER_API_ORIGIN,product,key})]]:[];
+}));
+sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:inboxProducts});
 const partnerAttribution = createPartnerAttribution({getStore,saveStore,client:partnerClient,product:'squadlive',bundleId:appleBundleId,
  skus:Object.fromEntries([...Object.keys(appStoreCoinAmounts).map(s=>[s,'iap']),...[...appStoreSubscriptionProducts].map(s=>[s,'subscription'])])});
 const benefitAuth = createBenefitAuth({verifyApple:verifyAppleIdentityToken,resolveUser:async subject => {
@@ -1399,6 +1410,24 @@ async function callDeepSeek(body) {
 async function route(req, res) {
   if (req.method === "OPTIONS") return jsonResponse(res, 204, {});
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  const sharedSessionRoute=/^\/v1\/partners\/([a-z]+)\/session$/.exec(url.pathname);
+  if(req.method==='POST'&&sharedSessionRoute){
+    const product=sharedSessionRoute[1];
+    if(!sharedPartnerClients[product])return jsonResponse(res,503,{error:'Referral service is not configured'});
+    return jsonResponse(res,200,await sharedProductReferrals.session(product,await readJSON(req)));
+  }
+  const sharedAttributionRoute=/^\/v1\/partners\/([a-z]+)\/attribution$/.exec(url.pathname);
+  if(sharedAttributionRoute){
+    const product=sharedAttributionRoute[1],authorization=req.headers.authorization||'';
+    if(!sharedPartnerClients[product])return jsonResponse(res,503,{error:'Referral service is not configured'});
+    if(req.method==='GET')return jsonResponse(res,200,await sharedProductReferrals.status(product,authorization));
+    if(req.method!=='POST')return jsonResponse(res,405,{error:'Method not allowed'});
+    const body=await readJSON(req),code=String(body.code||'').trim().toUpperCase();
+    if(body.action==='preview')return jsonResponse(res,200,await sharedProductReferrals.preview(product,authorization,code));
+    if(body.action==='bind')return jsonResponse(res,200,await sharedProductReferrals.bind(product,authorization,code,body.confirmed));
+    return jsonResponse(res,400,{error:'Invalid action'});
+  }
 
   const inboxRoute=/^\/v1\/partners\/([a-z]+)\/(transactions|notifications|app-transactions)$/.exec(url.pathname);
   if(req.method==='POST'&&inboxRoute){
