@@ -55,8 +55,15 @@ export function createPartnerAttribution({getStore,saveStore,client,product,bund
    }
    // Reserve before remote calls so concurrent anonymous identities cannot bind one wallet twice.
    s.partnerWalletOwners[walletId]=identity.customerId;await saveStore(s);
-   await client.identify(identity.customerId,identity.registeredAt);
-   const result=await client.bind({customer_id:identity.customerId,code,is_self_referral:false});
+   let result;
+   if(typeof client.install==='function'&&typeof client.register==='function'&&typeof client.attribution==='function'){
+    await client.install({installation_id:identity.customerId,code,occurred_at:identity.registeredAt});
+    await client.register({customer_id:identity.customerId,code,registered_at:identity.registeredAt,is_self_referral:false});
+    result=await client.attribution(identity.customerId);
+   }else{
+    await client.identify(identity.customerId,identity.registeredAt);
+    result=await client.bind({customer_id:identity.customerId,code,is_self_referral:false});
+   }
    // Canonical server binding controls ownership and the start/end timestamps.
    const b=result.binding;
    if(!b||b.customer_id!==identity.customerId||b.product!==product)throw fail('Invalid attribution response',502);

@@ -29,6 +29,10 @@ services:
         value: Asia/Shanghai
       - key: APPLE_IAP_ONLINE_CHECKS
         value: "false"
+      - key: PARTNER_API_ORIGIN
+        value: https://partner.cleann.top
+      - key: PARTNER_EVENT_KEY
+        sync: false
       - key: AI_MAX_CONCURRENCY
         value: "40"
       - key: AI_QUEUE_LIMIT

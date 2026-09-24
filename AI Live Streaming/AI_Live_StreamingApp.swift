@@ -204,9 +204,11 @@ struct SquadLiveApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onOpenURL { PartnerReferralLink.handle($0) }
                 .task {
 #if os(iOS)
                     PromotionNotificationManager.bootstrap()
+                    await SquadLivePartnerAttributionClient.bootstrap()
 #endif
                 }
         }

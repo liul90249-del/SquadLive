@@ -98,6 +98,7 @@ private final class StorePurchaseManager: ObservableObject {
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
+        await SquadLivePartnerAttributionClient.bootstrap()
         updatesTask = Task { [weak self] in
             for await result in StoreKit.Transaction.updates {
                 guard let self else { return }
@@ -143,7 +144,7 @@ private final class StorePurchaseManager: ObservableObject {
 
         do {
             let result: Product.PurchaseResult
-            if let accountToken = SquadLiveDeviceIdentity.appAccountToken {
+            if let accountToken = SquadLiveDeviceIdentity.purchaseAccountToken {
                 result = try await product.purchase(options: [.appAccountToken(accountToken)])
             } else {
                 result = try await product.purchase()
@@ -331,7 +332,7 @@ private final class StorePurchaseManager: ObservableObject {
                 clearSubscriptionDetails()
             }
             didLoadEntitlements = true
-            guard transaction.appAccountToken == SquadLiveDeviceIdentity.appAccountToken,
+            guard transaction.appAccountToken == SquadLiveDeviceIdentity.purchaseAccountToken,
                   let signedTransaction else {
                 await transaction.finish()
                 return true
@@ -1126,7 +1127,7 @@ private struct DeepSeekAnswerResult {
     }
 }
 
-private enum SquadLiveDeviceIdentity {
+enum SquadLiveDeviceIdentity {
     private static let storageKey = "squadlive.device-id"
 
     static let value: String = {
@@ -1144,6 +1145,10 @@ private enum SquadLiveDeviceIdentity {
 
     static var appAccountToken: UUID? {
         UUID(uuidString: value)
+    }
+
+    static var purchaseAccountToken: UUID? {
+        SquadLivePartnerAttributionClient.purchaseAccountToken ?? appAccountToken
     }
 }
 
@@ -5051,6 +5056,7 @@ private struct AppSettingsView: View {
     @State private var supportIdentity: StoreSupportIdentity?
     @State private var isLoadingSupportIdentity = false
     @State private var copiedMessage: String?
+    @State private var showingPartnerReferral = false
 #if os(iOS)
     @StateObject private var appleSignIn = AppleSignInCoordinator()
 #endif
@@ -5068,6 +5074,32 @@ private struct AppSettingsView: View {
                     InfoRow(icon: "person.2.fill", title: "AI-Only Audience", description: "SquadLive uses simulated AI friends and activity. No real human viewers join your room.")
                     InfoRow(icon: "shield.fill", title: "On-Device Data", description: "Your profile, preferences, saved AI reply history, and live recordings are stored on this device.")
                     InfoRow(icon: "network", title: "AI Processing", description: "Conversation text and limited on-device scene analysis are sent to the AI service to generate replies.")
+
+                    Button {
+                        showingPartnerReferral = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 42, height: 42)
+                                .background(Color.brandPurple.opacity(0.72), in: Circle())
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Share App / Invite Code")
+                                    .font(.system(size: 16, weight: .black))
+                                    .foregroundStyle(.white)
+                                Text("Share SquadLive or save a verified invitation code.")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.52))
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.38))
+                        }
+                        .padding(16)
+                        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.brandPurple.opacity(0.24)))
+                    }
+                    .buttonStyle(.plain)
 
 #if os(iOS)
                     VStack(alignment: .leading, spacing: 12) {
@@ -5212,6 +5244,9 @@ private struct AppSettingsView: View {
                 .padding(.top, 18)
                 .padding(.bottom, 30)
             }
+        }
+        .sheet(isPresented: $showingPartnerReferral) {
+            PartnerReferralCenterView()
         }
         .task {
             SquadLiveAnalytics.log("settings_viewed")
