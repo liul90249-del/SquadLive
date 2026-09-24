@@ -208,7 +208,6 @@ struct SquadLiveApp: App {
                 .task {
 #if os(iOS)
                     PromotionNotificationManager.bootstrap()
-                    await SquadLivePartnerAttributionClient.bootstrap()
 #endif
                 }
         }
