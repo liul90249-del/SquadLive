@@ -2,12 +2,28 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,rm,readdir,readFile,writeFile,mkdir} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
-import {createTransactionInbox} from '../shared-transaction-inbox.mjs';
+import {createTransactionInbox,inboxProducts} from '../shared-transaction-inbox.mjs';
 const proof={bundleId:'com.liuzhigang.NutriScan',productId:'com.liuzhigang.nutriscan.pro.monthlya',type:'Auto-Renewable Subscription',environment:'Production',transactionId:'id/../escape',originalTransactionId:'original',purchaseDate:Date.now()-1000,price:4990,currency:'USD'};
 async function fixture(t){const directory=await mkdtemp(join(tmpdir(),'shared-inbox-'));t.after(()=>rm(directory,{recursive:true,force:true}));const options={directory,certDirectory:fileURLToPath(new URL('../certs/',import.meta.url))};return {options,service:createTransactionInbox(options)}}
 test('NutriScan persists separately, filenames cannot traverse, duplicates survive restart',async t=>{const f=await fixture(t);const r=await f.service.recordVerified('nutriscan',proof,'signed');assert.equal(r.commission_eligible,false);assert.equal((await createTransactionInbox(f.options).recordVerified('nutriscan',proof,'signed')).duplicate,true);assert.equal((await readdir(join(f.options.directory,'partner-inbox','nutriscan','Production'))).filter(name=>name.endsWith('.json')).length,1);assert.deepEqual(await readdir(f.options.directory),['partner-inbox']);});
 test('Refund stays revoked after old receipt replay; sandbox is isolated',async t=>{const f=await fixture(t);await f.service.recordVerified('nutriscan',proof,'refund',{refund:true});assert.equal((await f.service.recordVerified('nutriscan',proof,'old')).revoked,true);assert.equal((await f.service.recordVerified('nutriscan',{...proof,environment:'Sandbox'},'sandbox')).revoked,false)});
 test('Foreign products, changed owner or amount, and invalid dates are rejected',async t=>{const f=await fixture(t);await f.service.recordVerified('nutriscan',proof,'signed');for(const patch of [{bundleId:'com.liuzhigang.AI-Live-Streaming'},{productId:'coins'},{appAccountToken:'someone'},{price:100},{purchaseDate:0}])await assert.rejects(f.service.recordVerified('nutriscan',{...proof,...patch},'wrong'));await assert.rejects(f.service.recordVerified('../squadlive',proof,'wrong'));});
+test('Every connected product pins its app, SKU and Apple product type',async t=>{
+ const f=await fixture(t),samples={
+  cleaner:{bundleId:'com.hecathehe.PhoneCleaner',productId:'com.hecathehe.PhoneCleaner.weekly',type:'Auto-Renewable Subscription'},
+  subguard:{bundleId:'Organization-Identifier--com.liuzhigang.SubGuard',productId:'com.liuzhigang.subguardpro.lifetime',type:'Non-Consumable'},
+  dailyme:{bundleId:'com.liuzhigang.dailyme',productId:'com.dailyme.premium.yearly2',type:'Auto-Renewable Subscription'},
+  sparkle:{bundleId:'com.LuminaArt.LuminaArt',productId:'com.LuminaArt.LuminaArt.diamonds100',type:'Consumable'}
+ };
+ assert.deepEqual(Object.keys(inboxProducts).sort(),['cleaner','dailyme','nutriscan','sparkle','subguard']);
+ for(const [product,sample] of Object.entries(samples)){
+  const transaction={...proof,...sample,transactionId:product,originalTransactionId:product};
+  const result=await f.service.recordVerified(product,transaction,'signed');assert.equal(result.received,true);
+  await assert.rejects(f.service.recordVerified(product,{...transaction,transactionId:product+'-wrong',productId:'invented'},'wrong'));
+  const wrongType=sample.type==='Consumable'?'Auto-Renewable Subscription':'Consumable';
+  await assert.rejects(f.service.recordVerified(product,{...transaction,transactionId:product+'-wrong-type',type:wrongType},'wrong'));
+ }
+});
 test('Missing persistent storage and forged Apple signatures fail closed',async t=>{const f=await fixture(t);await assert.rejects(createTransactionInbox({...f.options,directory:undefined}).recordVerified('nutriscan',proof,'signed'),/storage/);await assert.rejects(f.service.receive('nutriscan','transactions','x'.repeat(150)),/signature/);assert.equal((await readdir(f.options.directory)).length,0);});
 
 const receiptPath=(f,tx)=>join(f.options.directory,'partner-inbox','nutriscan',tx.environment,createHash('sha256').update(tx.transactionId).digest('hex')+'.json');

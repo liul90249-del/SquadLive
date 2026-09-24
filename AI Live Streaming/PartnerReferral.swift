@@ -216,7 +216,7 @@ struct PartnerReferralCenterView: View {
                          : (isChinese ? "尚未绑定邀请码，将分享官方 App Store 地址。" : "No invite code is saved, so the official App Store address will be shared."))
                 }
 
-                Section(isChinese ? "输入邀请码" : "Enter Invite Code") {
+                Section {
                     TextField("PC… / PS…", text: $code)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
@@ -243,6 +243,8 @@ struct PartnerReferralCenterView: View {
                             .font(.footnote)
                             .foregroundStyle(status.hasPrefix("✓") ? .green : .red)
                     }
+                } header: {
+                    Text(isChinese ? "输入邀请码" : "Enter Invite Code")
                 } footer: {
                     Text(isChinese
                          ? "邀请码首次绑定后不可替换。购买过的账号不能补填邀请码。"
