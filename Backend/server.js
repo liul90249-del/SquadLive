@@ -14,7 +14,7 @@ import { createAnonymousAuth } from "./anonymous-auth.mjs";
 import { createPartnerAttribution } from "./partner-attribution.mjs";
 import { productOperations, readVerifiedProductReceipts } from "./product-operations.mjs";
 import { PartnerClient } from "./partner-client.mjs";
-import { isIP } from "node:net";
+import { clientIPAddress } from "./client-network.mjs";
 import { Environment, SignedDataVerifier } from "@apple/app-store-server-library";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -424,41 +424,6 @@ function newId(prefix) {
   return `${prefix}_${randomUUID()}`;
 }
 
-function normalizedIPAddress(value) {
-  let candidate = String(value || "").trim();
-  if (!candidate) return "";
-  if (candidate.includes(",")) candidate = candidate.split(",")[0].trim();
-  if (candidate.startsWith("::ffff:")) candidate = candidate.slice(7);
-  if (candidate.startsWith("[") && candidate.includes("]")) candidate = candidate.slice(1, candidate.indexOf("]"));
-  if (isIP(candidate)) return candidate;
-  const ipv4WithPort = candidate.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
-  return ipv4WithPort && isIP(ipv4WithPort[1]) ? ipv4WithPort[1] : "";
-}
-
-function clientIPAddress(req) {
-  const candidates = [
-    req.headers["cf-connecting-ip"],
-    req.headers["true-client-ip"],
-    req.headers["x-forwarded-for"],
-    req.headers["x-real-ip"],
-    req.socket?.remoteAddress
-  ];
-  for (const candidate of candidates) {
-    const address = normalizedIPAddress(Array.isArray(candidate) ? candidate[0] : candidate);
-    if (address) return address;
-  }
-  return "";
-}
-
-function requestCountryCode(req) {
-  const value = req.headers["cf-ipcountry"]
-    || req.headers["x-vercel-ip-country"]
-    || req.headers["cloudfront-viewer-country"]
-    || "";
-  const code = String(Array.isArray(value) ? value[0] : value).trim().toUpperCase();
-  return /^[A-Z]{2}$/.test(code) ? code : "";
-}
-
 function isPrivateIPAddress(address) {
   return address === "127.0.0.1"
     || address === "::1"
@@ -571,7 +536,6 @@ function recordUserNetwork(store, user, req) {
   const address = clientIPAddress(req);
   if (!address) return;
   const now = new Date().toISOString();
-  const countryCode = requestCountryCode(req);
   user.firstIPAddress ||= address;
   user.lastIPAddress = address;
   user.lastIPSeenAt = now;
@@ -585,10 +549,6 @@ function recordUserNetwork(store, user, req) {
     user.networkUpdatedAt = null;
   } else {
     item.lastSeenAt = now;
-  }
-  if (countryCode) {
-    item.countryCode = countryCode;
-    user.networkCountryCode = countryCode;
   }
   scheduleIPAddressLookup(store, user, address);
 }
