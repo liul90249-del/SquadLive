@@ -24,6 +24,16 @@ test('Every connected product pins its app, SKU and Apple product type',async t=
   await assert.rejects(f.service.recordVerified(product,{...transaction,transactionId:product+'-wrong-type',type:wrongType},'wrong'));
  }
 });
+test('Smart Cleaner lifetime purchase is verified and classified as a non-consumable order',async t=>{
+ const f=await fixture(t),transaction={...proof,bundleId:'com.hecathehe.PhoneCleaner',productId:'com.hecathehe.PhoneCleaner.lifetime',type:'Non-Consumable',transactionId:'cleaner-lifetime',originalTransactionId:'cleaner-lifetime'};
+ const result=await f.service.recordVerified('cleaner',transaction,'signed');
+ assert.equal(result.received,true);
+ const root=join(f.options.directory,'partner-inbox','cleaner','Production');
+ const receipt=JSON.parse(await readFile(join(root,createHash('sha256').update(transaction.transactionId).digest('hex')+'.json'),'utf8'));
+ assert.equal(receipt.purchase_kind,'iap');
+ assert.equal(receipt.sku,transaction.productId);
+ await assert.rejects(f.service.recordVerified('cleaner',{...transaction,transactionId:'invalid-lifetime',type:'Auto-Renewable Subscription'},'wrong'));
+});
 test('Missing persistent storage and forged Apple signatures fail closed',async t=>{const f=await fixture(t);await assert.rejects(createTransactionInbox({...f.options,directory:undefined}).recordVerified('nutriscan',proof,'signed'),/storage/);await assert.rejects(f.service.receive('nutriscan','transactions','x'.repeat(150)),/signature/);assert.equal((await readdir(f.options.directory)).length,0);});
 
 const receiptPath=(f,tx)=>join(f.options.directory,'partner-inbox','nutriscan',tx.environment,createHash('sha256').update(tx.transactionId).digest('hex')+'.json');
