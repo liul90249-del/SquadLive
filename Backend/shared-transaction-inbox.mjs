@@ -43,7 +43,8 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    const incoming={product,environment:t.environment,transaction_id:t.transactionId,original_id:t.originalTransactionId,sku:t.productId,purchase_kind:sku.kind,apple_type:sku.appleType,account_token:t.appAccountToken?.toLowerCase()||null,purchased_at:t.purchaseDate,price:t.price??null,currency:t.currency??null};
    if(old&&Object.keys(incoming).some(k=>old[k]!==incoming[k]))throw fail('Transaction ownership or amount conflict',409);
    const subscriptionOwner=await reserveSubscriptionOwner(root,incoming,atomic);
-   const receipt={...incoming,subscription_owner_token:subscriptionOwner,revoked:!!(old?.revoked||refund||t.revocationDate),signed_transaction:old?.revoked?old.signed_transaction:proof,notification_id:notificationId||old?.notification_id||null,received_at:old?.received_at||now(),updated_at:now(),attribution_status:'not_bound',commission_eligible:false};
+   const refundedAt=old?.refunded_at||(refund||t.revocationDate?(Number.isSafeInteger(t.revocationDate)&&t.revocationDate>0?t.revocationDate:now()):null);
+   const receipt={...incoming,subscription_owner_token:subscriptionOwner,revoked:!!(old?.revoked||refund||t.revocationDate),refunded_at:refundedAt,signed_transaction:old?.revoked?old.signed_transaction:proof,notification_id:notificationId||old?.notification_id||null,received_at:old?.received_at||now(),updated_at:now(),attribution_status:'not_bound',commission_eligible:false};
    await atomic(file,receipt);
    return {received:true,duplicate:!!old,transaction_id:t.transactionId,environment:t.environment,revoked:receipt.revoked,attribution_status:'not_bound',commission_eligible:false};
   });queue=op.catch(()=>{});return op;

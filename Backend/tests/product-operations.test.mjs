@@ -14,7 +14,7 @@ test('operational metrics use verified production charges, refunds, and tracked 
     },
     receipts:{
       paid:{transaction_id:'t1',original_transaction_id:'o1',customer_id:'a',sku:'weekly',environment:'Production',purchased_at:Math.floor(Date.parse('2026-10-11T08:00:00Z')/1000),price:4990,currency:'USD',purchase_kind:'subscription',status:'sent'},
-      refunded:{transaction_id:'t2',original_transaction_id:'o2',customer_id:'b',sku:'weekly',environment:'Production',purchased_at:Math.floor(Date.parse('2026-10-10T08:00:00Z')/1000),price:4990,currency:'USD',purchase_kind:'subscription',status:'refunded',revoked:true},
+      refunded:{transaction_id:'t2',original_transaction_id:'o2',customer_id:'b',sku:'weekly',environment:'Production',purchased_at:Math.floor(Date.parse('2026-10-10T08:00:00Z')/1000),refunded_at:Date.parse('2026-10-11T09:00:00Z'),price:4990,currency:'USD',purchase_kind:'subscription',status:'refunded',revoked:true},
       trial:{transaction_id:'t3',customer_id:'a',sku:'weekly',environment:'Production',price:0,currency:'USD'},
       sandbox:{transaction_id:'t4',customer_id:'a',sku:'weekly',environment:'Sandbox',price:4990,currency:'USD'}
     },bindings:{}
@@ -27,6 +27,10 @@ test('operational metrics use verified production charges, refunds, and tracked 
   assert.equal(report.totals.refunds,1);
   assert.deepEqual(report.totals.grossMilliunitsByCurrency,{USD:9980});
   assert.deepEqual(report.totals.refundedMilliunitsByCurrency,{USD:4990});
+  assert.equal(report.daily.find(item => item.date === '2026-10-10').refunds,0);
+  assert.equal(report.daily.find(item => item.date === '2026-10-11').refunds,1);
+  assert.deepEqual(report.daily.find(item => item.date === '2026-10-11').refundedMilliunitsByCurrency,{USD:4990});
+  assert.equal(report.orders.find(item => item.transactionId === 't2').refundedAt,'2026-10-11T09:00:00.000Z');
   assert.deepEqual(report.totals.day1Retention,{eligible:1,returned:1,rate:100});
   assert.deepEqual(report.totals.day7Retention,{eligible:0,returned:0,rate:null});
   assert.equal(report.orders.length,3);

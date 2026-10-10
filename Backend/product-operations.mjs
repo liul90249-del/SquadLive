@@ -39,6 +39,7 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
         original_transaction_id: receipt.original_id,
         purchase_kind: receipt.purchase_kind,
         purchased_at: Math.floor(Number(receipt.purchased_at) / 1000),
+        refunded_at: receipt.refunded_at || matching.refunded_at || null,
         revoked: Boolean(receipt.revoked || matching.revoked),
         status: matching.status || receipt.attribution_status || 'unattributed'
       };
@@ -76,6 +77,7 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
     sku: item.sku,
     kind: item.purchase_kind,
     purchasedAt: iso(Number(item.purchased_at) * 1000),
+    refundedAt: item.revoked && item.refunded_at ? iso(Number(item.refunded_at)) : null,
     priceMilliunits: Number.isSafeInteger(item.price) ? item.price : null,
     currency: item.currency || null,
     refunded: Boolean(item.revoked),
@@ -92,7 +94,7 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
   }
   const daily = Array.from({length: 30}, (_, index) => dayAfter(today, index - 29)).map(date => {
     const dailyPaid = charged.filter(item => iso(Number(item.purchased_at) * 1000)?.slice(0, 10) === date);
-    const dailyRefunded = refunded.filter(item => iso(Number(item.purchased_at) * 1000)?.slice(0, 10) === date);
+    const dailyRefunded = refunded.filter(item => item.refunded_at && iso(Number(item.refunded_at))?.slice(0, 10) === date);
     return {
       date,
       registrations: accounts.filter(account => day(account.createdAt) === date).length,
