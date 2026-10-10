@@ -3,7 +3,7 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 
-export function createSharedProductReferrals({getStore,saveStore,clients,products,now=()=>Date.now()}) {
+export function createSharedProductReferrals({getStore,saveStore,clients,products,now=()=>Date.now(),onSession=()=>{}}) {
  const state=(root,product)=>{
   root.sharedPartnerReferrals||={};
   return root.sharedPartnerReferrals[product]||=(
@@ -13,7 +13,7 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
  const clientFor=product=>clients[product]||null;
  const productFor=product=>products[product]||null;
 
- async function session(product,{credential,deviceId}) {
+ async function session(product,{credential,deviceId},req) {
   if(!productFor(product))throw fail('Product is not connected',404);
   const root=await getStore(),s=state(root,product);let account,token;
   if(credential!==undefined&&credential!==null&&credential!==''){
@@ -34,6 +34,14 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
    s.devices[account.deviceId]={accountId:account.id,createdAt:account.createdAt};
    s.accountTokens[account.accountToken.toLowerCase()]=account.id;
   }
+  const seenAt=new Date(now()).toISOString();
+  account.lastSeenAt=seenAt;
+  account.activityTrackedFrom||=seenAt;
+  account.activeDays||={};
+  account.activeDays[seenAt.slice(0,10)]=true;
+  // Keep a bounded activity history for daily active and cohort retention metrics.
+  for(const day of Object.keys(account.activeDays).sort().slice(0,-120))delete account.activeDays[day];
+  onSession(root,account,req);
   await saveStore(root);
   return {token,account_token:account.accountToken,expires_in:31536000};
  }

@@ -12,6 +12,7 @@ import { createBenefitAuth } from "./benefit-auth.mjs";
 import { createBenefitGateway } from "./benefit-gateway.mjs";
 import { createAnonymousAuth } from "./anonymous-auth.mjs";
 import { createPartnerAttribution } from "./partner-attribution.mjs";
+import { productOperations, readVerifiedProductReceipts } from "./product-operations.mjs";
 import { PartnerClient } from "./partner-client.mjs";
 import { isIP } from "node:net";
 import { Environment, SignedDataVerifier } from "@apple/app-store-server-library";
@@ -125,7 +126,8 @@ const sharedPartnerClients=Object.fromEntries(Object.keys(inboxProducts).flatMap
  const key=sharedPartnerEventKeys[product];
  return process.env.PARTNER_API_ORIGIN&&key?[[product,new PartnerClient({origin:process.env.PARTNER_API_ORIGIN,product,key})]]:[];
 }));
-sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:inboxProducts});
+sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:inboxProducts,
+ onSession:(store,account,req)=>recordUserNetwork(store,account,req)});
 const partnerAttribution = createPartnerAttribution({getStore,saveStore,client:partnerClient,product:'squadlive',bundleId:appleBundleId,
  skus:Object.fromEntries([...Object.keys(appStoreCoinAmounts).map(s=>[s,'iap']),...[...appStoreSubscriptionProducts].map(s=>[s,'subscription'])])});
 const benefitAuth = createBenefitAuth({verifyApple:verifyAppleIdentityToken,resolveUser:async subject => {
@@ -1415,7 +1417,7 @@ async function route(req, res) {
   if(req.method==='POST'&&sharedSessionRoute){
     const product=sharedSessionRoute[1];
     if(!sharedPartnerClients[product])return jsonResponse(res,503,{error:'Referral service is not configured'});
-    return jsonResponse(res,200,await sharedProductReferrals.session(product,await readJSON(req)));
+    return jsonResponse(res,200,await sharedProductReferrals.session(product,await readJSON(req),req));
   }
   const sharedAttributionRoute=/^\/v1\/partners\/([a-z]+)\/attribution$/.exec(url.pathname);
   if(sharedAttributionRoute){
@@ -2210,6 +2212,15 @@ async function route(req, res) {
 
   if (url.pathname.startsWith("/v1/admin/")) {
     if (!requireAdmin(req, res)) return;
+
+    const productOperationsRoute = /^\/v1\/admin\/products\/([a-z]+)\/operations$/.exec(url.pathname);
+    if (req.method === "GET" && productOperationsRoute) {
+      const product = productOperationsRoute[1];
+      if (!new Set(["cleaner", "dailyme", "nutriscan", "subguard", "sparkle", "catswipe"]).has(product))
+        return jsonResponse(res, 404, { error: "Unknown product" });
+      const verifiedReceipts = await readVerifiedProductReceipts(dataDir, product);
+      return jsonResponse(res, 200, { ...productOperations(store, product, Date.now(), verifiedReceipts), connected: Boolean(inboxProducts[product]) });
+    }
 
     if (req.method === 'GET' && url.pathname === '/v1/admin/partner-attribution') {
       const receipts=Object.values(store.partnerReceipts||{}).map(({signed_transaction,account_token,...record})=>record);

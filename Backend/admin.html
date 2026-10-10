@@ -417,8 +417,18 @@
 <body>
   <div class="layout">
     <aside>
-      <div class="brand"><img src="/assets/landing/squadlive-logo.png" alt="SquadLive logo">SquadLive</div>
-      <div class="nav">
+      <div class="brand"><img src="/assets/landing/squadlive-logo.png" alt="运营后台">产品运营</div>
+      <label for="productPicker" class="sub">选择产品</label>
+      <select id="productPicker" style="width:100%;padding:12px;margin:12px 0 22px;border-radius:10px;background:#18283a;color:#fff;border:1px solid #40536b">
+        <option value="squadlive">SquadLive</option>
+        <option value="cleaner">Smart Cleaner</option>
+        <option value="dailyme">DailyMe</option>
+        <option value="nutriscan">NutriScan</option>
+        <option value="subguard">SubGuard</option>
+        <option value="sparkle">Sparkle Color</option>
+        <option value="catswipe">CatSwipe</option>
+      </select>
+      <div class="nav" id="squadNav">
         <button class="active" data-section="overview"><i>📊</i>数据概览</button>
         <button data-section="users"><i>👤</i>用户管理</button>
         <button data-section="recharges"><i>🪙</i>充值记录</button>
@@ -532,12 +542,20 @@
           </div>
         </div>
       </section>
+      <section class="section" id="section-product">
+        <div class="panel"><div class="panel-head"><h2 id="productHeading">产品数据</h2><span class="sub" id="productNotice"></span></div><div class="cards" id="productCards"></div></div>
+        <div class="panel"><div class="panel-head"><h2>每日注册、活跃与付费</h2></div><div id="productDaily"></div></div>
+        <div class="panel"><div class="panel-head"><h2>用户列表</h2><span class="sub">IP 与网络信息只作线索，不能确认苹果审核员身份</span></div><div id="productUsers"></div></div>
+        <div class="panel"><div class="panel-head"><h2>订单与退款</h2></div><div id="productOrders"></div></div>
+        <div class="panel"><div class="panel-head"><h2>已观察到的商品价格</h2><span class="sub">来自苹果已验证订单；不是 App Store 当前定价</span></div><div id="productPrices"></div></div>
+      </section>
     </main>
   </div>
 
   <script>
     const state = {
       token: localStorage.getItem("squadlive.adminToken") || "",
+      product: localStorage.getItem("squadlive.adminProduct") || "squadlive",
       users: []
     };
 
@@ -552,6 +570,21 @@
 
     const tokenInput = document.getElementById("tokenInput");
     tokenInput.value = state.token;
+    const productPicker = document.getElementById("productPicker");
+    if ([...productPicker.options].some(option => option.value === state.product)) productPicker.value = state.product;
+    else state.product = "squadlive";
+    productPicker.onchange = () => {
+      state.product = productPicker.value;
+      localStorage.setItem("squadlive.adminProduct", state.product);
+      document.getElementById("squadNav").style.display = state.product === "squadlive" ? "" : "none";
+      if (state.product === "squadlive") switchSection("overview");
+      else {
+        document.querySelectorAll(".section").forEach(section => section.classList.toggle("active", section.id === "section-product"));
+        document.getElementById("pageTitle").textContent = productPicker.selectedOptions[0].textContent;
+        document.getElementById("pageSub").textContent = "真实注册、活跃、已验证订单与退款";
+      }
+      loadAll();
+    };
 
     document.querySelectorAll(".nav button").forEach((button) => {
       button.onclick = () => switchSection(button.dataset.section);
@@ -587,6 +620,52 @@
         }).format(amount);
       } catch (_) {
         return `${normalizedCurrency} ${amount.toFixed(2)}`;
+      }
+    }
+
+    function milliMoney(value, currency) {
+      const amount = Number(value || 0) / 1000;
+      try { return new Intl.NumberFormat("zh-CN", {style:"currency", currency}).format(amount); }
+      catch { return `${escapeHTML(currency)} ${amount.toFixed(2)}`; }
+    }
+
+    function currencyTotals(values) {
+      const entries = Object.entries(values || {});
+      return entries.length ? entries.map(([currency, value]) => milliMoney(value, currency)).join(" · ") : "暂无已验证金额";
+    }
+
+    async function loadProduct() {
+      const target = document.getElementById("productCards");
+      try {
+        const data = await api(`/v1/admin/products/${state.product}/operations`);
+        const totals = data.totals;
+        document.getElementById("productHeading").textContent = productPicker.selectedOptions[0].textContent;
+        document.getElementById("productNotice").textContent = data.connected
+          ? "数据从接入新版本后开始累计；收入仅按苹果验证且实际扣款的订单统计"
+          : "此产品的订单接入尚未完成，当前数字不代表真实业务总量";
+        target.innerHTML = [
+          ["注册", totals.registrations, totals.registrationsToday, "累计安装身份 / 今日新建身份"],
+          ["活跃", totals.activeToday, "—", "今日调用会话接口的去重安装身份"],
+          ["付费用户", totals.payingUsers, "—", "有未退款实付订单的去重身份"],
+          ["实付订单", totals.paidOrders, totals.refunds, "累计实付订单 / 其中已退款", "累计", "退款"],
+          ["扣款金额", currencyTotals(totals.grossMilliunitsByCurrency), currencyTotals(totals.refundedMilliunitsByCurrency), "按原币种分别汇总，不混算汇率", "扣款", "退款"],
+          ["次日留存", totals.day1Retention.rate === null ? "样本不足" : `${totals.day1Retention.rate}%`, `${totals.day1Retention.returned}/${totals.day1Retention.eligible}`, "只含从注册当日开始有完整会话记录且已满一天的用户", "留存率", "返回/样本"],
+          ["7 日留存", totals.day7Retention.rate === null ? "样本不足" : `${totals.day7Retention.rate}%`, `${totals.day7Retention.returned}/${totals.day7Retention.eligible}`, "只含从注册当日开始有完整会话记录且已满七天的用户", "留存率", "返回/样本"]
+        ].map(item => metricCard(...item)).join("");
+        document.getElementById("productDaily").innerHTML = table(
+          ["日期 UTC", "注册", "活跃", "付费用户", "实付订单", "退款", "扣款金额", "退款金额"],
+          data.daily.slice().reverse().map(row => `<tr><td>${escapeHTML(row.date)}</td><td>${row.registrations}</td><td>${row.activeUsers}</td><td>${row.payingUsers}</td><td>${row.paidOrders}</td><td>${row.refunds}</td><td>${currencyTotals(row.grossMilliunitsByCurrency)}</td><td>${currencyTotals(row.refundedMilliunitsByCurrency)}</td></tr>`));
+        document.getElementById("productUsers").innerHTML = table(
+          ["身份", "注册", "最后活跃", "IP", "国家/地区", "网络", "订单", "邀请码"],
+          data.users.slice(0, 500).map(user => `<tr><td>${escapeHTML(user.id)}</td><td>${time(user.createdAt)}</td><td>${time(user.lastSeenAt)}</td><td>${escapeHTML(user.lastIPAddress || "-")}</td><td>${escapeHTML(user.country || user.countryCode || "待查询")}</td><td>${escapeHTML(user.networkOrganization || "-")}${user.possibleAppleNetwork ? " · 苹果网络线索" : ""}</td><td>${user.paidOrders}</td><td>${escapeHTML(user.bindingCode || "-")}</td></tr>`));
+        document.getElementById("productOrders").innerHTML = table(
+          ["交易", "用户", "商品", "金额", "状态", "购买时间"],
+          data.orders.slice(0, 500).map(order => `<tr><td>${escapeHTML(order.transactionId)}</td><td>${escapeHTML(order.accountId || "未绑定")}</td><td>${escapeHTML(order.sku)}</td><td>${order.priceMilliunits === null || !order.currency ? "金额未知" : milliMoney(order.priceMilliunits, order.currency)}</td><td>${escapeHTML(order.refunded ? "已退款" : order.status)}</td><td>${time(order.purchasedAt)}</td></tr>`));
+        document.getElementById("productPrices").innerHTML = table(
+          ["商品", "币种", "已观察价格范围", "订单数"],
+          data.observedPrices.map(price => `<tr><td>${escapeHTML(price.sku)}</td><td>${escapeHTML(price.currency)}</td><td>${milliMoney(price.minimumMilliunits, price.currency)} – ${milliMoney(price.maximumMilliunits, price.currency)}</td><td>${price.count}</td></tr>`));
+      } catch (error) {
+        target.innerHTML = `<div class="empty">${escapeHTML(error.message)}</div>`;
       }
     }
 
@@ -967,6 +1046,7 @@
     }
 
     async function loadAll() {
+      if (state.product !== "squadlive") return loadProduct();
       try {
         const overview = await api("/v1/admin/overview");
         renderOverview(overview.overview);
@@ -976,7 +1056,8 @@
       }
     }
 
-    loadAll();
+    if (state.product !== "squadlive") productPicker.onchange();
+    else loadAll();
     setInterval(loadAll, 30000);
   </script>
 </body>

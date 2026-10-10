@@ -36,3 +36,15 @@ test('unbound and sandbox transactions never deliver commission',async()=>{
  assert.equal(sandbox.attribution_status,'sandbox');
  assert.equal(f.calls.filter(x=>x[0]==='purchase').length,0);
 });
+
+test('returning session records activity without minting another installation',async()=>{
+ let root={},clock=Date.parse('2026-10-10T12:00:00Z');
+ const service=createSharedProductReferrals({getStore:async()=>root,saveStore:async s=>{root=s},clients:{},products:{cleaner:{}},now:()=>clock});
+ const first=await service.session('cleaner',{deviceId:'30000000-0000-4000-8000-000000000003'});
+ clock+=86400000;
+ const again=await service.session('cleaner',{credential:first.token});
+ assert.equal(again.account_token,first.account_token);
+ const accounts=Object.values(root.sharedPartnerReferrals.cleaner.accounts);
+ assert.equal(accounts.length,1);
+ assert.deepEqual(Object.keys(accounts[0].activeDays).sort(),['2026-10-10','2026-10-11']);
+});
