@@ -659,8 +659,8 @@
           ["身份", "注册", "最后活跃", "IP", "国家/地区", "网络", "订单", "邀请码"],
           data.users.slice(0, 500).map(user => `<tr><td>${escapeHTML(user.id)}</td><td>${time(user.createdAt)}</td><td>${time(user.lastSeenAt)}</td><td>${escapeHTML(user.lastIPAddress || "-")}</td><td>${escapeHTML(user.country || user.countryCode || "待查询")}</td><td>${escapeHTML(user.networkOrganization || "-")}${user.possibleAppleNetwork ? " · 苹果网络线索" : ""}</td><td>${user.paidOrders}</td><td>${escapeHTML(user.bindingCode || "-")}</td></tr>`));
         document.getElementById("productOrders").innerHTML = table(
-          ["交易", "用户", "商品", "金额", "状态", "购买时间"],
-          data.orders.slice(0, 500).map(order => `<tr><td>${escapeHTML(order.transactionId)}</td><td>${escapeHTML(order.accountId || "未绑定")}</td><td>${escapeHTML(order.sku)}</td><td>${order.priceMilliunits === null || !order.currency ? "金额未知" : milliMoney(order.priceMilliunits, order.currency)}</td><td>${escapeHTML(order.refunded ? "已退款" : order.status)}</td><td>${time(order.purchasedAt)}</td></tr>`));
+          ["交易", "用户", "商品", "金额", "状态", "购买时间", "退款时间"],
+          data.orders.slice(0, 500).map(order => `<tr><td>${escapeHTML(order.transactionId)}</td><td>${escapeHTML(order.accountId || "未绑定")}</td><td>${escapeHTML(order.sku)}</td><td>${order.priceMilliunits === null || !order.currency ? "金额未知" : milliMoney(order.priceMilliunits, order.currency)}</td><td>${escapeHTML(order.refunded ? "已退款" : order.status)}</td><td>${time(order.purchasedAt)}</td><td>${order.refundedAt ? time(order.refundedAt) : order.refunded ? "时间未知" : "—"}</td></tr>`));
         document.getElementById("productPrices").innerHTML = table(
           ["商品", "币种", "已观察价格范围", "订单数"],
           data.observedPrices.map(price => `<tr><td>${escapeHTML(price.sku)}</td><td>${escapeHTML(price.currency)}</td><td>${milliMoney(price.minimumMilliunits, price.currency)} – ${milliMoney(price.maximumMilliunits, price.currency)}</td><td>${price.count}</td></tr>`));
