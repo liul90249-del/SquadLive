@@ -649,6 +649,7 @@
           ["付费用户", totals.payingUsers, "—", "有未退款实付订单的去重身份"],
           ["实付订单", totals.paidOrders, totals.refunds, "累计实付订单 / 其中已退款", "累计", "退款"],
           ["扣款金额", currencyTotals(totals.grossMilliunitsByCurrency), currencyTotals(totals.refundedMilliunitsByCurrency), "按原币种分别汇总，不混算汇率", "扣款", "退款"],
+          ["Singular 待核对", totals.singularNeedsReview || 0, "—", "服务端收入上报结果不确定或遭拒绝；先在 Singular 核对交易，再决定是否重发"],
           ["次日留存", totals.day1Retention.rate === null ? "样本不足" : `${totals.day1Retention.rate}%`, `${totals.day1Retention.returned}/${totals.day1Retention.eligible}`, "只含从注册当日开始有完整会话记录且已满一天的用户", "留存率", "返回/样本"],
           ["7 日留存", totals.day7Retention.rate === null ? "样本不足" : `${totals.day7Retention.rate}%`, `${totals.day7Retention.returned}/${totals.day7Retention.eligible}`, "只含从注册当日开始有完整会话记录且已满七天的用户", "留存率", "返回/样本"]
         ].map(item => metricCard(...item)).join("");
@@ -659,8 +660,8 @@
           ["身份", "注册", "最后活跃", "IP", "国家/地区", "网络", "订单", "邀请码"],
           data.users.slice(0, 500).map(user => `<tr><td>${escapeHTML(user.id)}</td><td>${time(user.createdAt)}</td><td>${time(user.lastSeenAt)}</td><td>${escapeHTML(user.lastIPAddress || "-")}</td><td>${escapeHTML(user.country || user.countryCode || "待查询")}</td><td>${escapeHTML(user.networkOrganization || "-")}${user.possibleAppleNetwork ? " · 苹果网络线索" : ""}</td><td>${user.paidOrders}</td><td>${escapeHTML(user.bindingCode || "-")}</td></tr>`));
         document.getElementById("productOrders").innerHTML = table(
-          ["交易", "用户", "商品", "金额", "状态", "购买时间", "退款时间"],
-          data.orders.slice(0, 500).map(order => `<tr><td>${escapeHTML(order.transactionId)}</td><td>${escapeHTML(order.accountId || "未绑定")}</td><td>${escapeHTML(order.sku)}</td><td>${order.priceMilliunits === null || !order.currency ? "金额未知" : milliMoney(order.priceMilliunits, order.currency)}</td><td>${escapeHTML(order.refunded ? "已退款" : order.status)}</td><td>${time(order.purchasedAt)}</td><td>${order.refundedAt ? time(order.refundedAt) : order.refunded ? "时间未知" : "—"}</td></tr>`));
+          ["交易", "用户", "商品", "金额", "状态", "Singular 扣款", "Singular 退款", "购买时间", "退款时间"],
+          data.orders.slice(0, 500).map(order => `<tr><td>${escapeHTML(order.transactionId)}</td><td>${escapeHTML(order.accountId || "未绑定")}</td><td>${escapeHTML(order.sku)}</td><td>${order.priceMilliunits === null || !order.currency ? "金额未知" : milliMoney(order.priceMilliunits, order.currency)}</td><td>${escapeHTML(order.refunded ? "已退款" : order.status)}</td><td>${escapeHTML(order.singularPurchaseStatus || "—")}</td><td>${escapeHTML(order.singularRefundStatus || "—")}</td><td>${time(order.purchasedAt)}</td><td>${order.refundedAt ? time(order.refundedAt) : order.refunded ? "时间未知" : "—"}</td></tr>`));
         document.getElementById("productPrices").innerHTML = table(
           ["商品", "币种", "已观察价格范围", "订单数"],
           data.observedPrices.map(price => `<tr><td>${escapeHTML(price.sku)}</td><td>${escapeHTML(price.currency)}</td><td>${milliMoney(price.minimumMilliunits, price.currency)} – ${milliMoney(price.maximumMilliunits, price.currency)}</td><td>${price.count}</td></tr>`));

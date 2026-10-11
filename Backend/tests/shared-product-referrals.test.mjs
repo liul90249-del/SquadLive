@@ -88,3 +88,64 @@ test('Singular SDK device ID follows the authenticated anonymous account, not an
  await assert.rejects(f.service.session('cleaner',{credential:first.token,singularSdid:'not-a-uuid'}),/Singular device identifier/);
  assert.equal(account.singularSdid,sdid);
 });
+
+test('opted-in Smart Cleaner reports Apple-verified charges and prorated refunds once through Singular S2S',async()=>{
+ let root={},clock=100000;const events=[];
+ const service=createSharedProductReferrals({getStore:async()=>root,saveStore:async s=>{root=s},clients:{},
+  products:{cleaner:{skus:new Map([['weekly',{kind:'subscription'}]])}},now:()=>clock,
+  singularClients:{cleaner:{event:async payload=>events.push(payload)}},singularEnrollments:{cleaner:true}});
+ const first=await service.session('cleaner',{deviceId:'80000000-0000-4000-8000-000000000008'});
+ assert.equal(first.server_revenue_enabled_at,null);
+ const sdid='40009df0-d618-5d81-9da1-cbb3337b8dec';
+ const enabled=await service.session('cleaner',{credential:first.token,singularSdid:sdid,serverRevenueV1:true});
+ assert.equal(enabled.server_revenue_enabled_at,clock+60000);
+ const purchase={environment:'Production',transactionId:'original',originalTransactionId:'original',productId:'weekly',purchaseDate:170000,
+  price:9900,currency:'USD',appAccountToken:first.account_token,type:'Auto-Renewable Subscription'};
+ await service.recordVerified('cleaner',purchase,'apple proof');
+ await service.recordVerified('cleaner',purchase,'apple replay');
+ assert.equal(events.length,1);
+ assert.equal(events[0].name,'sng_subscribe');assert.equal(events[0].amountMilliunits,9900);
+ assert.equal(events[0].sdid,sdid);
+ const renewal={...purchase,transactionId:'renewal',appAccountToken:undefined,purchaseDate:180000};
+ await service.recordVerified('cleaner',renewal,'renewal proof');
+ assert.equal(events.length,2);assert.equal(events[1].name,'subscription_renewed');
+ clock=200000;
+ await service.recordVerified('cleaner',{...renewal,revocationDate:clock,revocationPercentage:50000,revocationType:'REFUND_PRORATED'},'refund proof',{refund:true});
+ await service.recordVerified('cleaner',{...renewal,revocationDate:clock,revocationPercentage:50000,revocationType:'REFUND_PRORATED'},'refund replay',{refund:true});
+ assert.equal(events.length,3);assert.equal(events[2].name,'subscription_refunded');assert.equal(events[2].amountMilliunits,-4950);
+});
+
+test('legacy, trial, sandbox, and ambiguous network delivery cannot double-count Singular revenue',async()=>{
+ let root={},calls=0,clock=100000;
+ const service=createSharedProductReferrals({getStore:async()=>root,saveStore:async s=>{root=s},clients:{},
+  products:{cleaner:{skus:new Map([['weekly',{kind:'subscription'}]])}},now:()=>clock,
+  singularClients:{cleaner:{event:async()=>{calls++;throw new Error('network timeout')}}},singularEnrollments:{cleaner:true}});
+ const legacy=await service.session('cleaner',{deviceId:'90000000-0000-4000-8000-000000000009'});
+ const base={environment:'Production',transactionId:'legacy',originalTransactionId:'legacy',productId:'weekly',purchaseDate:150000,
+  price:9900,currency:'USD',appAccountToken:legacy.account_token,type:'Auto-Renewable Subscription'};
+ await service.recordVerified('cleaner',base,'legacy proof');
+ assert.equal(calls,0);
+ const opted=await service.session('cleaner',{credential:legacy.token,singularSdid:'40009df0-d618-5d81-9da1-cbb3337b8dec',serverRevenueV1:true});
+ assert.equal(opted.server_revenue_enabled_at,clock+60000);
+ await service.recordVerified('cleaner',{...base,transactionId:'trial',price:0,purchaseDate:160000},'trial proof');
+ await service.recordVerified('cleaner',{...base,transactionId:'sandbox',environment:'Sandbox',purchaseDate:170000},'sandbox proof');
+ await service.recordVerified('cleaner',{...base,transactionId:'paid',purchaseDate:180000},'paid proof');
+ await service.recordVerified('cleaner',{...base,transactionId:'paid',purchaseDate:180000},'paid replay');
+ assert.equal(calls,1);
+ assert.equal(root.sharedPartnerReferrals.cleaner.receipts['Production:paid'].singular_purchase.status,'uncertain');
+});
+
+test('turning off new Singular enrollment keeps delivery for already opted-in accounts',async()=>{
+ let root={},clock=100000;const events=[];
+ const config={getStore:async()=>root,saveStore:async s=>{root=s},clients:{},
+  products:{cleaner:{skus:new Map([['weekly',{kind:'subscription'}]])}},now:()=>clock,
+  singularClients:{cleaner:{event:async event=>events.push(event)}}};
+ const enrolling=createSharedProductReferrals({...config,singularEnrollments:{cleaner:true}});
+ const first=await enrolling.session('cleaner',{deviceId:'a0000000-0000-4000-8000-00000000000a'});
+ await enrolling.session('cleaner',{credential:first.token,singularSdid:'40009df0-d618-5d81-9da1-cbb3337b8dec',serverRevenueV1:true});
+ const existing=createSharedProductReferrals({...config,singularEnrollments:{cleaner:false}});
+ assert.equal((await existing.session('cleaner',{credential:first.token,serverRevenueV1:true})).server_revenue_enabled_at,160000);
+ await existing.recordVerified('cleaner',{environment:'Production',transactionId:'renewal',originalTransactionId:'original',productId:'weekly',
+  purchaseDate:180000,price:9900,currency:'USD',appAccountToken:first.account_token,type:'Auto-Renewable Subscription'},'apple proof');
+ assert.equal(events.length,1);
+});

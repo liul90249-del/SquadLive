@@ -2,6 +2,7 @@ import http from "node:http";
 import {createTransactionInbox} from "./shared-transaction-inbox.mjs";
 import {inboxProducts} from "./shared-transaction-inbox.mjs";
 import {createSharedProductReferrals} from "./shared-product-referrals.mjs";
+import {createSingularS2S} from "./singular-s2s.mjs";
 import { mkdir, readFile, rename, stat, statfs, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -126,7 +127,11 @@ const sharedPartnerClients=Object.fromEntries(Object.keys(inboxProducts).flatMap
  const key=sharedPartnerEventKeys[product];
  return process.env.PARTNER_API_ORIGIN&&key?[[product,new PartnerClient({origin:process.env.PARTNER_API_ORIGIN,product,key})]]:[];
 }));
+const cleanerSingularClient=process.env.SINGULAR_SDK_KEY_CLEANER
+ ? createSingularS2S({sdkKey:process.env.SINGULAR_SDK_KEY_CLEANER,bundleId:inboxProducts.cleaner.bundle}) : null;
 sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:inboxProducts,
+ singularClients:cleanerSingularClient?{cleaner:cleanerSingularClient}:{},
+ singularEnrollments:{cleaner:process.env.SINGULAR_S2S_CLEANER_ENABLED==='true'},
  onSession:(store,account,req)=>recordUserNetwork(store,account,req)});
 const partnerAttribution = createPartnerAttribution({getStore,saveStore,client:partnerClient,product:'squadlive',bundleId:appleBundleId,
  skus:Object.fromEntries([...Object.keys(appStoreCoinAmounts).map(s=>[s,'iap']),...[...appStoreSubscriptionProducts].map(s=>[s,'subscription'])])});
@@ -2308,11 +2313,14 @@ server.listen(port, () => {
 
 const partnerRetryTimer = setInterval(()=>partnerAttribution.drain().catch(()=>console.error('Partner delivery retry failed')),30000);
 partnerRetryTimer.unref();
+const singularRetryTimer = setInterval(()=>sharedProductReferrals.drainSingular('cleaner').catch(()=>console.error('Singular delivery retry failed')),30000);
+singularRetryTimer.unref();
 let isShuttingDown = false;
 async function shutdown(signal) {
   if (isShuttingDown) return;
   isShuttingDown = true;
   clearInterval(partnerRetryTimer);
+  clearInterval(singularRetryTimer);
   console.log(`Received ${signal}; flushing data before shutdown.`);
   if (metricsSaveTimer) {
     clearTimeout(metricsSaveTimer);

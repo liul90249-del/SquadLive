@@ -13,7 +13,7 @@ test('operational metrics use verified production charges, refunds, and tracked 
       b:{id:'b',createdAt:'2026-10-01T09:00:00.000Z',activityTrackedFrom:'2026-10-08T09:00:00.000Z',activeDays:{'2026-10-11':true}}
     },
     receipts:{
-      paid:{transaction_id:'t1',original_transaction_id:'o1',customer_id:'a',sku:'weekly',environment:'Production',purchased_at:Math.floor(Date.parse('2026-10-11T08:00:00Z')/1000),price:4990,currency:'USD',purchase_kind:'subscription',status:'sent'},
+      paid:{transaction_id:'t1',original_transaction_id:'o1',customer_id:'a',sku:'weekly',environment:'Production',purchased_at:Math.floor(Date.parse('2026-10-11T08:00:00Z')/1000),price:4990,currency:'USD',purchase_kind:'subscription',status:'sent',singular_purchase:{status:'uncertain'}},
       refunded:{transaction_id:'t2',original_transaction_id:'o2',customer_id:'b',sku:'weekly',environment:'Production',purchased_at:Math.floor(Date.parse('2026-10-10T08:00:00Z')/1000),refunded_at:Date.parse('2026-10-11T09:00:00Z'),price:4990,currency:'USD',purchase_kind:'subscription',status:'refunded',revoked:true},
       trial:{transaction_id:'t3',customer_id:'a',sku:'weekly',environment:'Production',price:0,currency:'USD'},
       sandbox:{transaction_id:'t4',customer_id:'a',sku:'weekly',environment:'Sandbox',price:4990,currency:'USD'}
@@ -25,6 +25,8 @@ test('operational metrics use verified production charges, refunds, and tracked 
   assert.equal(report.totals.payingUsers,1);
   assert.equal(report.totals.paidOrders,2);
   assert.equal(report.totals.refunds,1);
+  assert.equal(report.totals.singularNeedsReview,1);
+  assert.equal(report.orders.find(item => item.transactionId === 't1').singularPurchaseStatus,'uncertain');
   assert.deepEqual(report.totals.grossMilliunitsByCurrency,{USD:9980});
   assert.deepEqual(report.totals.refundedMilliunitsByCurrency,{USD:4990});
   assert.equal(report.daily.find(item => item.date === '2026-10-10').refunds,0);

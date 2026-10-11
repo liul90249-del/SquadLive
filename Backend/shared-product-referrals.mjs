@@ -3,7 +3,8 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 
-export function createSharedProductReferrals({getStore,saveStore,clients,products,now=()=>Date.now(),onSession=()=>{}}) {
+export function createSharedProductReferrals({getStore,saveStore,clients,products,singularClients={},singularEnrollments={},now=()=>Date.now(),onSession=()=>{}}) {
+ const singularDrains=new Map();
  const state=(root,product)=>{
   root.sharedPartnerReferrals||={};
   return root.sharedPartnerReferrals[product]||=(
@@ -13,7 +14,7 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
  const clientFor=product=>clients[product]||null;
  const productFor=product=>products[product]||null;
 
- async function session(product,{credential,deviceId,singularSdid},req) {
+ async function session(product,{credential,deviceId,singularSdid,serverRevenueV1},req) {
   if(!productFor(product))throw fail('Product is not connected',404);
   const sdid=singularSdid===undefined?null:String(singularSdid).toLowerCase();
   // Singular currently returns a version-5 UUID on iOS, despite examples in
@@ -40,6 +41,12 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   }
   const seenAt=new Date(now()).toISOString();
   if(sdid)account.singularSdid=sdid;
+  // Only the new app build opts into server-owned revenue, and only once its
+  // SDK-generated SDID and the server transport are both available. The
+  // switch is permanent for this anonymous account to avoid double counting.
+  // The client request has a 20-second timeout. Leave a full minute for it
+  // to persist the cutover timestamp before any purchase can use S2S.
+  if(serverRevenueV1===true&&account.singularSdid&&singularClients[product]&&singularEnrollments[product])account.singularS2SEnabledAt||=now()+60000;
   account.lastSeenAt=seenAt;
   account.activityTrackedFrom||=seenAt;
   account.activeDays||={};
@@ -48,7 +55,8 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   for(const day of Object.keys(account.activeDays).sort().slice(0,-120))delete account.activeDays[day];
   onSession(root,account,req);
   await saveStore(root);
-  return {token,account_token:account.accountToken,expires_in:31536000};
+  return {token,account_token:account.accountToken,expires_in:31536000,
+   server_revenue_enabled_at:account.singularS2SEnabledAt||null};
  }
 
  async function verify(product,authorization){
@@ -110,6 +118,8 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   receipt||={transaction_id:t.transactionId,original_transaction_id:t.originalTransactionId,customer_id:customer,account_token:accountToken,sku:t.productId,environment:t.environment,purchased_at:Math.floor(t.purchaseDate/1000),price:t.price??null,currency:t.currency??null,purchase_kind:config.skus.get(t.productId)?.kind||'iap',created_at:now(),attempts:0};
   if(receipt.customer_id&&customer&&receipt.customer_id!==customer)throw fail('Transaction ownership conflict',409);
   receipt.customer_id||=customer;receipt.revoked||=refund||!!t.revocationDate;receipt.proof_hash=hash(signedTransaction);
+  if(receipt.revoked)receipt.refunded_at||=Number.isSafeInteger(t.revocationDate)&&t.revocationDate>0?t.revocationDate:now();
+  if(receipt.revoked&&Number.isSafeInteger(t.revocationPercentage))receipt.revocation_percentage=t.revocationPercentage;
   if(t.environment!=='Production')receipt.status='sandbox';
   else if(receipt.revoked)receipt.status=receipt.status==='refunded'?'refunded':'refund_pending';
   else {
@@ -120,8 +130,51 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
    else if(receipt.currency!=='USD'||!Number.isSafeInteger(receipt.price)||receipt.price<=0||receipt.price%10!==0)receipt.status='amount_review';
    else receipt.status='delivery_pending';
   }
-  s.receipts[key]=receipt;await saveStore(root);await drain(product);
+  const owner=receipt.customer_id&&s.accounts[receipt.customer_id];
+  const eligibleForSingular=t.environment==='Production'&&owner?.singularS2SEnabledAt&&owner.singularSdid&&
+   t.purchaseDate>=owner.singularS2SEnabledAt&&t.inAppOwnershipType!=='FAMILY_SHARED'&&
+   Number.isSafeInteger(t.price)&&t.price>0&&/^[A-Z]{3}$/.test(t.currency||'');
+  if(eligibleForSingular&&!receipt.revoked&&!receipt.singular_purchase)receipt.singular_purchase={status:'pending'};
+  if(receipt.revoked&&receipt.singular_purchase?.status==='pending')receipt.singular_purchase.status='cancelled';
+  if(receipt.revoked&&receipt.singular_purchase?.status==='sent'&&!receipt.singular_refund&&t.revocationType!=='FAMILY_REVOKE')receipt.singular_refund={status:'pending'};
+  s.receipts[key]=receipt;await saveStore(root);await drain(product);await drainSingular(product);
   return {attribution_status:receipt.status,commission_eligible:receipt.status==='sent',customer_id:receipt.customer_id};
+ }
+
+ async function drainSingular(product){
+  const client=singularClients[product];if(!client)return;
+  if(singularDrains.has(product))return singularDrains.get(product);
+  const task=(async()=>{
+   const root=await getStore(),s=state(root,product);
+   for(const receipt of Object.values(s.receipts)){
+    const account=receipt.customer_id&&s.accounts[receipt.customer_id];
+    if(!account?.singularS2SEnabledAt||!account.singularSdid||receipt.environment!=='Production')continue;
+    for(const kind of ['purchase','refund']){
+     const entry=receipt[`singular_${kind}`];if(entry?.status!=='pending')continue;
+     const refundPercentage=Number.isSafeInteger(receipt.revocation_percentage)?receipt.revocation_percentage:100000;
+     const amount=kind==='refund'?-Math.round(receipt.price*refundPercentage/100000):receipt.price;
+     // A zero-percent revocation is a state change, not negative revenue.
+     if(kind==='refund'&&amount===0){entry.status='no_revenue';await saveStore(root);continue}
+     entry.status='attempting';entry.attempted_at=now();await saveStore(root);
+     try{
+      await client.event({sdid:account.singularSdid,name:kind==='refund'?'subscription_refunded':receipt.purchase_kind==='subscription'?(receipt.transaction_id===receipt.original_transaction_id?'sng_subscribe':'subscription_renewed'):'iap_purchase',
+       transactionId:receipt.transaction_id,originalTransactionId:receipt.original_transaction_id,productId:receipt.sku,
+       amountMilliunits:amount,currency:receipt.currency,ip:account.lastIPAddress,country:account.networkCountryCode,
+       eventAt:kind==='refund'?(receipt.refunded_at||now()):receipt.purchased_at*1000});
+      entry.status='sent';entry.accepted_at=now();
+      if(kind==='purchase'&&receipt.revoked&&!receipt.singular_refund)receipt.singular_refund={status:'pending'};
+     }catch(error){
+      // A network timeout may occur after Singular accepted the event. Never
+      // automatically retry ambiguous revenue: a duplicate charge is worse.
+      entry.status=/^(Singular S2S rejected event:|Apple |Device |Singular device ID|Singular event name)/.test(String(error.message||''))?'rejected':'uncertain';
+      entry.last_error=String(error.message||'Delivery failed').slice(0,160);
+     }
+     await saveStore(root);
+    }
+   }
+  })();
+  singularDrains.set(product,task);
+  try{return await task}finally{singularDrains.delete(product)}
  }
 
  async function drain(product){
@@ -143,5 +196,5 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   }
  }
 
- return {session,status,preview,bind,recordVerified,drain};
+ return {session,status,preview,bind,recordVerified,drain,drainSingular};
 }

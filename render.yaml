@@ -35,6 +35,10 @@ services:
         sync: false
       - key: PARTNER_EVENT_KEYS
         sync: false
+      - key: SINGULAR_SDK_KEY_CLEANER
+        sync: false
+      - key: SINGULAR_S2S_CLEANER_ENABLED
+        value: "false"
       - key: AI_MAX_CONCURRENCY
         value: "40"
       - key: AI_QUEUE_LIMIT

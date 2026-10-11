@@ -81,6 +81,8 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
     priceMilliunits: Number.isSafeInteger(item.price) ? item.price : null,
     currency: item.currency || null,
     refunded: Boolean(item.revoked),
+    singularPurchaseStatus: item.singular_purchase?.status || null,
+    singularRefundStatus: item.singular_refund?.status || null,
     status: item.status || 'unknown'
   })).sort((a, b) => String(b.purchasedAt).localeCompare(String(a.purchasedAt)));
   const observedPrices = {};
@@ -117,6 +119,8 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
       refunds: refunded.length,
       grossMilliunitsByCurrency: revenueByCurrency(charged),
       refundedMilliunitsByCurrency: revenueByCurrency(refunded),
+      singularNeedsReview: production.filter(item => ['uncertain','rejected','attempting'].includes(item.singular_purchase?.status) ||
+        ['uncertain','rejected','attempting'].includes(item.singular_refund?.status)).length,
       day1Retention: retention(1),
       day7Retention: retention(7)
     },
