@@ -50,7 +50,7 @@ const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const publicBaseURL = String(process.env.PUBLIC_BASE_URL || "https://squadlive.onrender.com").replace(/\/$/, "");
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-09-24-partner-attribution-v9";
+const deploymentRevision = "2026-10-12-smart-cleaner-operations-v1";
 const appleIssuer = "https://appleid.apple.com";
 const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 
