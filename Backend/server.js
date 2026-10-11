@@ -14,6 +14,7 @@ import { createBenefitGateway } from "./benefit-gateway.mjs";
 import { createAnonymousAuth } from "./anonymous-auth.mjs";
 import { createPartnerAttribution } from "./partner-attribution.mjs";
 import { productOperations, readVerifiedProductReceipts } from "./product-operations.mjs";
+import { createCleanerCatalogReader } from "./asc-subscription-catalog.mjs";
 import { PartnerClient } from "./partner-client.mjs";
 import { clientIPAddress } from "./client-network.mjs";
 import { Environment, SignedDataVerifier } from "@apple/app-store-server-library";
@@ -50,7 +51,7 @@ const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const publicBaseURL = String(process.env.PUBLIC_BASE_URL || "https://squadlive.onrender.com").replace(/\/$/, "");
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-10-12-smart-cleaner-operations-v1";
+const deploymentRevision = "2026-10-12-smart-cleaner-operations-v2";
 const appleIssuer = "https://appleid.apple.com";
 const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 
@@ -129,6 +130,12 @@ const sharedPartnerClients=Object.fromEntries(Object.keys(inboxProducts).flatMap
 }));
 const cleanerSingularClient=process.env.SINGULAR_SDK_KEY_CLEANER
  ? createSingularS2S({sdkKey:process.env.SINGULAR_SDK_KEY_CLEANER,bundleId:inboxProducts.cleaner.bundle}) : null;
+const cleanerCatalog = createCleanerCatalogReader({
+ keyId: process.env.ASC_API_KEY_ID,
+ issuerId: process.env.ASC_API_ISSUER_ID,
+ privateKey: process.env.ASC_API_PRIVATE_KEY,
+ subscriptionId: process.env.ASC_CLEANER_WEEKLY_SUBSCRIPTION_ID
+});
 sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:inboxProducts,
  singularClients:cleanerSingularClient?{cleaner:cleanerSingularClient}:{},
  singularEnrollments:{cleaner:process.env.SINGULAR_S2S_CLEANER_ENABLED==='true'},
@@ -2184,7 +2191,9 @@ async function route(req, res) {
       if (!new Set(["cleaner", "dailyme", "nutriscan", "subguard", "sparkle", "catswipe"]).has(product))
         return jsonResponse(res, 404, { error: "Unknown product" });
       const verifiedReceipts = await readVerifiedProductReceipts(dataDir, product);
-      return jsonResponse(res, 200, { ...productOperations(store, product, Date.now(), verifiedReceipts), connected: Boolean(inboxProducts[product]) });
+      return jsonResponse(res, 200, { ...productOperations(store, product, Date.now(), verifiedReceipts),
+        connected: Boolean(inboxProducts[product]),
+        subscriptionCatalog: product === 'cleaner' ? await cleanerCatalog() : null });
     }
 
     if (req.method === 'GET' && url.pathname === '/v1/admin/partner-attribution') {

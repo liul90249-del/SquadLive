@@ -39,6 +39,14 @@ services:
         sync: false
       - key: SINGULAR_S2S_CLEANER_ENABLED
         value: "false"
+      - key: ASC_API_KEY_ID
+        sync: false
+      - key: ASC_API_ISSUER_ID
+        sync: false
+      - key: ASC_API_PRIVATE_KEY
+        sync: false
+      - key: ASC_CLEANER_WEEKLY_SUBSCRIPTION_ID
+        sync: false
       - key: AI_MAX_CONCURRENCY
         value: "40"
       - key: AI_QUEUE_LIMIT

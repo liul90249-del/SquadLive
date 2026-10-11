@@ -544,6 +544,7 @@
       </section>
       <section class="section" id="section-product">
         <div class="panel"><div class="panel-head"><h2 id="productHeading">产品数据</h2><span class="sub" id="productNotice"></span></div><div class="cards" id="productCards"></div></div>
+        <div class="panel" id="productSubscriptionCatalogPanel" style="display:none"><div class="panel-head"><h2>Smart Cleaner 美国区周订阅</h2><span class="sub">目标：US$9.90/周，7 天免费试用</span></div><div id="productSubscriptionCatalog" class="sub"></div></div>
         <div class="panel"><div class="panel-head"><h2>每日注册、活跃与付费</h2></div><div id="productDaily"></div></div>
         <div class="panel"><div class="panel-head"><h2>用户列表</h2><span class="sub">IP 与网络信息只作线索，不能确认苹果审核员身份</span></div><div id="productUsers"></div></div>
         <div class="panel"><div class="panel-head"><h2>订单与退款</h2></div><div id="productOrders"></div></div>
@@ -643,6 +644,22 @@
         document.getElementById("productNotice").textContent = data.connected
           ? "数据从接入新版本后开始累计；收入仅按苹果验证且实际扣款的订单统计"
           : "此产品的订单接入尚未完成，当前数字不代表真实业务总量";
+        const catalogPanel = document.getElementById("productSubscriptionCatalogPanel");
+        catalogPanel.style.display = data.subscriptionCatalog ? "block" : "none";
+        if (data.subscriptionCatalog) {
+          const catalog = data.subscriptionCatalog;
+          const actual = catalog.actual;
+          const checked = catalog.checkedAt ? `核对时间：${time(catalog.checkedAt)}` : "尚未从 App Store Connect 读取";
+          const detail = actual
+            ? `苹果后台：${actual.currency || "币种未知"} ${actual.price || "价格未知"}（${actual.period || "周期未知"}）；7 天免费试用：${actual.sevenDayTrial ? "已配置" : "未发现"}。`
+            : "苹果后台当前价格与试用状态未核对。";
+          const status = catalog.status === "matched" ? "与目标一致"
+            : catalog.status === "mismatch" ? "与目标不一致，请检查苹果后台"
+            : catalog.status === "unconfigured" ? "未配置 App Store Connect 只读核对凭据"
+            : catalog.status === "incomplete" ? "苹果返回的价格资料不完整"
+            : "读取苹果后台失败";
+          document.getElementById("productSubscriptionCatalog").textContent = `${status}。${detail}${checked}。测试配置和历史订单价格都不代表当前线上售价。`;
+        }
         target.innerHTML = [
           ["注册", totals.registrations, totals.registrationsToday, "累计安装身份 / 今日新建身份"],
           ["活跃", totals.activeToday, "—", "今日调用会话接口的去重安装身份"],
