@@ -36,6 +36,14 @@ The admin dashboard at `/admin` includes daily request and AI usage, average/max
 
 The user dashboard stores the most recent IP and up to 10 recent IP addresses for operational analytics and abuse prevention. Country and network organization lookup runs asynchronously through `IP_GEOLOCATION_BASE_URL` (default: `https://ipwho.is`) and never blocks purchases or AI replies. A “possible Apple network” badge means only that the resolved ISP/organization contains the word Apple; it does not identify an App Review employee. Set `IP_GEOLOCATION_ENABLED=false` to disable third-party IP enrichment while retaining proxy-provided IP/country information.
 
+## Smart Cleaner Operations and Referral Prerequisites
+
+`PARTNER_EVENT_KEYS` is a Render secret containing a JSON object of product keys to their partner event keys, for example `{"cleaner":"<secret>"}`. The existing `PARTNER_EVENT_KEY` is for SquadLive only and does not enable Smart Cleaner. Do not put either secret in `render.yaml`, source control, or the iOS app. The Smart Cleaner session and invite endpoints return 503 until `PARTNER_API_ORIGIN` and the `cleaner` key are configured.
+
+Keep `DATA_DIR` on the persistent disk. The service writes Apple-verified product transactions under `DATA_DIR/partner-inbox/cleaner` and stores anonymous account and activity records in its data store. Configure App Store Server Notifications V2 for Smart Cleaner with production and sandbox URLs set to `https://squadlive.onrender.com/v1/partners/cleaner/notifications`; send a TEST notification in each environment and confirm it is accepted before relying on offline renewals or refunds. Smart Cleaner posts signed transactions to `https://squadlive.onrender.com/v1/partners/cleaner/transactions` when the app receives them.
+
+The protected `/admin` page selects Smart Cleaner from the product picker. Its order totals come from Apple-verified production transactions; its price table shows observed charged prices, not the current App Store Connect price. Confirm the App Store Connect weekly product is US$9.90 with a seven-day free trial separately. Verify a real launch, eligible trial, first charge, renewal, refund, and no duplicate revenue in Singular and AppLovin before treating attribution as complete. The Singular SDK device ID is linked to the anonymous account, but server-side Singular renewal delivery is not yet active.
+
 ## Basic Deployment
 
 ```bash
