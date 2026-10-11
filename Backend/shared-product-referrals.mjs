@@ -13,8 +13,12 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
  const clientFor=product=>clients[product]||null;
  const productFor=product=>products[product]||null;
 
- async function session(product,{credential,deviceId},req) {
+ async function session(product,{credential,deviceId,singularSdid},req) {
   if(!productFor(product))throw fail('Product is not connected',404);
+  const sdid=singularSdid===undefined?null:String(singularSdid).toLowerCase();
+  // Singular currently returns a version-5 UUID on iOS, despite examples in
+  // its S2S docs showing version 4. Accept SDK-issued canonical UUIDs.
+  if(sdid!==null&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(sdid))throw fail('Invalid Singular device identifier');
   const root=await getStore(),s=state(root,product);let account,token;
   if(credential!==undefined&&credential!==null&&credential!==''){
    if(typeof credential!=='string'||!/^anon_[A-Za-z0-9_-]{43}$/.test(credential))throw fail('Installation credential is invalid',401);
@@ -35,6 +39,7 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
    s.accountTokens[account.accountToken.toLowerCase()]=account.id;
   }
   const seenAt=new Date(now()).toISOString();
+  if(sdid)account.singularSdid=sdid;
   account.lastSeenAt=seenAt;
   account.activityTrackedFrom||=seenAt;
   account.activeDays||={};

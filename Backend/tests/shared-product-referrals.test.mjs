@@ -75,3 +75,16 @@ test('returning session records activity without minting another installation',a
  assert.equal(accounts.length,1);
  assert.deepEqual(Object.keys(accounts[0].activeDays).sort(),['2026-10-10','2026-10-11']);
 });
+
+test('Singular SDK device ID follows the authenticated anonymous account, not an unauthenticated update',async()=>{
+ // The installed iOS SDK was observed returning a canonical version-5 UUID.
+ const f=fixture(),sdid='40009df0-d618-5d81-9da1-cbb3337b8dec';
+ const first=await f.service.session('cleaner',{deviceId:'70000000-0000-4000-8000-000000000007'});
+ const refreshed=await f.service.session('cleaner',{credential:first.token,singularSdid:sdid});
+ assert.equal(refreshed.account_token,first.account_token);
+ const account=Object.values(f.root.sharedPartnerReferrals.cleaner.accounts)[0];
+ assert.equal(account.singularSdid,sdid);
+ await assert.rejects(f.service.session('cleaner',{credential:'anon_'+'x'.repeat(43),singularSdid:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}),/credential/);
+ await assert.rejects(f.service.session('cleaner',{credential:first.token,singularSdid:'not-a-uuid'}),/Singular device identifier/);
+ assert.equal(account.singularSdid,sdid);
+});
