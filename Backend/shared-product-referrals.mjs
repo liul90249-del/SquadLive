@@ -91,7 +91,15 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
  async function recordVerified(product,t,signedTransaction,{refund=false}={}){
   const config=productFor(product);if(!config)throw fail('Product is not connected',404);
   const root=await getStore(),s=state(root,product),key=t.environment+':'+t.transactionId;
-  const accountToken=String(t.appAccountToken||'').toLowerCase(),customer=s.accountTokens[accountToken]||null;
+  const accountToken=String(t.appAccountToken||'').toLowerCase();
+  const directCustomer=s.accountTokens[accountToken]||null;
+  const previousOwners=new Set(Object.values(s.receipts)
+   .filter(r=>r.environment===t.environment&&r.original_transaction_id===t.originalTransactionId&&r.customer_id)
+   .map(r=>r.customer_id));
+  if(previousOwners.size>1)throw fail('Subscription ownership conflict',409);
+  const previousCustomer=[...previousOwners][0]||null;
+  if(previousCustomer&&accountToken&&directCustomer!==previousCustomer)throw fail('Subscription ownership conflict',409);
+  const customer=directCustomer||(!accountToken?previousCustomer:null);
   let receipt=s.receipts[key];
   if(receipt&&(receipt.sku!==t.productId||receipt.original_transaction_id!==t.originalTransactionId))throw fail('Transaction conflict',409);
   receipt||={transaction_id:t.transactionId,original_transaction_id:t.originalTransactionId,customer_id:customer,account_token:accountToken,sku:t.productId,environment:t.environment,purchased_at:Math.floor(t.purchaseDate/1000),price:t.price??null,currency:t.currency??null,purchase_kind:config.skus.get(t.productId)?.kind||'iap',created_at:now(),attempts:0};
