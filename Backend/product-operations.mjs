@@ -41,6 +41,8 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
         purchased_at: Math.floor(Number(receipt.purchased_at) / 1000),
         refunded_at: receipt.refunded_at || matching.refunded_at || null,
         revoked: Boolean(receipt.revoked || matching.revoked),
+        revocation_type: receipt.revocation_type || matching.revocation_type || null,
+        revocation_percentage: receipt.revocation_percentage ?? matching.revocation_percentage ?? null,
         status: matching.status || receipt.attribution_status || 'unattributed'
       };
     }),
@@ -50,13 +52,20 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
   const today = new Date(now).toISOString().slice(0, 10);
   const production = receipts.filter(item => item.environment === 'Production');
   const charged = production.filter(item => Number.isSafeInteger(item.price) && item.price > 0 && item.currency);
-  const paid = charged.filter(item => !item.revoked);
-  const refunded = charged.filter(item => item.revoked);
+  const refundedAmount = item => {
+    if (!item.revoked || item.revocation_type === 'FAMILY_REVOKE') return 0;
+    const percentage = Number.isSafeInteger(item.revocation_percentage) &&
+      item.revocation_percentage >= 0 && item.revocation_percentage <= 100000
+      ? item.revocation_percentage : 100000;
+    return Math.round(item.price * percentage / 100000);
+  };
+  const paid = charged.filter(item => item.price > refundedAmount(item));
+  const refunded = charged.filter(item => refundedAmount(item) > 0);
   const paidOrderCounts = new Map();
   for (const item of paid) if (item.customer_id) paidOrderCounts.set(item.customer_id, (paidOrderCounts.get(item.customer_id) || 0) + 1);
-  const revenueByCurrency = (items) => items.reduce((totals, item) => {
+  const revenueByCurrency = (items, amount = item => item.price) => items.reduce((totals, item) => {
     const currency = String(item.currency).toUpperCase();
-    totals[currency] = (totals[currency] || 0) + item.price;
+    totals[currency] = (totals[currency] || 0) + amount(item);
     return totals;
   }, {});
   const activityDays = (account) => Object.keys(account.activeDays || {}).filter(key => account.activeDays[key]);
@@ -77,10 +86,12 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
     sku: item.sku,
     kind: item.purchase_kind,
     purchasedAt: iso(Number(item.purchased_at) * 1000),
-    refundedAt: item.revoked && item.refunded_at ? iso(Number(item.refunded_at)) : null,
+    refundedAt: refundedAmount(item) > 0 && item.refunded_at ? iso(Number(item.refunded_at)) : null,
     priceMilliunits: Number.isSafeInteger(item.price) ? item.price : null,
     currency: item.currency || null,
-    refunded: Boolean(item.revoked),
+    refunded: refundedAmount(item) > 0,
+    refundedMilliunits: Number.isSafeInteger(item.price) && item.price > 0 ? refundedAmount(item) : 0,
+    revocationType: item.revocation_type || null,
     singularPurchaseStatus: item.singular_purchase?.status || null,
     singularRefundStatus: item.singular_refund?.status || null,
     status: item.status || 'unknown'
@@ -105,7 +116,7 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
       paidOrders: dailyPaid.length,
       refunds: dailyRefunded.length,
       grossMilliunitsByCurrency: revenueByCurrency(dailyPaid),
-      refundedMilliunitsByCurrency: revenueByCurrency(dailyRefunded)
+      refundedMilliunitsByCurrency: revenueByCurrency(dailyRefunded, refundedAmount)
     };
   });
   return {
@@ -118,7 +129,7 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
       paidOrders: charged.length,
       refunds: refunded.length,
       grossMilliunitsByCurrency: revenueByCurrency(charged),
-      refundedMilliunitsByCurrency: revenueByCurrency(refunded),
+      refundedMilliunitsByCurrency: revenueByCurrency(refunded, refundedAmount),
       singularNeedsReview: production.filter(item => ['uncertain','rejected','attempting'].includes(item.singular_purchase?.status) ||
         ['uncertain','rejected','attempting'].includes(item.singular_refund?.status)).length,
       day1Retention: retention(1),

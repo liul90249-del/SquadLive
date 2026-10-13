@@ -60,3 +60,30 @@ test('verified Apple inbox remains visible when partner forwarding has no receip
     assert.equal(JSON.stringify(report).includes('private-proof'),false);
   } finally { await rm(directory,{recursive:true,force:true}); }
 });
+
+test('partial refunds use verified Apple percentage and family revocations carry no refund revenue', () => {
+  const now = Date.parse('2026-10-11T12:00:00Z');
+  const purchasedAt = Date.parse('2026-10-10T08:00:00Z');
+  const refundedAt = Date.parse('2026-10-11T09:00:00Z');
+  const verified = [
+    {product:'cleaner',environment:'Production',transaction_id:'half-refund',original_id:'half-refund',sku:'weekly',purchase_kind:'subscription',
+      account_token:'half-owner',purchased_at:purchasedAt,price:9990,currency:'USD',revoked:true,refunded_at:refundedAt,
+      revocation_type:'REFUND_PRORATED',revocation_percentage:null},
+    {product:'cleaner',environment:'Production',transaction_id:'family-revoke',original_id:'family-revoke',sku:'weekly',purchase_kind:'subscription',
+      account_token:'family-owner',purchased_at:purchasedAt,price:9990,currency:'USD',revoked:true,refunded_at:refundedAt,
+      revocation_type:'FAMILY_REVOKE'}
+  ];
+  const store = {sharedPartnerReferrals:{cleaner:{
+    accounts:{half:{id:'half'},family:{id:'family'}},accountTokens:{'half-owner':'half','family-owner':'family'},
+    receipts:{'Production:half-refund':{revocation_percentage:50000}}
+  }}};
+  const report = productOperations(store,'cleaner',now,verified);
+  assert.equal(report.totals.paidOrders,2);
+  assert.equal(report.totals.payingUsers,2);
+  assert.equal(report.totals.refunds,1);
+  assert.deepEqual(report.totals.grossMilliunitsByCurrency,{USD:19980});
+  assert.deepEqual(report.totals.refundedMilliunitsByCurrency,{USD:4995});
+  assert.deepEqual(report.daily.find(item => item.date === '2026-10-11').refundedMilliunitsByCurrency,{USD:4995});
+  assert.equal(report.orders.find(item => item.transactionId === 'half-refund').refundedMilliunits,4995);
+  assert.equal(report.orders.find(item => item.transactionId === 'family-revoke').refunded,false);
+});

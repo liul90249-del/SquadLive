@@ -635,6 +635,15 @@
       return entries.length ? entries.map(([currency, value]) => milliMoney(value, currency)).join(" · ") : "暂无已验证金额";
     }
 
+    function orderStatus(order) {
+      if (order.revocationType === "FAMILY_REVOKE") return "家人共享已撤销";
+      if (!order.refunded) return order.status || "未知";
+      if (order.refundedMilliunits > 0 && order.refundedMilliunits < order.priceMilliunits) {
+        return `部分退款 ${milliMoney(order.refundedMilliunits, order.currency)}`;
+      }
+      return "已退款";
+    }
+
     async function loadProduct() {
       const target = document.getElementById("productCards");
       try {
@@ -663,7 +672,7 @@
         target.innerHTML = [
           ["注册", totals.registrations, totals.registrationsToday, "累计安装身份 / 今日新建身份"],
           ["活跃", totals.activeToday, "—", "今日调用会话接口的去重安装身份"],
-          ["付费用户", totals.payingUsers, "—", "有未退款实付订单的去重身份"],
+          ["付费用户", totals.payingUsers, "—", "仍有净实付金额的去重身份"],
           ["实付订单", totals.paidOrders, totals.refunds, "累计实付订单 / 其中已退款", "累计", "退款"],
           ["扣款金额", currencyTotals(totals.grossMilliunitsByCurrency), currencyTotals(totals.refundedMilliunitsByCurrency), "按原币种分别汇总，不混算汇率", "扣款", "退款"],
           ["Singular 待核对", totals.singularNeedsReview || 0, "—", "服务端收入上报结果不确定或遭拒绝；先在 Singular 核对交易，再决定是否重发"],
@@ -678,7 +687,7 @@
           data.users.slice(0, 500).map(user => `<tr><td>${escapeHTML(user.id)}</td><td>${time(user.createdAt)}</td><td>${time(user.lastSeenAt)}</td><td>${escapeHTML(user.lastIPAddress || "-")}</td><td>${escapeHTML(user.country || user.countryCode || "待查询")}</td><td>${escapeHTML(user.networkOrganization || "-")}${user.possibleAppleNetwork ? " · 苹果网络线索" : ""}</td><td>${user.paidOrders}</td><td>${escapeHTML(user.bindingCode || "-")}</td></tr>`));
         document.getElementById("productOrders").innerHTML = table(
           ["交易", "用户", "商品", "金额", "状态", "Singular 扣款", "Singular 退款", "购买时间", "退款时间"],
-          data.orders.slice(0, 500).map(order => `<tr><td>${escapeHTML(order.transactionId)}</td><td>${escapeHTML(order.accountId || "未绑定")}</td><td>${escapeHTML(order.sku)}</td><td>${order.priceMilliunits === null || !order.currency ? "金额未知" : milliMoney(order.priceMilliunits, order.currency)}</td><td>${escapeHTML(order.refunded ? "已退款" : order.status)}</td><td>${escapeHTML(order.singularPurchaseStatus || "—")}</td><td>${escapeHTML(order.singularRefundStatus || "—")}</td><td>${time(order.purchasedAt)}</td><td>${order.refundedAt ? time(order.refundedAt) : order.refunded ? "时间未知" : "—"}</td></tr>`));
+          data.orders.slice(0, 500).map(order => `<tr><td>${escapeHTML(order.transactionId)}</td><td>${escapeHTML(order.accountId || "未绑定")}</td><td>${escapeHTML(order.sku)}</td><td>${order.priceMilliunits === null || !order.currency ? "金额未知" : milliMoney(order.priceMilliunits, order.currency)}</td><td>${escapeHTML(orderStatus(order))}</td><td>${escapeHTML(order.singularPurchaseStatus || "—")}</td><td>${escapeHTML(order.singularRefundStatus || "—")}</td><td>${time(order.purchasedAt)}</td><td>${order.refundedAt ? time(order.refundedAt) : order.refunded ? "时间未知" : "—"}</td></tr>`));
         document.getElementById("productPrices").innerHTML = table(
           ["商品", "币种", "已观察价格范围", "订单数"],
           data.observedPrices.map(price => `<tr><td>${escapeHTML(price.sku)}</td><td>${escapeHTML(price.currency)}</td><td>${milliMoney(price.minimumMilliunits, price.currency)} – ${milliMoney(price.maximumMilliunits, price.currency)}</td><td>${price.count}</td></tr>`));

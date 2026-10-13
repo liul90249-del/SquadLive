@@ -120,6 +120,7 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   receipt.customer_id||=customer;receipt.revoked||=refund||!!t.revocationDate;receipt.proof_hash=hash(signedTransaction);
   if(receipt.revoked)receipt.refunded_at||=Number.isSafeInteger(t.revocationDate)&&t.revocationDate>0?t.revocationDate:now();
   if(receipt.revoked&&Number.isSafeInteger(t.revocationPercentage))receipt.revocation_percentage=t.revocationPercentage;
+  if(receipt.revoked&&t.revocationType)receipt.revocation_type=t.revocationType;
   if(t.environment!=='Production')receipt.status='sandbox';
   else if(receipt.revoked)receipt.status=receipt.status==='refunded'?'refunded':'refund_pending';
   else {
