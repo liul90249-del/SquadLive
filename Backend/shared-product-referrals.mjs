@@ -122,7 +122,12 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   if(receipt.revoked&&Number.isSafeInteger(t.revocationPercentage))receipt.revocation_percentage=t.revocationPercentage;
   if(receipt.revoked&&t.revocationType)receipt.revocation_type=t.revocationType;
   if(t.environment!=='Production')receipt.status='sandbox';
-  else if(receipt.revoked)receipt.status=receipt.status==='refunded'?'refunded':'refund_pending';
+  else if(receipt.revoked){
+   if(receipt.revocation_type==='FAMILY_REVOKE')receipt.status='family_revoked';
+   else if(receipt.status==='sent'||receipt.status==='refund_pending'||receipt.status==='refunded')
+    receipt.status=receipt.status==='refunded'?'refunded':'refund_pending';
+   else receipt.status='refund_without_commission';
+  }
   else {
    const binding=receipt.customer_id&&s.bindings[receipt.customer_id];
    if(t.inAppOwnershipType==='FAMILY_SHARED')receipt.status='ownership_review';

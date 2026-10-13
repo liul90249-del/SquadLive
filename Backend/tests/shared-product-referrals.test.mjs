@@ -37,6 +37,27 @@ test('unbound and sandbox transactions never deliver commission',async()=>{
  assert.equal(f.calls.filter(x=>x[0]==='purchase').length,0);
 });
 
+test('refunds without a delivered commission do not call the partner refund endpoint',async()=>{
+ const f=fixture(),session=await f.service.session('cleaner',{deviceId:'b0000000-0000-4000-8000-00000000000b'});
+ const transaction={environment:'Production',transactionId:'unbound-refund',originalTransactionId:'unbound-refund',productId:'sku',
+  purchaseDate:150000,price:4990,currency:'USD',appAccountToken:session.account_token,type:'Auto-Renewable Subscription'};
+ assert.equal((await f.service.recordVerified('cleaner',transaction,'purchase proof')).attribution_status,'unattributed');
+ const result=await f.service.recordVerified('cleaner',{...transaction,revocationDate:200000,revocationType:'REFUND_FULL'},'refund proof',{refund:true});
+ assert.equal(result.attribution_status,'refund_without_commission');
+ assert.equal(f.calls.filter(x=>x[0]==='refund').length,0);
+});
+
+test('family sharing revocation never rolls back an attributed paid purchase',async()=>{
+ const f=fixture(),session=await f.service.session('cleaner',{deviceId:'c0000000-0000-4000-8000-00000000000c'});
+ await f.service.bind('cleaner','Bearer '+session.token,'PCABCDEF123456',true);
+ const transaction={environment:'Production',transactionId:'family-revoked',originalTransactionId:'family-revoked',productId:'sku',
+  purchaseDate:150000,price:4990,currency:'USD',appAccountToken:session.account_token,type:'Auto-Renewable Subscription'};
+ assert.equal((await f.service.recordVerified('cleaner',transaction,'purchase proof')).attribution_status,'sent');
+ const result=await f.service.recordVerified('cleaner',{...transaction,revocationDate:200000,revocationType:'FAMILY_REVOKE'},'family proof',{refund:true});
+ assert.equal(result.attribution_status,'family_revoked');
+ assert.equal(f.calls.filter(x=>x[0]==='refund').length,0);
+});
+
 test('verified renewal without account token keeps the original subscription owner',async()=>{
  const f=fixture();
  const owner=await f.service.session('cleaner',{deviceId:'40000000-0000-4000-8000-000000000004'});
