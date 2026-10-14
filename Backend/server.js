@@ -2,6 +2,7 @@ import http from "node:http";
 import {createTransactionInbox} from "./shared-transaction-inbox.mjs";
 import {inboxProducts} from "./shared-transaction-inbox.mjs";
 import {createSharedProductReferrals} from "./shared-product-referrals.mjs";
+import {createSingularS2S} from "./singular-s2s.mjs";
 import { mkdir, readFile, rename, stat, statfs, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -12,8 +13,10 @@ import { createBenefitAuth } from "./benefit-auth.mjs";
 import { createBenefitGateway } from "./benefit-gateway.mjs";
 import { createAnonymousAuth } from "./anonymous-auth.mjs";
 import { createPartnerAttribution } from "./partner-attribution.mjs";
+import { productOperations, readVerifiedProductReceipts } from "./product-operations.mjs";
+import { createCleanerCatalogReader } from "./asc-subscription-catalog.mjs";
 import { PartnerClient } from "./partner-client.mjs";
-import { isIP } from "node:net";
+import { clientIPAddress } from "./client-network.mjs";
 import { Environment, SignedDataVerifier } from "@apple/app-store-server-library";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -48,7 +51,7 @@ const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== "false";
 const ipGeolocationBaseURL = process.env.IP_GEOLOCATION_BASE_URL || "https://ipwho.is";
 const publicBaseURL = String(process.env.PUBLIC_BASE_URL || "https://squadlive.onrender.com").replace(/\/$/, "");
 const processStartedAt = Date.now();
-const deploymentRevision = "2026-09-24-partner-attribution-v9";
+const deploymentRevision = "2026-10-12-smart-cleaner-operations-v2";
 const appleIssuer = "https://appleid.apple.com";
 const appleAuthAudience = process.env.APPLE_AUTH_AUDIENCE || appleBundleId;
 
@@ -125,7 +128,18 @@ const sharedPartnerClients=Object.fromEntries(Object.keys(inboxProducts).flatMap
  const key=sharedPartnerEventKeys[product];
  return process.env.PARTNER_API_ORIGIN&&key?[[product,new PartnerClient({origin:process.env.PARTNER_API_ORIGIN,product,key})]]:[];
 }));
-sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:inboxProducts});
+const cleanerSingularClient=process.env.SINGULAR_SDK_KEY_CLEANER
+ ? createSingularS2S({sdkKey:process.env.SINGULAR_SDK_KEY_CLEANER,bundleId:inboxProducts.cleaner.bundle}) : null;
+const cleanerCatalog = createCleanerCatalogReader({
+ keyId: process.env.ASC_API_KEY_ID,
+ issuerId: process.env.ASC_API_ISSUER_ID,
+ privateKey: process.env.ASC_API_PRIVATE_KEY,
+ subscriptionId: process.env.ASC_CLEANER_WEEKLY_SUBSCRIPTION_ID
+});
+sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:inboxProducts,
+ singularClients:cleanerSingularClient?{cleaner:cleanerSingularClient}:{},
+ singularEnrollments:{cleaner:process.env.SINGULAR_S2S_CLEANER_ENABLED==='true'},
+ onSession:(store,account,req)=>recordUserNetwork(store,account,req)});
 const partnerAttribution = createPartnerAttribution({getStore,saveStore,client:partnerClient,product:'squadlive',bundleId:appleBundleId,
  skus:Object.fromEntries([...Object.keys(appStoreCoinAmounts).map(s=>[s,'iap']),...[...appStoreSubscriptionProducts].map(s=>[s,'subscription'])])});
 const benefitAuth = createBenefitAuth({verifyApple:verifyAppleIdentityToken,resolveUser:async subject => {
@@ -422,41 +436,6 @@ function newId(prefix) {
   return `${prefix}_${randomUUID()}`;
 }
 
-function normalizedIPAddress(value) {
-  let candidate = String(value || "").trim();
-  if (!candidate) return "";
-  if (candidate.includes(",")) candidate = candidate.split(",")[0].trim();
-  if (candidate.startsWith("::ffff:")) candidate = candidate.slice(7);
-  if (candidate.startsWith("[") && candidate.includes("]")) candidate = candidate.slice(1, candidate.indexOf("]"));
-  if (isIP(candidate)) return candidate;
-  const ipv4WithPort = candidate.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
-  return ipv4WithPort && isIP(ipv4WithPort[1]) ? ipv4WithPort[1] : "";
-}
-
-function clientIPAddress(req) {
-  const candidates = [
-    req.headers["cf-connecting-ip"],
-    req.headers["true-client-ip"],
-    req.headers["x-forwarded-for"],
-    req.headers["x-real-ip"],
-    req.socket?.remoteAddress
-  ];
-  for (const candidate of candidates) {
-    const address = normalizedIPAddress(Array.isArray(candidate) ? candidate[0] : candidate);
-    if (address) return address;
-  }
-  return "";
-}
-
-function requestCountryCode(req) {
-  const value = req.headers["cf-ipcountry"]
-    || req.headers["x-vercel-ip-country"]
-    || req.headers["cloudfront-viewer-country"]
-    || "";
-  const code = String(Array.isArray(value) ? value[0] : value).trim().toUpperCase();
-  return /^[A-Z]{2}$/.test(code) ? code : "";
-}
-
 function isPrivateIPAddress(address) {
   return address === "127.0.0.1"
     || address === "::1"
@@ -569,7 +548,6 @@ function recordUserNetwork(store, user, req) {
   const address = clientIPAddress(req);
   if (!address) return;
   const now = new Date().toISOString();
-  const countryCode = requestCountryCode(req);
   user.firstIPAddress ||= address;
   user.lastIPAddress = address;
   user.lastIPSeenAt = now;
@@ -583,10 +561,6 @@ function recordUserNetwork(store, user, req) {
     user.networkUpdatedAt = null;
   } else {
     item.lastSeenAt = now;
-  }
-  if (countryCode) {
-    item.countryCode = countryCode;
-    user.networkCountryCode = countryCode;
   }
   scheduleIPAddressLookup(store, user, address);
 }
@@ -1415,7 +1389,7 @@ async function route(req, res) {
   if(req.method==='POST'&&sharedSessionRoute){
     const product=sharedSessionRoute[1];
     if(!sharedPartnerClients[product])return jsonResponse(res,503,{error:'Referral service is not configured'});
-    return jsonResponse(res,200,await sharedProductReferrals.session(product,await readJSON(req)));
+    return jsonResponse(res,200,await sharedProductReferrals.session(product,await readJSON(req),req));
   }
   const sharedAttributionRoute=/^\/v1\/partners\/([a-z]+)\/attribution$/.exec(url.pathname);
   if(sharedAttributionRoute){
@@ -2211,6 +2185,17 @@ async function route(req, res) {
   if (url.pathname.startsWith("/v1/admin/")) {
     if (!requireAdmin(req, res)) return;
 
+    const productOperationsRoute = /^\/v1\/admin\/products\/([a-z]+)\/operations$/.exec(url.pathname);
+    if (req.method === "GET" && productOperationsRoute) {
+      const product = productOperationsRoute[1];
+      if (!new Set(["cleaner", "dailyme", "nutriscan", "subguard", "sparkle", "catswipe"]).has(product))
+        return jsonResponse(res, 404, { error: "Unknown product" });
+      const verifiedReceipts = await readVerifiedProductReceipts(dataDir, product);
+      return jsonResponse(res, 200, { ...productOperations(store, product, Date.now(), verifiedReceipts),
+        connected: Boolean(inboxProducts[product]),
+        subscriptionCatalog: product === 'cleaner' ? await cleanerCatalog() : null });
+    }
+
     if (req.method === 'GET' && url.pathname === '/v1/admin/partner-attribution') {
       const receipts=Object.values(store.partnerReceipts||{}).map(({signed_transaction,account_token,...record})=>record);
       return jsonResponse(res,200,{bindings:store.partnerBindings||{},receipts:receipts.sort((a,b)=>b.created_at-a.created_at).slice(0,500)});
@@ -2337,11 +2322,14 @@ server.listen(port, () => {
 
 const partnerRetryTimer = setInterval(()=>partnerAttribution.drain().catch(()=>console.error('Partner delivery retry failed')),30000);
 partnerRetryTimer.unref();
+const singularRetryTimer = setInterval(()=>sharedProductReferrals.drainSingular('cleaner').catch(()=>console.error('Singular delivery retry failed')),30000);
+singularRetryTimer.unref();
 let isShuttingDown = false;
 async function shutdown(signal) {
   if (isShuttingDown) return;
   isShuttingDown = true;
   clearInterval(partnerRetryTimer);
+  clearInterval(singularRetryTimer);
   console.log(`Received ${signal}; flushing data before shutdown.`);
   if (metricsSaveTimer) {
     clearTimeout(metricsSaveTimer);

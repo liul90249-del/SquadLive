@@ -9,7 +9,7 @@ const subscription=(...ids)=>new Map(ids.map(id=>[id,{kind:'subscription',appleT
 const purchases=(appleType,...ids)=>new Map(ids.map(id=>[id,{kind:'iap',appleType}]));
 const catalog=(...groups)=>new Map(groups.flatMap(group=>[...group]));
 export const inboxProducts=Object.freeze({
- cleaner:{bundle:'com.hecathehe.PhoneCleaner',appId:6761738282,skus:subscription('com.hecathehe.PhoneCleaner.weekly','com.hecathehe.PhoneCleaner.yearly')},
+ cleaner:{bundle:'com.hecathehe.PhoneCleaner',appId:6761738282,skus:catalog(subscription('com.hecathehe.PhoneCleaner.weekly','com.hecathehe.PhoneCleaner.yearly'),purchases('Non-Consumable','com.hecathehe.PhoneCleaner.lifetime'))},
  nutriscan:{bundle:'com.liuzhigang.NutriScan',appId:6786940107,skus:subscription('com.liuzhigang.nutriscan.pro.annuala','com.liuzhigang.nutriscan.pro.monthlya','com.liuzhigang.nutriscan.pro.annualpromoa')},
  subguard:{bundle:'Organization-Identifier--com.liuzhigang.SubGuard',appId:6762180214,skus:catalog(subscription('com.liuzhigang.subguard.pro.yearly'),purchases('Non-Consumable','com.liuzhigang.subguardpro.lifetime'))},
  dailyme:{bundle:'com.liuzhigang.dailyme',appId:6763536504,skus:subscription('com.dailyme.premium.weekly','com.dailyme.premium.yearly2')},
@@ -43,7 +43,12 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    const incoming={product,environment:t.environment,transaction_id:t.transactionId,original_id:t.originalTransactionId,sku:t.productId,purchase_kind:sku.kind,apple_type:sku.appleType,account_token:t.appAccountToken?.toLowerCase()||null,purchased_at:t.purchaseDate,price:t.price??null,currency:t.currency??null};
    if(old&&Object.keys(incoming).some(k=>old[k]!==incoming[k]))throw fail('Transaction ownership or amount conflict',409);
    const subscriptionOwner=await reserveSubscriptionOwner(root,incoming,atomic);
-   const receipt={...incoming,subscription_owner_token:subscriptionOwner,revoked:!!(old?.revoked||refund||t.revocationDate),signed_transaction:old?.revoked?old.signed_transaction:proof,notification_id:notificationId||old?.notification_id||null,received_at:old?.received_at||now(),updated_at:now(),attribution_status:'not_bound',commission_eligible:false};
+   const refundedAt=old?.refunded_at||(refund||t.revocationDate?(Number.isSafeInteger(t.revocationDate)&&t.revocationDate>0?t.revocationDate:now()):null);
+   const revocationPercentage=Number.isSafeInteger(t.revocationPercentage)&&t.revocationPercentage>=0&&t.revocationPercentage<=100000
+    ?t.revocationPercentage:old?.revocation_percentage??null;
+   const receipt={...incoming,subscription_owner_token:subscriptionOwner,revoked:!!(old?.revoked||refund||t.revocationDate),refunded_at:refundedAt,
+    revocation_type:t.revocationType||old?.revocation_type||null,revocation_percentage:revocationPercentage,
+    signed_transaction:old?.revoked?old.signed_transaction:proof,notification_id:notificationId||old?.notification_id||null,received_at:old?.received_at||now(),updated_at:now(),attribution_status:'not_bound',commission_eligible:false};
    await atomic(file,receipt);
    return {received:true,duplicate:!!old,transaction_id:t.transactionId,environment:t.environment,revoked:receipt.revoked,attribution_status:'not_bound',commission_eligible:false};
   });queue=op.catch(()=>{});return op;
