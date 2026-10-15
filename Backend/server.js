@@ -1,3 +1,4 @@
+import { requestDeepSeekCompletion } from "./deepseek-completion.mjs";
 import http from "node:http";
 import {createTransactionInbox} from "./shared-transaction-inbox.mjs";
 import {inboxProducts} from "./shared-transaction-inbox.mjs";
@@ -43,7 +44,7 @@ const appleAppId = Number(process.env.APPLE_APP_ID || 0) || undefined;
 const appleOnlineChecks = process.env.APPLE_IAP_ONLINE_CHECKS === "true";
 const mockPurchasesEnabled = process.env.NODE_ENV !== "production" && process.env.ENABLE_MOCK_PURCHASES === "true";
 const rewardTimeZone = process.env.REWARD_TIME_ZONE || "Asia/Shanghai";
-const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
+const deepSeekModel = process.env.DEEPSEEK_MODEL || "deepseek-flash";
 const aiMaxConcurrency = Math.max(1, Number(process.env.AI_MAX_CONCURRENCY || 40));
 const aiQueueLimit = Math.max(aiMaxConcurrency, Number(process.env.AI_QUEUE_LIMIT || 300));
 const instanceMemoryMB = Math.max(128, Number(process.env.INSTANCE_MEMORY_MB || 512));
@@ -1330,55 +1331,24 @@ function conciseReply(answer, userText, replyDepth = 0.62) {
 }
 
 async function callDeepSeek(body) {
-  const fallback = (reason, providerStatus = null) => ({
-    answer: localAIReply(body.text, body.inputLanguage),
-    source: "fallback",
-    reason,
-    providerStatus
+  const result = await requestDeepSeekCompletion({
+    apiKey: process.env.DEEPSEEK_API_KEY,
+    payload: {
+      model: deepSeekModel,
+      thinking: { type: "disabled" },
+      messages: [
+        { role: "system", content: deepSeekSystemPrompt(body) },
+        ...conversationHistory(body),
+        { role: "user", content: String(body.text || "") }
+      ],
+      temperature: 0.74,
+      max_tokens: body.replyDepth > 0.72 ? 140 : 96
+    }
   });
-
-  if (!process.env.DEEPSEEK_API_KEY) return fallback("missing_key");
-
-  try {
-    const response = await fetch("https://api.deepseek.com/chat/completions", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${process.env.DEEPSEEK_API_KEY.trim()}`
-      },
-      signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        model: deepSeekModel,
-        thinking: { type: "disabled" },
-        messages: [
-          { role: "system", content: deepSeekSystemPrompt(body) },
-          ...conversationHistory(body),
-          { role: "user", content: String(body.text || "") }
-        ],
-        temperature: 0.74,
-        max_tokens: body.replyDepth > 0.72 ? 140 : 96
-      })
-    });
-
-    if (!response.ok) {
-      const providerMessage = (await response.text()).slice(0, 500);
-      console.error("DeepSeek request failed", { status: response.status, message: providerMessage });
-      return fallback("provider_error", response.status);
-    }
-
-    const data = await response.json();
-    const answer = data?.choices?.[0]?.message?.content?.trim();
-    if (!answer) {
-      console.error("DeepSeek returned an empty response");
-      return fallback("empty_response", response.status);
-    }
-
-    return { answer: conciseReply(answer, body.text, body.replyDepth), source: "deepseek", reason: null, providerStatus: response.status };
-  } catch (error) {
-    console.error("DeepSeek network error", error);
-    const isTimeout = error?.name === "TimeoutError" || error?.name === "AbortError";
-    return fallback(isTimeout ? "timeout" : "network_error");
+  if (result.content) {
+    return { answer: conciseReply(result.content, body.text, body.replyDepth), source: "deepseek", reason: null, providerStatus: result.providerStatus };
   }
+  return { answer: localAIReply(body.text, body.inputLanguage), source: "fallback", reason: result.reason, providerStatus: result.providerStatus };
 }
 
 async function route(req, res) {
