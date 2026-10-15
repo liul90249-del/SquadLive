@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DailyMe</title>
+    <meta
+      name="description"
+      content="DailyMe is an iOS app for daily affirmations, emotional healing, and beautifully designed home screen widgets."
+    />
+    <style>
+      :root {
+        --bg: #f9f8f6;
+        --text: #2d2b36;
+        --muted: #66626d;
+        --line: #e8e2da;
+        --card: rgba(255, 255, 255, 0.72);
+        --rose: #e7d7d9;
+        --sage: #c8d9d1;
+        --dark: #111114;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+          "Microsoft YaHei", sans-serif;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .container {
+        width: min(1200px, calc(100% - 48px));
+        margin: 0 auto;
+      }
+
+      .serif {
+        font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      }
+
+      .navbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 28px 0;
+      }
+
+      .logo {
+        font-size: 32px;
+        font-weight: 600;
+        letter-spacing: -0.03em;
+      }
+
+      .pill-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        background: var(--text);
+        color: #f9f8f6;
+        padding: 14px 22px;
+        font-size: 14px;
+        font-weight: 600;
+        transition: transform 0.2s ease, opacity 0.2s ease;
+      }
+
+      .pill-button:hover {
+        transform: translateY(-1px);
+        opacity: 0.92;
+      }
+
+      .hero {
+        min-height: calc(100vh - 96px);
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 72px;
+        align-items: center;
+        padding: 24px 0 72px;
+      }
+
+      .badge {
+        display: inline-flex;
+        padding: 10px 16px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.7);
+        border: 1px solid #ddd8d0;
+        color: #6a6672;
+        font-size: 14px;
+        backdrop-filter: blur(10px);
+      }
+
+      h1 {
+        margin: 22px 0 0;
+        max-width: 620px;
+        font-size: clamp(52px, 7vw, 92px);
+        line-height: 0.98;
+        letter-spacing: -0.05em;
+        font-weight: 600;
+      }
+
+      .subtitle {
+        margin-top: 28px;
+        max-width: 580px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.9;
+      }
+
+      .store-button {
+        margin-top: 38px;
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        padding: 16px 24px;
+        border-radius: 999px;
+        background: var(--text);
+        color: #f9f8f6;
+        box-shadow: 0 18px 40px rgba(45, 43, 54, 0.12);
+      }
+
+      .store-button small {
+        display: block;
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.62);
+      }
+
+      .store-button strong {
+        display: block;
+        margin-top: 3px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .mockup-wrap {
+        position: relative;
+        display: flex;
+        justify-content: center;
+      }
+
+      .blob {
+        position: absolute;
+        border-radius: 999px;
+        filter: blur(70px);
+        opacity: 0.95;
+      }
+
+      .blob.one {
+        left: 0;
+        top: 48px;
+        width: 220px;
+        height: 220px;
+        background: var(--rose);
+      }
+
+      .blob.two {
+        right: 12px;
+        bottom: 0;
+        width: 240px;
+        height: 240px;
+        background: var(--sage);
+      }
+
+      .phone {
+        position: relative;
+        width: 320px;
+        height: 648px;
+        border-radius: 52px;
+        background: var(--dark);
+        padding: 10px;
+        box-shadow: 0 30px 80px rgba(45, 43, 54, 0.18);
+        animation: floatPhone 5s ease-in-out infinite;
+      }
+
+      @keyframes floatPhone {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(-10px);
+        }
+      }
+
+      .notch {
+        position: absolute;
+        left: 50%;
+        top: 12px;
+        width: 144px;
+        height: 30px;
+        border-radius: 999px;
+        background: #000;
+        transform: translateX(-50%);
+        z-index: 2;
+      }
+
+      .screen {
+        height: 100%;
+        border-radius: 42px;
+        overflow: hidden;
+        background: linear-gradient(180deg, #f8f4ef 0%, #efe8df 100%);
+      }
+
+      .screen-inner {
+        height: 100%;
+        padding: 28px;
+        background:
+          radial-gradient(circle at top, rgba(230, 214, 216, 0.82), transparent 32%),
+          linear-gradient(180deg, #f8f4ef 0%, #efe8df 100%);
+      }
+
+      .quote-card {
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.62);
+        padding: 22px;
+        backdrop-filter: blur(12px);
+      }
+
+      .quote-card span {
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #8a7f79;
+      }
+
+      .quote-card p {
+        margin: 18px 0 0;
+        font-size: 34px;
+        line-height: 1.28;
+        letter-spacing: -0.03em;
+      }
+
+      .mini-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      .mini-box {
+        border-radius: 24px;
+        padding: 16px;
+      }
+
+      .mini-box.one {
+        background: #dde7e1;
+      }
+
+      .mini-box.two {
+        background: #f0e2e4;
+      }
+
+      .mini-box em {
+        display: block;
+        font-size: 12px;
+        color: #706a71;
+        font-style: normal;
+      }
+
+      .mini-box strong {
+        display: block;
+        margin-top: 28px;
+        font-size: 20px;
+      }
+
+      .today-card {
+        margin-top: 18px;
+        border-radius: 28px;
+        background: var(--text);
+        color: #f9f8f6;
+        padding: 22px;
+      }
+
+      .today-card span {
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.5);
+      }
+
+      .today-card p {
+        margin: 14px 0 0;
+        font-size: 20px;
+        line-height: 1.7;
+      }
+
+      .section {
+        padding: 110px 0;
+      }
+
+      .section-kicker {
+        font-size: 13px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: #8a857e;
+      }
+
+      .section-title {
+        margin-top: 18px;
+        font-size: clamp(34px, 4vw, 56px);
+        line-height: 1.08;
+        letter-spacing: -0.04em;
+      }
+
+      .features {
+        margin-top: 48px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 24px;
+      }
+
+      .feature {
+        border-radius: 32px;
+        background: var(--card);
+        border: 1px solid #e7e1d9;
+        padding: 34px;
+        backdrop-filter: blur(10px);
+      }
+
+      .feature-number {
+        font-size: 54px;
+        color: #d8c8c8;
+        line-height: 1;
+        letter-spacing: -0.04em;
+      }
+
+      .feature h3 {
+        margin: 30px 0 0;
+        font-size: 28px;
+        line-height: 1.2;
+      }
+
+      .feature p {
+        margin: 16px 0 0;
+        color: #67626c;
+        font-size: 16px;
+        line-height: 1.95;
+      }
+
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        border-top: 1px solid var(--line);
+        padding: 32px 0 42px;
+        color: #7c7681;
+        font-size: 14px;
+      }
+
+      @media (max-width: 960px) {
+        .hero {
+          grid-template-columns: 1fr;
+          gap: 44px;
+          padding-top: 10px;
+        }
+
+        .mockup-wrap {
+          justify-content: flex-start;
+        }
+
+        .features {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .container {
+          width: min(100% - 32px, 1200px);
+        }
+
+        .navbar {
+          padding: 22px 0;
+        }
+
+        .logo {
+          font-size: 28px;
+        }
+
+        .pill-button {
+          padding: 12px 18px;
+        }
+
+        h1 {
+          font-size: 48px;
+        }
+
+        .subtitle {
+          font-size: 16px;
+          line-height: 1.8;
+        }
+
+        .phone {
+          width: 290px;
+          height: 588px;
+        }
+
+        .quote-card p {
+          font-size: 30px;
+        }
+
+        .feature {
+          padding: 28px;
+        }
+
+        .feature h3 {
+          font-size: 24px;
+        }
+
+        .footer {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="container">
+        <header class="navbar">
+          <a class="logo serif" href="/dailyme">DailyMe</a>
+          <a
+            class="pill-button"
+            href="https://apps.apple.com/us/app/dailyme-daily-affirmations/id6763536504"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Get DailyMe
+          </a>
+        </header>
+
+        <section class="hero">
+          <div>
+            <div class="badge">Daily affirmations · Emotional healing · Home screen widgets</div>
+            <h1 class="serif">
+              Give yourself
+              <br />
+              a positive cue every day
+            </h1>
+            <p class="subtitle">
+              Build a calmer, more positive mindset with healing affirmations and beautifully crafted home screen widgets.
+            </p>
+
+            <a
+              class="store-button"
+              id="download"
+              href="https://apps.apple.com/us/app/dailyme-daily-affirmations/id6763536504"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                <path d="M17.05 12.536c.023 2.485 2.18 3.312 2.204 3.323-.018.058-.344 1.181-1.13 2.34-.679 1.001-1.384 1.998-2.493 2.018-1.089.02-1.439-.646-2.683-.646-1.245 0-1.634.626-2.663.666-1.071.04-1.887-1.074-2.571-2.071-1.397-2.019-2.465-5.707-1.032-8.196.712-1.236 1.985-2.018 3.367-2.038 1.05-.02 2.041.706 2.683.706.641 0 1.844-.873 3.109-.744.529.022 2.013.214 2.968 1.611-.077.048-1.771 1.036-1.759 3.031ZM15.77 4.87c.57-.69.954-1.65.849-2.607-.821.033-1.815.547-2.404 1.237-.529.61-.993 1.585-.868 2.521.917.072 1.853-.466 2.423-1.15Z" />
+              </svg>
+              <div>
+                <small>Download on the</small>
+                <strong>App Store</strong>
+              </div>
+            </a>
+          </div>
+
+          <div class="mockup-wrap">
+            <div class="blob one"></div>
+            <div class="blob two"></div>
+
+            <div class="phone">
+              <div class="notch"></div>
+              <div class="screen">
+                <div class="screen-inner">
+                  <div class="quote-card">
+                    <span>Daily Reflection</span>
+                    <p class="serif">
+                      I deserve
+                      <br />
+                      gentleness and peace.
+                    </p>
+                  </div>
+
+                  <div class="mini-grid">
+                    <div class="mini-box one">
+                      <em>Mood</em>
+                      <strong>Calm</strong>
+                    </div>
+                    <div class="mini-box two">
+                      <em>Widget</em>
+                      <strong>Active</strong>
+                    </div>
+                  </div>
+
+                  <div class="today-card">
+                    <span>Today</span>
+                    <p>
+                      Small, steady rituals
+                      <br />
+                      grow into lasting inner strength.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-kicker">Features</div>
+          <div class="section-title serif">Soft, refined, and quietly powerful</div>
+
+          <div class="features">
+            <article class="feature">
+              <div class="feature-number serif">01</div>
+              <h3>Vast healing affirmations</h3>
+              <p>A rich library of self-love, grounding, and uplifting quotes to support your day with calm intention.</p>
+            </article>
+
+            <article class="feature">
+              <div class="feature-number serif">02</div>
+              <h3>Beautiful home widgets</h3>
+              <p>Bring thoughtful reminders to your home screen with elegant widgets designed to feel warm and restorative.</p>
+            </article>
+
+            <article class="feature">
+              <div class="feature-number serif">03</div>
+              <h3>Switch themes freely</h3>
+              <p>Move between moods, colors, and visual atmospheres to match the emotional tone you want each day.</p>
+            </article>
+          </div>
+        </section>
+
+        <footer class="footer">
+          <div>© 2026 DailyMe · Support: <a href="mailto:liul90249@gmail.com">liul90249@gmail.com</a></div>
+          <a href="/dailyme/privacy">Privacy Policy</a>
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1418,6 +1418,17 @@ async function route(req, res) {
     return res.end(data);
   }
 
+  const dailyMePages = new Map([
+    ["/dailyme", "dailyme.html"],
+    ["/dailyme/", "dailyme.html"],
+    ["/dailyme/privacy", "dailyme-privacy.html"]
+  ]);
+  if (req.method === "GET" && dailyMePages.has(url.pathname)) {
+    const html = await readFile(join(__dirname, dailyMePages.get(url.pathname)), "utf8");
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" });
+    return res.end(html);
+  }
+
   if (req.method === "GET" && url.pathname === "/health") {
     return jsonResponse(res, 200, {
       ok: true,
