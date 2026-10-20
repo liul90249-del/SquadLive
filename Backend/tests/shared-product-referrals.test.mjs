@@ -26,6 +26,17 @@ test('server identity binds once and delivers verified purchase/refund',async()=
  const refunded=await f.service.recordVerified('cleaner',t,'refund proof '.repeat(20),{refund:true});
  assert.equal(refunded.attribution_status,'refunded');assert.equal(f.calls.filter(x=>x[0]==='refund').length,1);
 });
+test('feedback identifies the authenticated account and its canonical installation; cleanup evidence is monotonic',async()=>{
+ const f=fixture(),device='10000000-0000-4000-8000-000000000010';
+ const first=await f.service.session('cleaner',{deviceId:device,cleanupTrackingV1:true,hasCompletedCleanup:false});
+ assert.equal(first.user_id,f.root.sharedPartnerReferrals.cleaner.devices[device].accountId);
+ assert.equal(first.device_id,device);assert.notEqual(first.user_id,first.token);
+ const next=await f.service.session('cleaner',{credential:first.token,deviceId:'20000000-0000-4000-8000-000000000010',cleanupTrackingV1:true,hasCompletedCleanup:true,firstCleanupAt:190000});
+ assert.equal(next.user_id,first.user_id);assert.equal(next.device_id,device);
+ await f.service.session('cleaner',{credential:first.token,cleanupTrackingV1:true,hasCompletedCleanup:false});
+ const account=f.root.sharedPartnerReferrals.cleaner.accounts[first.user_id];assert.equal(account.hasCompletedCleanup,true);assert.equal(account.firstCleanupAt,190000);
+ await assert.rejects(f.service.session('cleaner',{credential:first.token,cleanupTrackingV1:true,hasCompletedCleanup:true,firstCleanupAt:900000}),/cleanup/);
+});
 
 test('unbound and sandbox transactions never deliver commission',async()=>{
  const f=fixture(),session=await f.service.session('cleaner',{deviceId:'20000000-0000-4000-8000-000000000002'});

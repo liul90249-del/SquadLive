@@ -85,6 +85,8 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
     accountId: item.customer_id || null,
     sku: item.sku,
     kind: item.purchase_kind,
+    isFreeTrial:item.offer_discount_type==='FREE_TRIAL',
+    expiresAt:iso(item.expires_at),
     purchasedAt: iso(Number(item.purchased_at) * 1000),
     refundedAt: refundedAmount(item) > 0 && item.refunded_at ? iso(Number(item.refunded_at)) : null,
     priceMilliunits: Number.isSafeInteger(item.price) ? item.price : null,
@@ -139,6 +141,9 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
     daily,
     users: accounts.map(account => ({
       id: account.id,
+      deviceId: account.deviceId || null,
+      hasCompletedCleanup: account.hasCompletedCleanup===true ? true : account.cleanupTrackedFrom ? false : null,
+      firstCleanupAt: iso(account.firstCleanupAt),
       createdAt: account.createdAt,
       lastSeenAt: account.lastSeenAt || null,
       activeDays: activityDays(account).length,

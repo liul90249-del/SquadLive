@@ -39,6 +39,12 @@ services:
         sync: false
       - key: SINGULAR_S2S_CLEANER_ENABLED
         value: "false"
+      - key: CLEANER_APPLOVIN_REPORT_KEY
+        sync: false
+      - key: CLEANER_APPLOVIN_CURRENCY
+        sync: false
+      - key: CLEANER_APPLOVIN_SYNC_ENABLED
+        value: "false"
       - key: ASC_API_KEY_ID
         sync: false
       - key: ASC_API_ISSUER_ID

@@ -1,7 +1,9 @@
 import {mkdir,readFile,open,rename,statfs} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {Environment,SignedDataVerifier} from '@apple/app-store-server-library';
+import {Environment,SignedDataVerifier,AppStoreServerAPIClient} from '@apple/app-store-server-library';
+import {createSubscriptionLifecycle,reconcileSubscriptionStatuses} from './subscription-lifecycle.mjs';
+import {readVerifiedProductReceipts} from './product-operations.mjs';
 import {createPurchaseHistory,historyClientFromEnvironment} from './apple-purchase-history.mjs';
 import {reserveSubscriptionOwner} from './subscription-owner.mjs';
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
@@ -9,7 +11,7 @@ const subscription=(...ids)=>new Map(ids.map(id=>[id,{kind:'subscription',appleT
 const purchases=(appleType,...ids)=>new Map(ids.map(id=>[id,{kind:'iap',appleType}]));
 const catalog=(...groups)=>new Map(groups.flatMap(group=>[...group]));
 export const inboxProducts=Object.freeze({
- cleaner:{bundle:'com.hecathehe.PhoneCleaner',appId:6761738282,skus:catalog(subscription('com.hecathehe.PhoneCleaner.weekly','com.hecathehe.PhoneCleaner.yearly'),purchases('Non-Consumable','com.hecathehe.PhoneCleaner.lifetime'))},
+ cleaner:{bundle:'com.hecathehe.PhoneCleaner',appId:6761738282,skus:catalog(subscription('com.hecathehe.PhoneCleaner.weekly','com.hecathehe.PhoneCleaner.yearly','com.hecathehe.PhoneCleaner.yearly.standard'),purchases('Non-Consumable','com.hecathehe.PhoneCleaner.lifetime'))},
  nutriscan:{bundle:'com.liuzhigang.NutriScan',appId:6786940107,skus:subscription('com.liuzhigang.nutriscan.pro.annuala','com.liuzhigang.nutriscan.pro.monthlya','com.liuzhigang.nutriscan.pro.annualpromoa')},
  subguard:{bundle:'Organization-Identifier--com.liuzhigang.SubGuard',appId:6762180214,skus:catalog(subscription('com.liuzhigang.subguard.pro.yearly'),purchases('Non-Consumable','com.liuzhigang.subguardpro.lifetime'))},
  dailyme:{bundle:'com.liuzhigang.dailyme',appId:6763536504,skus:subscription('com.dailyme.premium.weekly','com.dailyme.premium.yearly2')},
@@ -22,6 +24,7 @@ async function atomic(file,value){
 }
 const hash=s=>createHash('sha256').update(s).digest('hex');
 export function createTransactionInbox({directory,certDirectory,now=()=>Date.now(),env=process.env,historyFactory,onVerified}){
+ const lifecycle=createSubscriptionLifecycle({directory,now});
  let active=0,queue=Promise.resolve();const verifiers=new Map();
  async function configure(product){
   const config=inboxProducts[product];if(!config)throw fail('Product is not connected',404);
@@ -30,7 +33,7 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
   ]));
   return verifiers.get(product);
  }
- async function record(product,t,proof,{refund=false,notificationId=null}={}){
+ async function record(product,t,proof,{refund=false,notificationId=null,renewal=null,notification=null,source='transaction'}={}){
   const config=inboxProducts[product];
   const sku=config?.skus.get(t.productId);
   if(!config||!sku||t.bundleId!==config.bundle||t.type!==sku.appleType||!['Sandbox','Production'].includes(t.environment)||typeof t.transactionId!=='string'||!t.transactionId||typeof t.originalTransactionId!=='string'||!t.originalTransactionId||!Number.isSafeInteger(t.purchaseDate)||t.purchaseDate<=0||t.purchaseDate>now()+300000)throw fail('Invalid verified transaction metadata');
@@ -46,10 +49,11 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    const refundedAt=old?.refunded_at||(refund||t.revocationDate?(Number.isSafeInteger(t.revocationDate)&&t.revocationDate>0?t.revocationDate:now()):null);
    const revocationPercentage=Number.isSafeInteger(t.revocationPercentage)&&t.revocationPercentage>=0&&t.revocationPercentage<=100000
     ?t.revocationPercentage:old?.revocation_percentage??null;
-   const receipt={...incoming,subscription_owner_token:subscriptionOwner,revoked:!!(old?.revoked||refund||t.revocationDate),refunded_at:refundedAt,
+   const receipt={...incoming,offer_discount_type:t.offerDiscountType||old?.offer_discount_type||null,expires_at:t.expiresDate||old?.expires_at||null,subscription_owner_token:subscriptionOwner,revoked:!!(old?.revoked||refund||t.revocationDate),refunded_at:refundedAt,
     revocation_type:t.revocationType||old?.revocation_type||null,revocation_percentage:revocationPercentage,
     signed_transaction:old?.revoked?old.signed_transaction:proof,notification_id:notificationId||old?.notification_id||null,received_at:old?.received_at||now(),updated_at:now(),attribution_status:'not_bound',commission_eligible:false};
    await atomic(file,receipt);
+   if(product==='cleaner' && sku.kind==='subscription') await lifecycle.record(product,t,{renewal,notification,source,ownerToken:subscriptionOwner});
    return {received:true,duplicate:!!old,transaction_id:t.transactionId,environment:t.environment,revoked:receipt.revoked,attribution_status:'not_bound',commission_eligible:false};
   });queue=op.catch(()=>{});return op;
  }
@@ -117,11 +121,31 @@ export function createTransactionInbox({directory,certDirectory,now=()=>Date.now
    }
    const signed=payload.data?.signedTransactionInfo;if(!signed)throw fail('Missing signed transaction');
    let t;try{t=await verifier.verifyAndDecodeTransaction(signed)}catch{throw fail('Apple transaction signature verification failed')}
+   let renewal=null;
+   if(payload.data?.signedRenewalInfo) {
+    try{renewal=await verifier.verifyAndDecodeRenewalInfo(payload.data.signedRenewalInfo)}catch{throw fail('Apple renewal signature verification failed')}
+    if(renewal.originalTransactionId!==t.originalTransactionId || renewal.environment!==t.environment) throw fail('Apple renewal identity mismatch');
+   }
    const refund=['REFUND','REVOKE'].includes(payload.notificationType);
-   const stored=await record(product,t,signed,{refund,notificationId:id});
+   const stored=await record(product,t,signed,{refund,notificationId:id,renewal,notification:payload,source:'notification'});
    const attribution=onVerified?await onVerified(product,t,signed,{refund}):null;
    return attribution?{...stored,...attribution}:stored;
   }finally{active--}
  }
- return {recordVerified:record,recordVerifiedApp:recordApp,refreshVerifiedAppHistory:refreshAppHistory,receive};
+ async function reconcileCleanerSubscriptions(){
+  const product='cleaner',config=inboxProducts[product];
+  // Explicit Cleaner credentials; never silently borrow another app's key.
+  const key=env.CLEANER_APPLE_IAP_PRIVATE_KEY,keyId=env.CLEANER_APPLE_IAP_KEY_ID,issuerId=env.CLEANER_APPLE_IAP_ISSUER_ID;
+  if(!directory || !key || !keyId || !issuerId) return {unconfigured:true,checked:0,failed:0};
+  const client=new AppStoreServerAPIClient(key,keyId,issuerId,config.bundle,Environment.PRODUCTION);
+  const [verifier]=await configure(product);
+  const receipts=await readVerifiedProductReceipts(directory,product);
+  const originals=[...new Set(receipts.filter(r=>r.purchase_kind==='subscription').map(r=>r.original_id))];
+  return reconcileSubscriptionStatuses({client,verifier,originals,bundleId:config.bundle,appId:config.appId,
+    record:async(t,signed,renewal)=>{
+      await record(product,t,signed,{renewal,source:'reconciliation'});
+      if(onVerified)await onVerified(product,t,signed,{refund:!!t.revocationDate});
+    }});
+ }
+ return {recordVerified:record,recordVerifiedApp:recordApp,refreshVerifiedAppHistory:refreshAppHistory,receive,reconcileCleanerSubscriptions};
 }

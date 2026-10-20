@@ -87,3 +87,15 @@ test('partial refunds use verified Apple percentage and family revocations carry
   assert.equal(report.orders.find(item => item.transactionId === 'half-refund').refundedMilliunits,4995);
   assert.equal(report.orders.find(item => item.transactionId === 'family-revoke').refunded,false);
 });
+
+
+test('admin support lookup exposes installation ID, not credentials, and distinguishes untracked cleanup',()=>{
+ const accounts={old:{id:'old',deviceId:'old-device',createdAt:'2026-10-20',accountToken:'private-account-token'},tracked:{id:'tracked',deviceId:'tracked-device',createdAt:'2026-10-20',cleanupTrackedFrom:'2026-10-20',hasCompletedCleanup:false},cleaned:{id:'cleaned',deviceId:'cleaned-device',createdAt:'2026-10-20',hasCompletedCleanup:true,firstCleanupAt:Date.parse('2026-10-20T01:00:00Z')}};
+ const report=productOperations({sharedPartnerReferrals:{cleaner:{accounts,credentials:{'private-hash':'old'}}}},'cleaner',Date.parse('2026-10-20T02:00:00Z'));
+ assert.equal(report.users.find(u=>u.id==='old').deviceId,'old-device');
+ assert.equal(report.users.find(u=>u.id==='old').hasCompletedCleanup,null);
+ assert.equal(report.users.find(u=>u.id==='tracked').hasCompletedCleanup,false);
+ assert.equal(report.users.find(u=>u.id==='cleaned').hasCompletedCleanup,true);
+ assert.equal(JSON.stringify(report).includes('private-account-token'),false);
+ assert.equal(JSON.stringify(report).includes('private-hash'),false);
+});

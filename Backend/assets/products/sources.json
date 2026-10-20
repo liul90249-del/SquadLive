@@ -1,0 +1,8 @@
+{
+  "cleaner": "PhoneCleaner/PhoneCleaner/Assets.xcassets/AppIcon.appiconset/Icon-1024.png",
+  "dailyme": "DailyMe/DailyMe/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+  "nutriscan": "NutriScan/NutriScan/Assets.xcassets/AppIcon.appiconset/AppIcon1024.png",
+  "subguard": "SubGuard/SubGuard/Assets.xcassets/AppIcon.appiconset/icon.png",
+  "sparkle": "SparkleColor/Unity-iPhone/Images.xcassets/AppIcon.appiconset/Icon-AppStore-1024.png",
+  "catswipe": "CatSwipe/com.catgames/Assets.xcassets/AppIcon.appiconset/AppIcon_1024.png"
+}
