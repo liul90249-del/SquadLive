@@ -42,6 +42,18 @@ test('Smart Cleaner lifetime purchase is verified and classified as a non-consum
  assert.equal(receipt.sku,transaction.productId);
  await assert.rejects(f.service.recordVerified('cleaner',{...transaction,transactionId:'invalid-lifetime',type:'Auto-Renewable Subscription'},'wrong'));
 });
+test('Smart Cleaner standard annual subscription records verified renewal state and keeps cancellation separate from refunds',async t=>{
+ const f=await fixture(t),transaction={...proof,bundleId:'com.hecathehe.PhoneCleaner',productId:'com.hecathehe.PhoneCleaner.yearly.standard',type:'Auto-Renewable Subscription',transactionId:'standard',originalTransactionId:'standard',appAccountToken:'cleaner-owner'};
+ const renewal={originalTransactionId:'standard',environment:'Production',signedDate:Date.now(),autoRenewStatus:0};
+ await f.service.recordVerified('cleaner',transaction,'annual',{renewal,notification:{notificationUUID:'off',notificationType:'DID_CHANGE_RENEWAL_STATUS',subtype:'AUTO_RENEW_DISABLED',signedDate:Date.now()}});
+ const {readSubscriptionLifecycle}=await import('../subscription-lifecycle.mjs');
+ const lifecycle=await readSubscriptionLifecycle(f.options.directory);
+ assert.equal(Object.values(lifecycle.chains)[0].autoRenewStatus,0);assert.equal(Object.values(lifecycle.events).length,1);
+ const root=join(f.options.directory,'partner-inbox','cleaner','Production');
+ const receipt=JSON.parse(await readFile(join(root,createHash('sha256').update('standard').digest('hex')+'.json'),'utf8'));
+ assert.equal(receipt.revoked,false);
+ assert.equal((await f.service.reconcileCleanerSubscriptions()).unconfigured,true);
+});
 test('Missing persistent storage and forged Apple signatures fail closed',async t=>{const f=await fixture(t);await assert.rejects(createTransactionInbox({...f.options,directory:undefined}).recordVerified('nutriscan',proof,'signed'),/storage/);await assert.rejects(f.service.receive('nutriscan','transactions','x'.repeat(150)),/signature/);assert.equal((await readdir(f.options.directory)).length,0);});
 
 const receiptPath=(f,tx)=>join(f.options.directory,'partner-inbox','nutriscan',tx.environment,createHash('sha256').update(tx.transactionId).digest('hex')+'.json');

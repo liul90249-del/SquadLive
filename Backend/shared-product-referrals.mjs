@@ -1,3 +1,4 @@
+import {FUNNEL_EVENTS} from './marketing-core.mjs';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -14,8 +15,12 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
  const clientFor=product=>clients[product]||null;
  const productFor=product=>products[product]||null;
 
- async function session(product,{credential,deviceId,singularSdid,serverRevenueV1},req) {
+ async function session(product,{credential,deviceId,singularSdid,serverRevenueV1,cleanupTrackingV1,hasCompletedCleanup,firstCleanupAt,funnelEvents,funnelTrackingV1},req) {
   if(!productFor(product))throw fail('Product is not connected',404);
+  if(product==='cleaner' && cleanupTrackingV1===true && (typeof hasCompletedCleanup!=='boolean' ||
+   (firstCleanupAt!==undefined && (!hasCompletedCleanup || !Number.isSafeInteger(firstCleanupAt) || firstCleanupAt<=0 || firstCleanupAt>now()+300000))))throw fail('Invalid cleanup completion metadata');
+  if(funnelTrackingV1===true && (!funnelEvents || typeof funnelEvents!=='object' || Array.isArray(funnelEvents) ||
+   Object.entries(funnelEvents).some(([key,value])=>!FUNNEL_EVENTS.includes(key)||!Number.isSafeInteger(value)||value<Date.UTC(2020,0,1)||value>now()+300000)))throw fail('Invalid funnel metadata');
   const sdid=singularSdid===undefined?null:String(singularSdid).toLowerCase();
   // Singular currently returns a version-5 UUID on iOS, despite examples in
   // its S2S docs showing version 4. Accept SDK-issued canonical UUIDs.
@@ -48,6 +53,15 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   // to persist the cutover timestamp before any purchase can use S2S.
   if(serverRevenueV1===true&&account.singularSdid&&singularClients[product]&&singularEnrollments[product])account.singularS2SEnabledAt||=now()+60000;
   account.lastSeenAt=seenAt;
+  if(product==='cleaner' && cleanupTrackingV1===true){
+   account.cleanupTrackedFrom ||= seenAt;
+   account.hasCompletedCleanup=!!(account.hasCompletedCleanup || hasCompletedCleanup);
+   if(firstCleanupAt!==undefined)account.firstCleanupAt=Math.min(account.firstCleanupAt||Infinity,firstCleanupAt);
+  }
+  if(product==='cleaner' && funnelTrackingV1===true){
+   account.funnelTrackedFrom||=seenAt;account.funnelEvents||={};
+   for(const [key,value] of Object.entries(funnelEvents))account.funnelEvents[key]=Math.min(account.funnelEvents[key]||Infinity,value);
+  }
   account.activityTrackedFrom||=seenAt;
   account.activeDays||={};
   account.activeDays[seenAt.slice(0,10)]=true;
@@ -55,7 +69,7 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   for(const day of Object.keys(account.activeDays).sort().slice(0,-120))delete account.activeDays[day];
   onSession(root,account,req);
   await saveStore(root);
-  return {token,account_token:account.accountToken,expires_in:31536000,
+  return {token,account_token:account.accountToken,user_id:account.id,device_id:account.deviceId,expires_in:31536000,
    server_revenue_enabled_at:account.singularS2SEnabledAt||null};
  }
 

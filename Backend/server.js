@@ -1,6 +1,10 @@
+import {marketingDataset} from './marketing-core.mjs';
+import {prepareMarketingImport,applyMarketingImport} from './marketing-import.mjs';
+import {createApplovinSync} from './applovin-marketing.mjs';
 import { requestDeepSeekCompletion } from "./deepseek-completion.mjs";
 import http from "node:http";
 import {createTransactionInbox} from "./shared-transaction-inbox.mjs";
+import {readSubscriptionLifecycle,createSubscriptionLifecycle,subscriptionAnalytics,createDailySubscriptionCheck} from './subscription-lifecycle.mjs';
 import {inboxProducts} from "./shared-transaction-inbox.mjs";
 import {createSharedProductReferrals} from "./shared-product-referrals.mjs";
 import {createSingularS2S} from "./singular-s2s.mjs";
@@ -33,6 +37,12 @@ const supportPagePath = join(__dirname, "support.html");
 const privacyPagePath = join(__dirname, "privacy.html");
 const termsPagePath = join(__dirname, "terms.html");
 const landingAssets = new Map([
+  ["/assets/products/cleaner.png", { path: join(__dirname, "assets", "products", "cleaner.png"), contentType: "image/png" }],
+  ["/assets/products/dailyme.png", { path: join(__dirname, "assets", "products", "dailyme.png"), contentType: "image/png" }],
+  ["/assets/products/nutriscan.png", { path: join(__dirname, "assets", "products", "nutriscan.png"), contentType: "image/png" }],
+  ["/assets/products/subguard.png", { path: join(__dirname, "assets", "products", "subguard.png"), contentType: "image/png" }],
+  ["/assets/products/sparkle.png", { path: join(__dirname, "assets", "products", "sparkle.png"), contentType: "image/png" }],
+  ["/assets/products/catswipe.png", { path: join(__dirname, "assets", "products", "catswipe.png"), contentType: "image/png" }],
   ["/assets/landing/squadlive-logo.png", { path: join(__dirname, "assets", "landing", "squadlive-logo.png"), contentType: "image/png" }],
   ["/assets/landing/live-1.jpg", { path: join(__dirname, "assets", "landing", "live-1.jpg"), contentType: "image/jpeg" }],
   ["/assets/landing/live-2.jpg", { path: join(__dirname, "assets", "landing", "live-2.jpg"), contentType: "image/jpeg" }],
@@ -1428,6 +1438,13 @@ async function route(req, res) {
     return res.end(html);
   }
 
+  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs"].includes(url.pathname)) {
+    const content = await readFile(join(__dirname, url.pathname.slice(1)), "utf8");
+    res.writeHead(200, { "content-type": url.pathname.endsWith('.css')
+      ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" });
+    return res.end(content);
+  }
+
   if (req.method === "GET" && (url.pathname === "/support" || url.pathname === "/support/")) {
     const html = await readFile(supportPagePath, "utf8");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -2166,13 +2183,34 @@ async function route(req, res) {
   if (url.pathname.startsWith("/v1/admin/")) {
     if (!requireAdmin(req, res)) return;
 
+    if(req.method==='POST'&&url.pathname==='/v1/admin/products/cleaner/applovin-sync'){
+      return jsonResponse(res,200,await applovinSync.run());
+    }
+    const marketingImportRoute=/^\/v1\/admin\/products\/([a-z]+)\/marketing-import$/.exec(url.pathname);
+    if(req.method==='POST'&&marketingImportRoute){
+      const product=marketingImportRoute[1];
+      if(!inboxProducts[product]&&product!=='catswipe')return jsonResponse(res,404,{error:'Unknown product'});
+      const body=await readJSON(req);
+      const prepared=prepareMarketingImport(store,product,body.kind,body.csv);
+      if(body.confirm===true){
+        if(body.fingerprint!==prepared.fingerprint)return jsonResponse(res,409,{error:'导入内容已变化，请重新预览'});
+        const before=store.marketing?.[product]?structuredClone(store.marketing[product]):undefined;
+        applyMarketingImport(store,product,prepared);
+        try{await saveStore(store);}catch(error){if(before)store.marketing[product]=before;else delete store.marketing[product];throw error;}
+      }
+      return jsonResponse(res,200,{...prepared,records:prepared.records.slice(0,5),saved:body.confirm===true});
+    }
     const productOperationsRoute = /^\/v1\/admin\/products\/([a-z]+)\/operations$/.exec(url.pathname);
     if (req.method === "GET" && productOperationsRoute) {
       const product = productOperationsRoute[1];
       if (!new Set(["cleaner", "dailyme", "nutriscan", "subguard", "sparkle", "catswipe"]).has(product))
         return jsonResponse(res, 404, { error: "Unknown product" });
       const verifiedReceipts = await readVerifiedProductReceipts(dataDir, product);
-      return jsonResponse(res, 200, { ...productOperations(store, product, Date.now(), verifiedReceipts),
+      const operations=productOperations(store,product,Date.now(),verifiedReceipts);
+      const lifecycle=product==='cleaner'?await readSubscriptionLifecycle(dataDir,product):null;
+      return jsonResponse(res, 200, { ...operations,
+        marketing:{...marketingDataset(store,product,operations),applovin:product==='cleaner'?await applovinSync.status():null},
+        subscriptions:lifecycle?subscriptionAnalytics(operations,lifecycle,store.sharedPartnerReferrals?.[product]?.accountTokens):null,
         connected: Boolean(inboxProducts[product]),
         subscriptionCatalog: product === 'cleaner' ? await cleanerCatalog() : null });
     }
@@ -2305,12 +2343,24 @@ const partnerRetryTimer = setInterval(()=>partnerAttribution.drain().catch(()=>c
 partnerRetryTimer.unref();
 const singularRetryTimer = setInterval(()=>sharedProductReferrals.drainSingular('cleaner').catch(()=>console.error('Singular delivery retry failed')),30000);
 singularRetryTimer.unref();
+const lifecycleStore=createSubscriptionLifecycle({directory:dataDir});
+const checkSubscriptions=createDailySubscriptionCheck({read:()=>readSubscriptionLifecycle(dataDir),
+  run:()=>sharedInbox.reconcileCleanerSubscriptions(),save:patch=>lifecycleStore.sync('cleaner',patch)});
+const subscriptionCheckTimer=setInterval(()=>checkSubscriptions(),60000);
+subscriptionCheckTimer.unref();
+checkSubscriptions();
+const applovinSync=createApplovinSync({getStore,saveStore});
+const applovinCheckTimer=setInterval(()=>applovinSync.tick().catch(()=>console.error('AppLovin status check failed')),60000);
+applovinCheckTimer.unref();
+applovinSync.tick().catch(()=>console.error('AppLovin status check failed'));
 let isShuttingDown = false;
 async function shutdown(signal) {
   if (isShuttingDown) return;
   isShuttingDown = true;
   clearInterval(partnerRetryTimer);
   clearInterval(singularRetryTimer);
+  clearInterval(subscriptionCheckTimer);
+  clearInterval(applovinCheckTimer);
   console.log(`Received ${signal}; flushing data before shutdown.`);
   if (metricsSaveTimer) {
     clearTimeout(metricsSaveTimer);
