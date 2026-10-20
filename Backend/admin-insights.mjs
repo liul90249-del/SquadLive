@@ -25,7 +25,10 @@ function revealWorkspace() {
 
 const host = document.createElement('div'); host.id = 'insightWorkspace'; $('section-product').prepend(host);
 const dialog = document.createElement('dialog'); dialog.className = 'insight-dialog'; document.body.append(dialog);
-let snapshot, data, view = 'overview', metric = 'registrations', currency = '', start = '', end = '', page = 1;
+const viewPanels = {overview:'productCardsPanel',trends:'productDailyPanel',users:'productUsersPanel',orders:'productOrdersPanel',prices:'productPricesPanel',marketing:'productMarketingPanel'};
+const viewFromHash = () => Object.keys(viewPanels).find(key=>'#'+viewPanels[key]===location.hash) || 'overview';
+const initialView = viewFromHash();
+let snapshot, data, view = initialView, metric = 'registrations', currency = '', start = '', end = '', page = 1;
 let query = '', status = 'all', sort = 'newest', dateField = 'purchasedAt', listStart = '', listEnd = '', orderCurrency = '', userMode = 'table';
 let selectedDay = '', lastProduct = '', loading = false, exactAccount = '', exactSku = '';
 const titles = {overview:'运营概览',trends:'趋势分析',users:'用户明细',orders:'订阅与订单',prices:'商品与价格',marketing:'广告投放'};
@@ -36,6 +39,7 @@ const currencies = () => [...new Set([...(data.orders || []).map(o=>o.currency),
 const table = (heads,rows) => rows.length ? `<div class="insight-table" tabindex="0" role="region" aria-label="${titles[view]}表格"><table><thead><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>` : '<div class="insight-empty">没有符合条件的数据。可调整日期、状态或关键词。</div>';
 function setView(next, reset=true) {
   view = titles[next] ? next : 'overview';
+  const url=new URL(location.href);url.hash=viewPanels[view];history.replaceState(null,'',url);
   if(reset) {exactAccount='';exactSku='';query='';status='all';page=1;listStart='';listEnd='';orderCurrency='';dateField='purchasedAt';}
   selectedDay='';
   const keys = Object.keys(titles);
@@ -64,8 +68,9 @@ function summary(p) {
 }
 function overview(p) {
   const totals=data.totals, cs=currencies();
+  const subscriptionGap=data.subscriptions?.sync?.status==='unconfigured'?'<section class="insight-surface" role="alert"><h2>订阅数据需要补齐配置</h2><p>苹果订阅状态每日核对尚未启用，关闭续订数据可能不完整。需要为 Smart Cleaner 配置苹果订阅查询凭据。</p>'+btn('查看订阅核对状态','subscription-status')+'</section>':'';
   const refunds=data.orders.filter(o=>o.refunded), review=data.orders.filter(needsReview);
-  return `${summary(p)}<div class="insight-main-grid">${trendPanel(p)}<section class="insight-surface attention"><header><h2>需要关注</h2><span>全部记录</span></header><button data-action="review"><span class="attention-number">${review.length}</span><div><b>归因待核对</b><p>查看扣款或退款上报异常 →</p></div></button><button data-action="refund"><span class="attention-number">${refunds.length}</span><div><b>退款订单</b><p>包含全额与部分退款 →</p></div></button><div class="attention-note">${data.subscriptionCatalog ? `${esc($('productSubscriptionCatalog').textContent)}`:'统计基于已接入的身份与已验证订单。暂无额外服务告警数据。'}</div></section></div><div class="insight-bottom-grid"><section class="insight-surface"><header><h2>区间扣款</h2><span>分币种 · 未扣退款</span></header>${cs.length?cs.map(c=>`<button class="currency-row" data-action="currency" data-currency="${esc(c)}"><span>${esc(c)}</span><strong>${money(aggregate(p.current,'gross',c),c)}</strong><small>${delta(aggregate(p.current,'gross',c),aggregate(p.previous,'gross',c),p.comparable)} →</small></button>`).join(''):'<div class="insight-empty">暂无已验证扣款</div>'}</section><section class="insight-surface retention"><header><h2>留存与累计规模</h2><span>累计口径 · 不随日期筛选</span></header>${[['次日留存',totals.day1Retention],['7 日留存',totals.day7Retention]].map(([label,r])=>`<div class="retention-row"><span>${metricLabel(label,label==='次日留存'?'day1':'day7')}</span><strong>${r.rate===null?'样本不足':`${r.rate}%`}</strong><span>${r.returned} / ${r.eligible} 个合格样本</span><meter min="0" max="100" value="${r.rate || 0}" aria-label="${label}"></meter></div>`).join('')}<p class="scope-note">累计注册 ${num(totals.registrations)} · 当前净付费 ${num(totals.payingUsers)}<br>留存只统计注册起有完整记录且已满观察期的身份。</p></section></div>`;
+  return `${subscriptionGap}${summary(p)}<div class="insight-main-grid">${trendPanel(p)}<section class="insight-surface attention"><header><h2>需要关注</h2><span>全部记录</span></header><button data-action="review"><span class="attention-number">${review.length}</span><div><b>归因待核对</b><p>查看扣款或退款上报异常 →</p></div></button><button data-action="refund"><span class="attention-number">${refunds.length}</span><div><b>退款订单</b><p>包含全额与部分退款 →</p></div></button><div class="attention-note">${data.subscriptionCatalog ? `${esc($('productSubscriptionCatalog').textContent)}`:'统计基于已接入的身份与已验证订单。暂无额外服务告警数据。'}</div></section></div><div class="insight-bottom-grid"><section class="insight-surface"><header><h2>区间扣款</h2><span>分币种 · 未扣退款</span></header>${cs.length?cs.map(c=>`<button class="currency-row" data-action="currency" data-currency="${esc(c)}"><span>${esc(c)}</span><strong>${money(aggregate(p.current,'gross',c),c)}</strong><small>${delta(aggregate(p.current,'gross',c),aggregate(p.previous,'gross',c),p.comparable)} →</small></button>`).join(''):'<div class="insight-empty">暂无已验证扣款</div>'}</section><section class="insight-surface retention"><header><h2>留存与累计规模</h2><span>累计口径 · 不随日期筛选</span></header>${[['次日留存',totals.day1Retention],['7 日留存',totals.day7Retention]].map(([label,r])=>`<div class="retention-row"><span>${metricLabel(label,label==='次日留存'?'day1':'day7')}</span><strong>${r.rate===null?'样本不足':`${r.rate}%`}</strong><span>${r.returned} / ${r.eligible} 个合格样本</span><meter min="0" max="100" value="${r.rate || 0}" aria-label="${label}"></meter></div>`).join('')}<p class="scope-note">累计注册 ${num(totals.registrations)} · 当前净付费 ${num(totals.payingUsers)}<br>留存只统计注册起有完整记录且已满观察期的身份。</p></section></div>`;
 }
 function trends(p) {
   return `${summary(p)}${trendPanel(p)}<section class="insight-surface"><header><h2>每日明细</h2><span>金额按原币种显示</span></header>${table([metricLabel('日期 UTC','date'),metricLabel('注册','registrations'),metricLabel('活跃','dailyActive'),metricLabel('付费用户','dailyPaying'),metricLabel('实付订单','paidOrders'),metricLabel('退款','refunds'),metricLabel('扣款金额','gross')],p.current.slice().reverse().map(r=>`<tr><td>${r.date}</td><td>${r.registrations}</td><td>${r.activeUsers}</td><td>${r.payingUsers}</td><td>${r.paidOrders}</td><td>${r.refunds}</td><td>${Object.entries(r.grossMilliunitsByCurrency).map(([c,v])=>money(v,c)).join(' · ')||'—'}</td></tr>`))}</section>`;
@@ -91,6 +96,7 @@ function pricesView() {
   return `<section class="insight-surface"><header><h2>商品价格分布</h2><span>全部已观察订单</span></header><p class="scope-note">这里展示历史已验证订单的价格，不代表当前 App Store 售价；不同币种分别统计。</p>${table(['商品','币种','最低价','最高价','订单数'],data.observedPrices.map(p=>`<tr><td>${esc(p.sku)}</td><td>${esc(p.currency)}</td><td>${money(p.minimumMilliunits,p.currency)}</td><td>${money(p.maximumMilliunits,p.currency)}</td><td>${btn(`${p.count} 笔 →`,'sku',`class="text-button" data-sku="${esc(p.sku)}" data-currency="${esc(p.currency)}"`)}</td></tr>`))}</section>${data.subscriptionCatalog?`<section class="insight-surface"><header><h2>当前售价核对</h2></header><p class="scope-note">${esc($('productSubscriptionCatalog').textContent)}</p></section>`:''}`;
 }
 function render() {
+  document.querySelectorAll('.product-nav a').forEach(link=>{if(link.getAttribute('href')==='#'+viewPanels[view])link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');});
   host.hidden=document.documentElement.dataset.adminStyle!=='pearl';
   if(!snapshot || snapshot.product!==picker.value || loading) {host.innerHTML='<div class="insight-empty" role="status">正在读取当前产品数据…</div>';return;}
   if(snapshot.status==='error') {host.innerHTML=`<div class="insight-empty" role="alert">读取失败：${esc(snapshot.message)}。可点击页面右上角“刷新”重试。</div>`;return;}
@@ -104,7 +110,7 @@ function receive(next) {
   if(next.product!==picker.value) return;
   if(lastProduct===next.product&&data&&marketingEditing(next.product))return;
   snapshot=next; loading=next.status==='loading';
-  if(lastProduct!==next.product) {data=null;lastProduct=next.product;view='overview';exactAccount='';exactSku='';query='';status='all';page=1;listStart='';listEnd='';orderCurrency='';selectedDay='';start='';end='';}
+  if(lastProduct!==next.product) {data=null;view=lastProduct?'overview':initialView;lastProduct=next.product;exactAccount='';exactSku='';query='';status='all';page=1;listStart='';listEnd='';orderCurrency='';selectedDay='';start='';end='';}
   if(next.status==='ready') {
     data=next.data;
     const latest=data.daily.at(-1)?.date;
@@ -141,6 +147,7 @@ function selectDay(date) {
 function action(event) {
   const b=event.target.closest('[data-action]');if(!b || !data)return;
   const a=b.dataset.action;
+  if(a==='subscription-status'){setView('orders');return;}
   if(a==='range') {end=data.daily.at(-1).date;start=shiftDay(end,1-Number(b.dataset.days));selectedDay='';}
   if(a==='day'){selectDay(b.dataset.date);return;}
   if(a==='metric') {
@@ -180,6 +187,7 @@ host.addEventListener('change',event=>{if(event.target.id==='trendMetric'){metri
 window.addEventListener('admin-product-data',event=>receive(event.detail));
 window.addEventListener('admin-insight-view',event=>{if(data)setView(event.detail);});
 window.addEventListener('admin-style-change',render);
+window.addEventListener('hashchange',()=>setView(viewFromHash()));
 window.addEventListener('admin-marketing-change',()=>{if(data&&snapshot?.status==='ready'&&snapshot.product===picker.value){$('productMarketing').innerHTML=marketingHTML(data.marketing);render();}});
 picker.addEventListener('change',()=>{if(dialog.open)dialog.close();});
 if(window.adminProductSnapshot)receive(window.adminProductSnapshot); else render();

@@ -70,3 +70,24 @@ test('real inactive-account empty CSV verifies connection without erasing existi
   await assert.rejects(sync.run(),/已有成本保留/);
   assert.equal(store.marketing.cleaner.costs.old.spendMilliunits,123);
 });
+
+test('empty trailing page cannot overwrite a previously complete cost window',async()=>{
+  const store={marketing:{cleaner:{costs:{old:{channel:'applovin',date:'2026-10-19',source:'applovin-api',spendMilliunits:999}},imports:[]}}};
+  let calls=0;
+  const sync=createApplovinSync({config,getStore:async()=>store,saveStore:async()=>{},clock:()=>now,
+    fetchImpl:async()=>++calls===1?response(Array.from({length:500},(_,i)=>({...record(),creative_set_id:'set-'+i}))):{ok:true,text:async()=>''}});
+  await assert.rejects(sync.run(),/分页响应不完整/);
+  assert.equal(calls,2);
+  assert.deepEqual(Object.keys(store.marketing.cleaner.costs),['old']);
+  assert.equal(store.marketing.cleaner.costs.old.spendMilliunits,999);
+  assert.equal(store.marketing.cleaner.applovin.lastSuccess,undefined);
+});
+test('a failed manual refresh after same-day success is retried after the hourly backoff',async()=>{
+  let time=now,calls=0,fail=false;const store={};
+  const sync=createApplovinSync({config,getStore:async()=>store,saveStore:async()=>{},clock:()=>time,
+    fetchImpl:async()=>{calls++;if(fail)throw new Error('network');return response([]);}});
+  await sync.tick();fail=true;time+=60000;
+  await assert.rejects(sync.run(),/请求失败/);await sync.tick();assert.equal(calls,2);
+  time+=3600000;fail=false;await sync.tick();assert.equal(calls,3);
+  assert.equal((await sync.status()).error,null);
+});
