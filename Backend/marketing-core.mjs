@@ -111,3 +111,13 @@ export function buildMarketingReport(data,{start='',end='',channel='',campaignId
       pending:trialPeople.filter(u=>trials(u).some(t=>t.expiresAt)&&!endedTrials.includes(u)).length},
     imports:data.imports,now};
 }
+
+// Connection state must distinguish a scheduled job from fresh, successful data.
+export function marketingSyncHealth(connection, now=Date.now()) {
+  if(!connection?.configured)return {label:'等待服务器配置',warning:true};
+  if(connection.error)return {label:'最近同步失败 · 原数据保留',warning:true};
+  if(!connection.enabled)return {label:'自动同步关闭',warning:true};
+  if(!connection.lastSuccess)return {label:'已启用 · 等待首次同步',warning:true};
+  if(now-connection.lastSuccess>36*60*60*1000)return {label:'同步数据已过期 · 请核对',warning:true};
+  return {label:'自动同步正常',warning:false};
+}

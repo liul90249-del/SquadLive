@@ -85,3 +85,14 @@ test('authenticated session first events are allowlisted, monotonic and cannot m
   await assert.rejects(service.session('cleaner',{credential:first.token,funnelTrackingV1:true,funnelEvents:{revenue:100000}}),/funnel/);
   await assert.rejects(service.session('cleaner',{credential:first.token,funnelTrackingV1:true,funnelEvents:{paywall_open:now+DAY}}),/funnel/);
 });
+
+test('connection health prioritizes failures and stale data over the enabled flag',async()=>{
+  const {marketingSyncHealth}=await import('../marketing-core.mjs');
+  const connected={configured:true,enabled:true,lastSuccess:now};
+  assert.equal(marketingSyncHealth(connected,now).warning,false);
+  assert.match(marketingSyncHealth({...connected,error:'network failed'},now).label,/失败/);
+  assert.match(marketingSyncHealth(connected,now+37*3600000).label,/过期/);
+  assert.match(marketingSyncHealth({...connected,enabled:false},now).label,/关闭/);
+  assert.match(marketingSyncHealth({...connected,lastSuccess:null},now).label,/首次同步/);
+  assert.match(marketingSyncHealth(null,now).label,/配置/);
+});

@@ -48,7 +48,10 @@ export async function fetchApplovinCosts(config,{start,end,fetchImpl=fetch}={}) 
     const lines=text.replace(/^\uFEFF/,'').trim();
     // A new, inactive account can return HTTP 200 with a zero-byte CSV.
     // Permit connection verification, but never erase existing costs from it.
-    if(!lines){emptyResponse=true;break;}
+    if(!lines){
+      if(offset>0)throw failure('AppLovin 分页响应不完整，已有成本保留；请稍后重试');
+      emptyResponse=true;break;
+    }
     // csvRows requires a data row; allow a valid header-only zero-spend report.
     const parsed=csvRows(lines+'\n'+APPLOVIN_COLUMNS.map(()=>'__sentinel__').join(','));
     parsed.pop();const header=parsed.shift();
@@ -110,7 +113,7 @@ export function createApplovinSync({getStore,saveStore,config=applovinConfig(),f
   return {status,run,async tick(){
     if(!config.enabled)return;
     const s=await status(),now=clock();
-    if(!s.configured||s.lastSuccess&&dateOf(s.lastSuccess)===dateOf(now)||s.lastAttempt&&now-s.lastAttempt<3600000)return;
+    if(!s.configured||s.lastSuccess&&!s.error&&dateOf(s.lastSuccess)===dateOf(now)||s.lastAttempt&&now-s.lastAttempt<3600000)return;
     try{await run();}catch{/* Error is persisted and shown in authenticated admin. */}
   }};
 }
