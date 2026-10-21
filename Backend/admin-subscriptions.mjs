@@ -42,6 +42,23 @@ export function subscriptionPanelHTML(report,limit=visibleDays) {
 const classic=document.createElement('div'); classic.id='classicSubscriptions';
 document.getElementById('productOrders').closest('.panel').before(classic);
 const dialog=document.createElement('dialog');dialog.className='insight-dialog';document.body.append(dialog);
+// Shared light-dismiss for the dashboard's read-only explanation/detail dialogs.
+// Both press and release must be outside: dragging selected text out must not close.
+let backdropPress = null;
+function outsideDialog(event, modal) {
+  const r=modal.getBoundingClientRect();
+  return event.clientX<r.left || event.clientX>r.right || event.clientY<r.top || event.clientY>r.bottom;
+}
+document.addEventListener('pointerdown',event=>{
+  const modal=event.target.closest?.('dialog.insight-dialog[open]');
+  backdropPress=event.button===0 && modal && event.target===modal && outsideDialog(event,modal)?modal:null;
+});
+document.addEventListener('pointercancel',()=>{backdropPress=null;});
+document.addEventListener('click',event=>{
+  const modal=backdropPress;backdropPress=null;
+  if(modal?.open && event.target===modal && outsideDialog(event,modal))modal.close();
+});
+
 function current(){const snapshot=window.adminProductSnapshot;return snapshot?.product==='cleaner'&&snapshot.status==='ready'?snapshot.data.subscriptions:null;}
 function updateClassic(){classic.innerHTML=subscriptionPanelHTML(current());if(window.adminProductSnapshot?.product!=='cleaner'&&dialog.open)dialog.close();}
 window.addEventListener('admin-product-data',updateClassic);updateClassic();
