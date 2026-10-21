@@ -1088,6 +1088,8 @@ async function adminOverview(store) {
       return totals;
     }, {});
   return {
+    reportDate: todayKey(),
+    generatedAt: new Date().toISOString(),
     totalUsers: users.length,
     activeUsers5m: users.filter((user) => isActiveRecently(user.lastSeenAt)).length,
     activeUsersToday: Number(todayUsage.activeUsers || 0),
