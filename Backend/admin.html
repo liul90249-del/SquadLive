@@ -149,6 +149,9 @@
       gap: 8px;
     }
     .token-box input { width: 260px; }
+    #todayOverviewStatus { padding: 0 20px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+    #todayOverviewCards { padding: 0 20px 20px; }
+    #todayOverviewCards .label { padding-right: 14px; }
     .cards {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -464,6 +467,12 @@
       </div>
 
       <section class="section active" id="section-overview">
+        <div class="panel" id="todayOverviewPanel">
+          <div class="panel-head"><h2>今日 · 实时数据</h2><span class="pill active">每 30 秒自动刷新</span></div>
+          <p id="todayOverviewStatus" role="status">正在读取当天数据…</p>
+          <div class="cards" id="todayOverviewCards"></div>
+        </div>
+        <div class="panel-head"><h2>累计数据与系统状态</h2></div>
         <div class="alerts" id="systemAlerts"></div>
         <div class="cards" id="overviewCards"></div>
         <div class="cards" id="systemCards"></div>
@@ -814,7 +823,7 @@
 
     function renderOverview(overview) {
       const items = [
-        ["用户数", overview.totalUsers, overview.newUsersToday, "累计为后端用户总数；今日为服务器时区当天新创建的用户数。相同设备 ID 不重复计数。", "累计", "今日新增"],
+        ["用户数", overview.totalUsers, overview.newUsersToday, "累计为后端用户总数；今日为 UTC 当天新创建的用户数。相同设备 ID 不重复计数。", "累计", "今日新增"],
         ["活跃用户", overview.activeUsers5m, overview.activeUsersToday, "当前为最近 5 分钟有活动记录的用户数；今日为当天至少活跃过一次的去重用户数。", "当前 5 分钟", "今日去重"],
         ["PRO 用户", `${overview.premiumUsers} · ${overview.premiumConversionPercent}%`, overview.premiumUsersToday, "累计显示当前 PRO 用户数及 PRO 用户数 ÷ 总用户数 × 100%；今日显示当天开始订阅的去重用户数。", "当前 / 转化率", "今日新增"],
         ["充值订单", overview.rechargeCount, overview.rechargeCountToday, "类型为 coin_purchase 的金币购买流水数量；人工加币和分享奖励不计入。", "累计", "今日"],
@@ -826,6 +835,15 @@
         ["分享提交", overview.rewardSubmissionCount, overview.rewardSubmissionsToday, "用户提交的分享奖励申请数量，包含待审核、已通过和已拒绝状态。", "累计", "今日"],
         ["待审核分享", overview.pendingRewardSubmissions, overview.pendingRewardSubmissionsToday, "累计为当前仍处于 pending 状态的申请；今日为今天提交且仍待审核的申请。", "当前待审核", "今日新增"]
       ];
+      const reportDate = overview.reportDate || new Date().toISOString().slice(0,10);
+      const refreshed = new Date(overview.generatedAt || Date.now()).toLocaleTimeString("zh-CN", {timeZone:"Asia/Shanghai",hour12:false});
+      document.getElementById("todayOverviewStatus").textContent = `${reportDate}（UTC） · 北京时间 08:00 换日 · 更新于 ${refreshed}（北京时间） · 当天累计，上报可能延迟`;
+      const todayLabels = ["新增用户","活跃用户","新增 PRO 用户","充值订单","充值金额（商品定价估算 USD）","开播用户","直播互动率","开播失败","AI 对话","分享提交","待审核分享"];
+      document.getElementById("todayOverviewCards").innerHTML = items.map((item,i) => {
+        const [label,,value,tooltip] = item;
+        const display = i===6 && !overview.liveUsersToday ? "—" : value;
+        return `<div class="card"><span class="metric-help" tabindex="0" aria-label="${escapeHTML(todayLabels[i])} 指标说明" data-tooltip="${escapeHTML(tooltip)}">?</span><div class="label">${escapeHTML(todayLabels[i])}</div><div class="value">${display}</div><div class="label">${i===6&&!overview.liveUsersToday?"今日暂无开播用户":i===1||i===2||i===5?"今日去重人数":i===10?"今日提交且仍待审核":"今日累计"}</div></div>`;
+      }).join("");
       document.getElementById("overviewCards").innerHTML = items
         .map(([label, totalValue, todayValue, tooltip, totalLabel, todayLabel]) => metricCard(label, totalValue, todayValue, tooltip, totalLabel, todayLabel))
         .join("");
@@ -1110,9 +1128,12 @@
       if (state.product !== "squadlive") return loadProduct();
       try {
         const overview = await api("/v1/admin/overview");
+        if (state.product !== "squadlive") return;
         renderOverview(overview.overview);
         await Promise.all([loadUsers(), loadRecharges(), loadVip(), loadRewards(), loadSettings()]);
       } catch (error) {
+        if (state.product !== "squadlive") return;
+        document.getElementById("todayOverviewStatus").textContent = "刷新失败，当前可能为上次数据；请点击右上角刷新重试。";
         document.getElementById("overviewCards").innerHTML = `<div class="card"><div class="value">${escapeHTML(error.message)}</div><div class="label">请检查 ADMIN_TOKEN</div></div>`;
       }
     }
