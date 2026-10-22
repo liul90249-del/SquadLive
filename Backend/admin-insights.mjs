@@ -103,7 +103,7 @@ function render() {
   if(snapshot.status==='error') {host.innerHTML=`<div class="insight-empty" role="alert">读取失败：${esc(snapshot.message)}。可点击页面右上角“刷新”重试。</div>`;return;}
   if(!data) return;
   const p=period(data.daily,start,end);
-  host.innerHTML=`<div class="workspace-heading"><div><p>${esc(picker.selectedOptions[0].textContent)} / ${titles[view]}</p><h2>${titles[view]}</h2></div><span class="scope-chip">${data.connected?'已接入':'接入未完成'}</span></div><p class="insight-source">${esc($('productNotice').textContent)} · ${view==='marketing'?'按首次获客批次追踪收入':view==='orders'&&data.subscriptions?'订阅日期覆盖全部已接入历史':`趋势仅提供最近 ${data.daily.length} 天`}${document.body.dataset.demo?' · 当前为演示数据':''}</p>${['overview','trends'].includes(view)?periodControl():''}${view==='overview'?overview(p):view==='trends'?trends(p):view==='users'?usersView():view==='orders'?ordersView():view==='marketing'?marketingHTML(data.marketing):pricesView()}`;
+  host.innerHTML=`<div class="workspace-heading"><div><p>${esc(picker.selectedOptions[0].textContent)} / ${titles[view]}</p><h2>${titles[view]}</h2></div><span class="scope-chip">${data.connected?'已接入':'接入未完成'}</span></div><p class="insight-source">${esc($('productNotice').textContent)} · ${view==='marketing'?'按首次获客批次追踪收入':view==='orders'&&data.subscriptions?'订阅日期覆盖全部已接入历史':`趋势仅提供最近 ${data.daily.length} 天`}${document.body.dataset.demo?' · 当前为演示数据':''}</p>${['overview','trends'].includes(view)?periodControl():''}${view==='overview'?overview(p):view==='trends'?trends(p):view==='users'?usersView():view==='orders'?ordersView():view==='marketing'?marketingHTML({...data.marketing,subscriptions:data.subscriptions}):pricesView()}`;
   revealWorkspace();
   if(selectedDay)selectDay(selectedDay);
 }
@@ -119,7 +119,7 @@ function receive(next) {
     if(!start || end>latest || start<data.daily[0]?.date) {end=latest;start=shiftDay(end,-6);}
     if(!currencies().includes(currency)) currency=currencies()[0]||'';
   }
-  $('productMarketing').innerHTML=next.status==='ready'?marketingHTML(data.marketing):'<p>当前产品投放数据尚未就绪</p>';
+  $('productMarketing').innerHTML=next.status==='ready'?marketingHTML({...data.marketing,subscriptions:data.subscriptions}):'<p>当前产品投放数据尚未就绪</p>';
   render();
 }
 function showDetail(kind,id) {
@@ -191,6 +191,6 @@ window.addEventListener('admin-product-data',event=>receive(event.detail));
 window.addEventListener('admin-insight-view',event=>{if(data)setView(event.detail);});
 window.addEventListener('admin-style-change',render);
 window.addEventListener('hashchange',()=>setView(viewFromHash()));
-window.addEventListener('admin-marketing-change',()=>{if(data&&snapshot?.status==='ready'&&snapshot.product===picker.value){$('productMarketing').innerHTML=marketingHTML(data.marketing);render();}});
+window.addEventListener('admin-marketing-change',()=>{if(data&&snapshot?.status==='ready'&&snapshot.product===picker.value){$('productMarketing').innerHTML=marketingHTML({...data.marketing,subscriptions:data.subscriptions});render();}});
 picker.addEventListener('change',()=>{if(dialog.open)dialog.close();});
 if(window.adminProductSnapshot)receive(window.adminProductSnapshot); else render();
