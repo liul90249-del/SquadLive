@@ -156,7 +156,7 @@ export function subscriptionAnalytics(operations,state=blank(),accountTokens={},
       trialToPaidRate:rate(cohort.filter(p=>p.paidAt!==null).length,cohort.length)});
   }
   return {timezone:'UTC',refreshTime:'08:00 Asia/Shanghai',nextCheckAt:nextSubscriptionCheck(now),sync:state.sync,
-    trackingStartedAt:state.trackingStartedAt,unlinked:records.filter(p=>!p.linked).length,rows,
+    trackingStartedAt:state.trackingStartedAt,cancellationEvents:events,unlinked:records.filter(p=>!p.linked).length,rows,
     people:[...records,...users.filter(u=>!people.has(u.id)).map(u=>({id:u.id,linked:true,subscribedAt:null,paidAt:null,autoRenewStatus:null}))],
     definitions:{openedUsers:'当日调用会话接口的去重安装身份，作为已记录打开人数（日活）；不是打开次数，也不是新注册人数。现有日活接口仅提供最近 30 天，较早日期显示“—”。',
       cleanupUsers:'该日新注册用户中，截至目前有过成功清理的去重人数；后来清理会回补到注册日。旧版本未采集时标为未知。',
