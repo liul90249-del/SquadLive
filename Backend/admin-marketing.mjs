@@ -1,9 +1,9 @@
-import {buildMarketingReport,dateOf,DAY,marketingSyncHealth} from './marketing-core.mjs';
+import {buildMarketingReport,buildGrowthReport,dateOf,DAY,marketingSyncHealth} from './marketing-core.mjs';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>v===null||v===undefined?'—':(v/1000).toLocaleString('zh-CN',{maximumFractionDigits:2,minimumFractionDigits:2});
 const pct=v=>v===null||v===undefined?'—':v.toFixed(1)+'%';
 const ratio=(n,d)=>d>0?n/d*100:null;
-const names={unknown:'归因未知',organic:'自然量',applovin:'AppLovin'};
+const names={all:'全部来源',unknown:'归因未知',organic:'自然量',applovin:'AppLovin'};
 const title=r=>[names[r.channel]||r.channel,r.campaignName||r.campaignId,r.adGroupName||r.adGroupId,r.creativeName||r.creativeId].filter(Boolean).join(' / ');
 const help={
   spend:'已导入的广告花费；按 UTC 日期、所选币种与来源筛选。缺少成本记录显示 —，不视为免费获客。重复导入同一日期、广告层级和币种会更新原记录，不累加。',
@@ -20,6 +20,59 @@ const help={
   window:'按获客日期回看后续收入，而不是把当天所有收入除以当天广告费。窗口内扣款减去截至当前已知退款。未关联用户的订单不分摊给广告。'
 };
 const h=(label,key)=>`<span class="market-label">${label}<button type="button" data-market="help" data-help="${key}" aria-label="${label}：投放指标说明" title="${esc(help[key])}">?</button></span>`;
+const growthColumns=[
+  ['spend','广告花费','money','获客','所选日期与来源的已导入成本；未导入不是 0。'],
+  ['impressions','展示','number','获客','广告平台报告的展示次数。'],
+  ['clicks','点击','number','获客','广告平台报告的点击次数。'],
+  ['ctr','点击率','percent','获客','点击次数 ÷ 展示次数。'],
+  ['installs','报表安装','number','获客','广告平台归因安装数，与后台首次打开人数不同。'],
+  ['cpi','安装成本','money','获客','广告花费 ÷ 广告报表安装数。对应参考表中的单价；不使用后台人数替代分母。'],
+  ['users','新增用户','number','获客','按首次获客日和安装 ID 去重；同一 ID 多次打开不重复计算。无归因时间使用注册日。'],
+  ['cleanupD0','D0 成功清理人数','number','行为与订阅','获客当天至少成功清理一次的人数。旧版本行为未完整采集显示 —。'],
+  ['subD0','D0 首次订阅人数','number','行为与订阅','本批新增用户在获客当天首次订阅的人数，包括免费试用与直接付费。商品激活在参考资料中没有定义，这里使用明确的首次订阅口径。'],
+  ['subRateD0','D0 订阅率','percent','行为与订阅','D0 首次订阅人数 ÷ 本批新增用户，不是实际扣款率。'],
+  ['costPerSubD0','D0 订阅成本','money','行为与订阅','该获客批次广告花费 ÷ D0 首次订阅人数。包含免费试用，来源不完整时不能当作全量广告效果。'],
+  ['freeD0','D0 免费试用人数','number','行为与订阅','D0 首次订阅中，苹果明确标记 FREE_TRIAL 的去重人数。低价首期不算免费试用。'],
+  ['paidD0','D0 首次扣款人数','number','扣款与退款','获客当天首次发生大于 0 的已验证扣款人数；包含低价首期，排除免费试用。'],
+  ['paidRateD0','D0 付费转化率','percent','扣款与退款','D0 首次扣款人数 ÷ 本批新增用户。'],
+  ['endedTrials','已到期试用人数','number','扣款与退款','本批用户中，苹果明确免费试用且已到实际结束时间的人数。未知结束时间、仍在试用者不计入。'],
+  ['convertedTrials','试用后扣款人数','number','扣款与退款','已到期试用用户中，同一订阅链在试用结束后发生已验证扣款的人数。'],
+  ['trialPaidRate','到期试用转付费率','percent','扣款与退款','试用后扣款人数 ÷ 已到期试用人数。不是所有订阅人数的付费比例；不用固定七天推断到期。'],
+  ...[0,3,7].flatMap(d=>[
+    ['cancelD'+d,`D${d} 关闭续订人数`,'number','退订',`D0 首次订阅用户中，从订阅起到获客日 D${d} 结束曾关闭自动续订的人数；恢复后仍保留历史关闭记录。窗口未结束或历史通知不完整时显示 —。不是退款或会员到期人数。`],
+    ['cancelRateD'+d,`D${d} 关闭续订率`,'percent','退订',`D${d} 关闭续订人数 ÷ D0 首次订阅人数；仅统计已记录的苹果通知，无法用当前续订状态还原历史取消日期。`]]),
+  ['grossD0','D0 订阅扣款','money','扣款与退款','本批用户获客当天的已验证实际扣款，含当日续费；按所选币种统计，不含免费试用。'],
+  ['refundD0','D0 订单后续退款','money','扣款与退款','D0 扣款订单截至当前已知退款，退款发生后回补获客日。不是退款发生当天的现金流。'],
+  ['netD0','D0 净扣款','money','扣款与退款','D0 实际扣款减去这些订单截至当前已知退款。未扣苹果佣金与税费。'],
+  ['net','累计净扣款','money','回本','该获客批次截至当前的扣款减已知退款，含后续续费，仅所选币种；不代表苹果结算到账金额。'],
+  ['ltv','当前 LTV（净扣款）','money','回本','该批次累计净扣款 ÷ 本批新增用户。实际观察值，不是终身收入预测。'],
+  ['roas','当前 ROAS','percent','回本','该批次累计净扣款 ÷ 广告花费。只覆盖已关联用户；未知归因不能分摊给广告来源。'],
+  ['contribution','投放收支差','money','回本','累计净扣款 − 广告花费。未扣苹果佣金、税费和其他成本，不能称为净利润。'],
+  ['roi','投放 ROI（扣费前）','percent','回本','（累计净扣款 − 广告花费）÷ 广告花费。与 ROAS 不同，未扣苹果佣金、税费和其他成本。'],
+  ...[0,3,7,8,14,30].map(d=>['roasD'+d,`D${d} ROAS`,'percent','回本',`获客日到 D${d} 结束累计净扣款 ÷ 同批广告花费。D0 为获客当日，D7 含 D0–D7 共 8 个自然日；与上方“7 日窗口”不同。窗口未结束显示 —，退款会回补。`]),
+  ['adRevenue','广告变现收入','money','待接入','这是产品内展示广告带来的收入，不是 AppLovin 买量花费。目前没有接入广告变现收入，显示 —。'],
+  ['totalRevenue','总收入','money','待接入','需明确并接入订阅净收入、广告变现收入及统一币种后计算，目前不以订阅扣款替代。'],
+  ['totalProfit','总利润','money','待接入','需扣除苹果佣金、税费、投放和其他成本。当前数据不足，显示 —。'],
+  ['forecastLtv','一年预估 LTV','money','待接入','需按续费周期、流失、退款、国家和价格分组建立并验证预测模型。当前未建立，显示 —，不把当前 LTV 乘 365。'],
+  ['forecastRoas','一年预估 ROAS','percent','待接入','需经过验证的一年收益预测和同批次成本。目前未建立模型，显示 —；不照搬竞品预测数字。']
+];
+for(const [key,,,group,description] of growthColumns)help['growth-'+key]=`${group}：${description}`;
+const growthPresets={overview:['spend','users','cpi','subD0','subRateD0','paidD0','trialPaidRate','cancelRateD7','net','roas','ltv'],
+  acquisition:growthColumns.filter(c=>c[3]==='获客').map(c=>c[0]),subscription:growthColumns.filter(c=>c[3]==='行为与订阅').map(c=>c[0]),
+  payment:growthColumns.filter(c=>c[3]==='扣款与退款').map(c=>c[0]),cancellation:growthColumns.filter(c=>c[3]==='退订').map(c=>c[0]),
+  returns:growthColumns.filter(c=>c[3]==='回本').map(c=>c[0]),pending:growthColumns.filter(c=>c[3]==='待接入').map(c=>c[0]),all:growthColumns.map(c=>c[0])};
+function growthSelection(s){const keys=growthPresets[s.growthGroup]||growthPresets.overview;return growthColumns.filter(c=>keys.includes(c[0]));}
+function growthHTML(data,s){
+  const g=buildGrowthReport(data,s),columns=growthSelection(s);
+  const cell=(row,[key,,type])=>{const v=row[key];return v==null?'—':type==='money'?money(v):type==='percent'?pct(v):String(v);};
+  const rowHTML=row=>`<tr><td><b>${esc(row.date)}</b>${row.channel!=='all'?`<small>${esc(title(row))}</small>`:''}${row.observed?'<small>当日未结束</small>':''}</td>${columns.map(col=>`<td>${cell(row,col)}</td>`).join('')}</tr>`;
+  return `<section class="insight-surface growth-report"><header><h2>增长日报</h2><button data-market="export-growth">导出当前分组 CSV</button></header>
+  <div class="growth-controls"><label>排列维度<select data-growth="dimension">${options([['date','日期汇总'],['source','日期与当前来源层级']],s.growthDimension||'date')}</select></label><label>指标分组<select data-growth="group">${options([['overview','常用概览'],['acquisition','获客'],['subscription','行为与订阅'],['payment','扣款与退款'],['cancellation','退订'],['returns','回本'],['pending','待接入与预测'],['all','全部指标']],s.growthGroup||'overview')}</select></label><span>${esc(g.currency)} · UTC · 最新日期在前</span></div>
+  <p class="scope-note">按上方获客日期和来源筛选，同批用户后续扣款与退款持续回补。D0 是获客当日，D3 / D7 分别截至第 3 / 7 天结束。— 表示无分母、未接入、历史不完整或观察期未结束，点击列名旁问号查看口径。当前日期不是最终结算数据。</p>
+  ${table([h('获客日期','users'),...columns.map(c=>h(c[1],'growth-'+c[0]))],[rowHTML(g.total),...g.rows.slice(0,s.limit).map(rowHTML)])}
+  <footer class="insight-pagination"><span>显示 ${Math.min(s.limit,g.rows.length)} / ${g.rows.length} 行 · 合计覆盖全部筛选结果，比例按总分子与总分母计算</span>${s.limit<g.rows.length?'<button data-market="more">加载更早 30 行</button>':''}</footer>
+  <details class="growth-dictionary"><summary>指标分类与参考表对应关系</summary><p>参考表“商品激活”未给出业务定义，已拆为首次订阅、免费试用、首次实际扣款；“ROI”按明确公式区分为 ROAS 与 ROI。参考数据仅用于整理字段，不导入真实业务统计。</p>${['获客','行为与订阅','扣款与退款','退订','回本','待接入'].map(group=>`<h3>${group}</h3><dl>${growthColumns.filter(c=>c[3]===group).map(c=>`<dt>${esc(c[1])}</dt><dd>${esc(c[4])}</dd>`).join('')}</dl>`).join('')}</details></section>`;
+}
 const options=(values,selected)=>values.map(([v,n])=>`<option value="${esc(v)}" ${v===selected?'selected':''}>${esc(n)}</option>`).join('');
 const table=(heads,rows)=>`<div class="market-table" tabindex="0" role="region" aria-label="广告投放数据表"><table><thead><tr>${heads.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.length?rows.join(''):`<tr><td colspan="${heads.length}">当前筛选下没有记录。调整筛选或导入真实数据后查看。</td></tr>`}</tbody></table></div>`;
 const datasets=new Map(),states=new Map();
@@ -58,6 +111,7 @@ export function marketingHTML(data) {
   <p class="scope-note">行为未采集 ${r.quality.funnelUnknown} 人 · 更新后才开始采集 ${r.quality.funnelPartial} 人。旁路行为不强制先后，首次发生记录不代表当天发生次数。</p></section>
   <section class="insight-surface"><header><h2>渠道与素材表现</h2><button data-market="export">导出当前获客表 CSV</button></header><p class="scope-note">点击来源继续下钻。只导入系列成本时，素材层不会分摊或编造花费。${h('归因范围','coverage')}</p>
   ${table(['来源',h('花费','spend'),'展示','点击',h('点击率','ctr'),'报表安装',h('安装成本','cpi'),h('新增用户（按安装 ID 去重）','users'),'试用',h('实际付费','paid'),h('首次付费成本','cpp'),h('已关联净扣款','net')],r.groups.map((g,i)=>`<tr><td><button class="market-link" data-market="drill" data-row="${i}">${esc(title(g))}</button></td><td>${g.costRows?money(g.spend):'未导入'}${g.missingCostCohorts?'<small>部分日期缺成本</small>':''}</td><td>${g.costRows?g.impressions:'—'}</td><td>${g.costRows?g.clicks:'—'}</td><td>${pct(g.costRows?ratio(g.clicks,g.impressions):null)}</td><td>${g.costRows?g.installs:'—'}</td><td>${money(g.costRows&&g.installs?g.spend/g.installs:null)}</td><td>${g.users}</td><td>${g.trial}</td><td>${g.paid}</td><td>${money(g.costRows&&!g.missingCostCohorts&&g.paid?g.spend/g.paid:null)}</td><td>${money(g.net)}</td></tr>`))}</section>
+  ${growthHTML(data,s)}
   <section class="insight-surface"><header><h2>获客批次与回本</h2>${h('D7 / D14 / D30','roas')}</header><p class="scope-note">按获客日期从近到远排列。窗口内净扣款随后续退款回补；观察期未结束时不下回本结论。</p>
   ${table(['获客日 / 来源',h('新增用户（按安装 ID 去重）','users'),'花费',...['D7','D14','D30'].map(x=>h(x+' 净扣款 / ROAS','window'))],r.cohorts.slice(0,s.limit).map(c=>`<tr><td><b>${c.date}</b><small>${esc(title(c))}</small></td><td>${c.acquiredUsers}</td><td>${c.cost?money(c.cost.spendMilliunits):'未导入'}</td>${[7,14,30].map(n=>`<td>${money(c.windows[n].net)}<small>${!c.windows[n].mature?'观察中':c.windows[n].roas===null?'成本或关联用户不足':pct(c.windows[n].roas)}</small></td>`).join('')}</tr>`))}
   <footer class="insight-pagination"><span>已展示 ${Math.min(s.limit,r.cohorts.length)} / ${r.cohorts.length} 批</span>${s.limit<r.cohorts.length?'<button data-market="more">加载更早 30 批</button>':''}</footer></section>
@@ -110,6 +164,12 @@ document.addEventListener('click',async event=>{
     else {s.campaignId=row.campaignId||'';s.adGroupId=row.adGroupId||'';s.creativeId=row.creativeId||'';}
     s.limit=30;
   }
+  if(action==='export-growth'){
+    const g=buildGrowthReport(data,s),cols=growthSelection(s);
+    const quote=v=>'"'+String(v??'').replace(/^[=+\-@\t\r]/,"'"+'$&').replaceAll('"','""')+'"';
+    const rows=[['UTC获客日','来源','币种',...cols.map(c=>c[1]),'当日状态'],...[g.total,...g.rows].map(row=>[row.date,title(row),g.currency,...cols.map(([key,,type])=>row[key]==null?'':type==='money'?row[key]/1000:row[key]),row.observed?'当日未结束':'已结束'])];
+    download(`${product}-growth-${s.growthGroup||'overview'}.csv`,rows.map(r=>r.map(quote).join(',')).join('\r\n'));return;
+  }
   if(action==='export'){
     const csv=v=>{let t=String(v??'');if(/^[=+\-@\t\r]/.test(t))t="'"+t;return '"'+t.replaceAll('"','""')+'"';};
     const rows=buildMarketingReport(data,s).cohorts.map(c=>[c.date,title(c),s.currency,c.acquiredUsers,c.cost?c.cost.spendMilliunits/1000:'',...[7,14,30].flatMap(n=>[c.windows[n].net/1000,c.windows[n].mature?'完整':'观察中',c.windows[n].roas??''])]);
@@ -129,6 +189,11 @@ document.addEventListener('click',async event=>{
   changed();
 });
 document.addEventListener('change',async event=>{
+  if(event.target.dataset.growth){
+    const scope=event.target.closest('[data-market-product]');if(!scope)return;
+    const s=state(datasets.get(scope.dataset.marketProduct));
+    s[event.target.dataset.growth==='group'?'growthGroup':'growthDimension']=event.target.value;changed();return;
+  }
   const form=event.target.closest('#marketingImport');if(!form)return;
   const product=form.closest('[data-market-product]').dataset.marketProduct,s=state(datasets.get(product));
   if(event.target.name==='kind'){s.importKind=event.target.value;s.preview=null;s.message='';s.csv='';changed();}

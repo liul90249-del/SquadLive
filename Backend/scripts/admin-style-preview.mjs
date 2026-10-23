@@ -1,3 +1,4 @@
+import {policyState} from '../cleaner-paywall-policy.mjs';
 import {marketingDataset} from '../marketing-core.mjs';
 import {prepareMarketingImport} from '../marketing-import.mjs';
 // Local-only visual comparison. No proxy, credentials, live data or writes.
@@ -52,7 +53,7 @@ function report(product) {
     if(i%3===0)lifecycle.events[i]={originalId:r.original_transaction_id,type:'DID_CHANGE_RENEWAL_STATUS',subtype:'AUTO_RENEW_DISABLED',occurredAt:Date.parse(iso(-i%4))};
   });
   return {...operations,marketing:marketingDataset({sharedPartnerReferrals:{[product]:state},marketing:{[product]:marketingFixture(product)}},product,operations,now),subscriptions:product==='cleaner'?subscriptionAnalytics(operations,lifecycle,{},now):null,
-    connected:true, subscriptionCatalog:product==='cleaner'?{status:'unconfigured',actual:null,checkedAt:null}:null};
+    paywallPolicy:product==='cleaner'?policyState({}):null,connected:true, subscriptionCatalog:product==='cleaner'?{status:'unconfigured',actual:null,checkedAt:null}:null};
 }
 const users = Object.values(accounts).slice(0,12).map((a,i)=>({
   ...a, deviceId:`demo-device-${i+1}`, displayName:`演示用户 ${i+1}`, coins:300+i*40,
@@ -93,7 +94,7 @@ const server = http.createServer(async(req,res)=>{
     const files={'/admin-appearance.css':['admin-appearance.css','text/css'], '/admin-appearance.js':['admin-appearance.js','text/javascript'],
       '/assets/landing/squadlive-logo.png':['assets/landing/squadlive-logo.png','image/png']};
     for (const product of products) files[`/assets/products/${product}.png`] = [`assets/products/${product}.png`, 'image/png'];
-    for (const file of ['admin-insights.css','admin-insights.mjs','admin-insights-core.mjs','admin-subscriptions.mjs','admin-subscriptions.css','admin-marketing.mjs','admin-marketing.css','marketing-core.mjs']) files[`/${file}`] = [file, file.endsWith('.css') ? 'text/css' : 'text/javascript'];
+    for (const file of ['admin-paywall.mjs','admin-insights.css','admin-insights.mjs','admin-insights-core.mjs','admin-subscriptions.mjs','admin-subscriptions.css','admin-marketing.mjs','admin-marketing.css','marketing-core.mjs']) files[`/${file}`] = [file, file.endsWith('.css') ? 'text/css' : 'text/javascript'];
     if(files[url.pathname]) {const [file,type]=files[url.pathname];res.writeHead(200,{'content-type':type});return res.end(await readFile(resolve(root,file)));}
     if(url.pathname.startsWith('/v1/admin/')) requests++;
     const match=/^\/v1\/admin\/products\/([a-z]+)\/operations$/.exec(url.pathname);

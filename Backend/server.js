@@ -1,3 +1,5 @@
+import {createPolicyCatalogReader} from './cleaner-policy-catalog.mjs';
+import {policyState,editPolicy,publishPolicy,publicPolicy,restorePolicyDraft} from './cleaner-paywall-policy.mjs';
 import {marketingDataset} from './marketing-core.mjs';
 import {prepareMarketingImport,applyMarketingImport} from './marketing-import.mjs';
 import {createApplovinSync} from './applovin-marketing.mjs';
@@ -29,6 +31,7 @@ const port = Number(process.env.PORT || 8787);
 const dataDir = process.env.DATA_DIR || join(__dirname, "data");
 const storePath = join(dataDir, "store.json");
 let sharedProductReferrals;
+let paywallWriteQueue=Promise.resolve();
 const sharedInbox=createTransactionInbox({directory:process.env.DATA_DIR,certDirectory:join(__dirname,"certs"),
  onVerified:(product,transaction,proof,options)=>sharedProductReferrals?.recordVerified(product,transaction,proof,options)});
 const homePagePath = join(__dirname, "index.html");
@@ -147,6 +150,7 @@ const cleanerCatalog = createCleanerCatalogReader({
  privateKey: process.env.ASC_API_PRIVATE_KEY,
  subscriptionId: process.env.ASC_CLEANER_WEEKLY_SUBSCRIPTION_ID
 });
+const policyCatalog=createPolicyCatalogReader({keyId:process.env.ASC_API_KEY_ID,issuerId:process.env.ASC_API_ISSUER_ID,privateKey:process.env.ASC_API_PRIVATE_KEY,weeklySubscriptionId:process.env.ASC_CLEANER_WEEKLY_SUBSCRIPTION_ID});
 sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:inboxProducts,
  singularClients:cleanerSingularClient?{cleaner:cleanerSingularClient}:{},
  singularEnrollments:{cleaner:process.env.SINGULAR_S2S_CLEANER_ENABLED==='true'},
@@ -1440,7 +1444,7 @@ async function route(req, res) {
     return res.end(html);
   }
 
-  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs"].includes(url.pathname)) {
+  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs"].includes(url.pathname)) {
     const content = await readFile(join(__dirname, url.pathname.slice(1)), "utf8");
     res.writeHead(200, { "content-type": url.pathname.endsWith('.css')
       ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" });
@@ -1508,6 +1512,35 @@ async function route(req, res) {
   }
 
   const store = await getStore();
+
+  if(url.pathname==='/v1/admin/products/cleaner/paywall-policy'){
+    if(!requireAdmin(req,res))return;
+    res.setHeader('Cache-Control','no-store');
+    if(req.method==='GET'){await paywallWriteQueue;return jsonResponse(res,200,policyState(store));}
+    if(req.method!=='POST')return jsonResponse(res,405,{error:'Method not allowed'});
+    const body=await readJSON(req);
+    const update=async()=>{
+      const candidate={cleanerPaywallPolicy:policyState(store)};
+      let next;
+      if(body.action==='save')next=editPolicy(candidate,body.policy,body.revision);
+      else if(body.action==='restore')next=restorePolicyDraft(candidate,body.sourceRevision,body.revision);
+      else if(body.action==='publish')next=publishPolicy(candidate,body.revision,await policyCatalog(candidate.cleanerPaywallPolicy.draft));
+      else throw Object.assign(new Error('未知配置操作'),{status:400});
+      const prior=store.cleanerPaywallPolicy;
+      store.cleanerPaywallPolicy=next;
+      try{await saveStore(store);}catch(error){store.cleanerPaywallPolicy=prior;throw error;}
+      return next;
+    };
+    const pending=paywallWriteQueue.then(update,update);
+    paywallWriteQueue=pending.then(()=>{},()=>{});
+    return jsonResponse(res,200,await pending);
+  }
+
+  if(req.method==='GET'&&url.pathname==='/v1/products/cleaner/paywall-policy'){
+    res.setHeader('Cache-Control','no-store');
+    await paywallWriteQueue;
+    return jsonResponse(res,200,publicPolicy(store));
+  }
 
   if (req.method === "POST" && url.pathname === "/v1/auth/apple") {
     const body = await readJSON(req);
@@ -2153,6 +2186,7 @@ async function route(req, res) {
   const reviewMatch = url.pathname.match(/^\/v1\/rewards\/([^/]+)\/review$/);
   if (req.method === "POST" && reviewMatch) {
     if (!requireAdmin(req, res)) return;
+
     const body = await readJSON(req);
     const submission = store.rewardSubmissions[reviewMatch[1]];
     if (!submission) return jsonResponse(res, 404, { error: "Submission not found" });
@@ -2214,6 +2248,7 @@ async function route(req, res) {
         marketing:{...marketingDataset(store,product,operations),applovin:product==='cleaner'?await applovinSync.status():null},
         subscriptions:lifecycle?subscriptionAnalytics(operations,lifecycle,store.sharedPartnerReferrals?.[product]?.accountTokens):null,
         connected: Boolean(inboxProducts[product]),
+        paywallPolicy: product==='cleaner'?policyState(store):null,
         subscriptionCatalog: product === 'cleaner' ? await cleanerCatalog() : null });
     }
 

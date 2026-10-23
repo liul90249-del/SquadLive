@@ -11,7 +11,7 @@ const subscription=(...ids)=>new Map(ids.map(id=>[id,{kind:'subscription',appleT
 const purchases=(appleType,...ids)=>new Map(ids.map(id=>[id,{kind:'iap',appleType}]));
 const catalog=(...groups)=>new Map(groups.flatMap(group=>[...group]));
 export const inboxProducts=Object.freeze({
- cleaner:{bundle:'com.hecathehe.PhoneCleaner',appId:6761738282,skus:catalog(subscription('com.hecathehe.PhoneCleaner.weekly','com.hecathehe.PhoneCleaner.yearly','com.hecathehe.PhoneCleaner.yearly.standard'),purchases('Non-Consumable','com.hecathehe.PhoneCleaner.lifetime'))},
+ cleaner:{bundle:'com.hecathehe.PhoneCleaner',appId:6761738282,skus:catalog(subscription('com.hecathehe.PhoneCleaner.weekly','com.hecathehe.PhoneCleaner.weekly.intro099','com.hecathehe.PhoneCleaner.weekly.intro199','com.hecathehe.PhoneCleaner.weekly.intro399','com.hecathehe.PhoneCleaner.weekly.intro699','com.hecathehe.PhoneCleaner.yearly','com.hecathehe.PhoneCleaner.yearly.standard'),purchases('Non-Consumable','com.hecathehe.PhoneCleaner.lifetime'))},
  nutriscan:{bundle:'com.liuzhigang.NutriScan',appId:6786940107,skus:subscription('com.liuzhigang.nutriscan.pro.annuala','com.liuzhigang.nutriscan.pro.monthlya','com.liuzhigang.nutriscan.pro.annualpromoa')},
  subguard:{bundle:'Organization-Identifier--com.liuzhigang.SubGuard',appId:6762180214,skus:catalog(subscription('com.liuzhigang.subguard.pro.yearly'),purchases('Non-Consumable','com.liuzhigang.subguardpro.lifetime'))},
  dailyme:{bundle:'com.liuzhigang.dailyme',appId:6763536504,skus:subscription('com.dailyme.premium.weekly','com.dailyme.premium.yearly2')},
