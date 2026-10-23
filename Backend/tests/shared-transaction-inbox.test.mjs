@@ -118,3 +118,15 @@ test('History lookup failure preserves evidence but never acknowledges successfu
  const root=join(f.options.directory,'partner-inbox','nutriscan','Production','app-transactions');
  const saved=JSON.parse(await readFile(join(root,(await readdir(root))[0]),'utf8'));assert.equal(saved.purchase_history,null);assert.equal(saved.commission_eligible,false);
 });
+
+test('all four Cleaner introductory SKUs persist verified charge and trial classification',async t=>{
+ const f=await fixture(t);
+ for(const [tier,price] of [['intro099',990],['intro199',1990],['intro399',3990],['intro699',6990]]){
+  const tx={...proof,bundleId:'com.hecathehe.PhoneCleaner',productId:`com.hecathehe.PhoneCleaner.weekly.${tier}`,transactionId:tier,originalTransactionId:tier,price,currency:'USD',offerDiscountType:'PAY_UP_FRONT'};
+  await f.service.recordVerified('cleaner',tx,'verified-test-proof');
+  const file=join(f.options.directory,'partner-inbox','cleaner','Production',createHash('sha256').update(tier).digest('hex')+'.json');
+  const receipt=JSON.parse(await readFile(file,'utf8'));
+  assert.equal(receipt.price,price);assert.equal(receipt.purchase_kind,'subscription');
+ }
+ await assert.rejects(()=>f.service.recordVerified('cleaner',{...proof,bundleId:'com.hecathehe.PhoneCleaner',productId:'com.hecathehe.PhoneCleaner.weekly.unregistered'},'invalid'),/metadata/);
+});

@@ -1,3 +1,4 @@
+import {paywallHTML,paywallEditing} from './admin-paywall.mjs';
 import {marketingHTML,marketingEditing} from './admin-marketing.mjs';
 import {dateOf,shiftDay,period,aggregate,delta,filterUsers,filterOrders,needsReview,pageRows} from './admin-insights-core.mjs';
 import {subscriptionPanelHTML,metricLabel,metricHelp} from './admin-subscriptions.mjs';
@@ -94,7 +95,7 @@ function ordersView() {
   return `${subscriptionPanelHTML(data.subscriptions)}${filters()}${exactAccount||exactSku?`<p class="scope-note">精确限定：${esc(exactAccount||exactSku)} · 点击“重置”解除</p>`:''}<section class="insight-surface"><header><div><h2>订单与退款</h2><p>金额来自苹果验证记录；点击交易查看退款及归因详情。下方筛选仅用于交易明细。</p></div><span>筛选结果 ${filtered.length} 笔</span></header>${table(['交易','用户','商品','扣款金额','状态','购买时间 UTC'],p.rows.map(o=>`<tr><td>${btn(esc(o.transactionId),'order',`class="text-button" data-id="${esc(o.transactionId)}"`)}</td><td>${esc(o.accountId||'未绑定')}</td><td>${esc(o.sku)}</td><td>${o.priceMilliunits===null||!o.currency?'金额未知':money(o.priceMilliunits,o.currency)}</td><td><span class="status-badge ${o.refunded?'refund':''}">${o.refunded?(o.refundedMilliunits<o.priceMilliunits?'部分退款':'已退款'):o.revocationType==='FAMILY_REVOKE'?'共享已撤销':'未记录退款'}</span>${needsReview(o)?'<span class="status-badge review">归因待核对</span>':''}</td><td>${time(o.purchasedAt)}</td></tr>`))}${pagination(p)}</section>`;
 }
 function pricesView() {
-  return `<section class="insight-surface"><header><h2>商品价格分布</h2><span>全部已观察订单</span></header><p class="scope-note">这里展示历史已验证订单的价格，不代表当前 App Store 售价；不同币种分别统计。</p>${table(['商品','币种','最低价','最高价','订单数'],data.observedPrices.map(p=>`<tr><td>${esc(p.sku)}</td><td>${esc(p.currency)}</td><td>${money(p.minimumMilliunits,p.currency)}</td><td>${money(p.maximumMilliunits,p.currency)}</td><td>${btn(`${p.count} 笔 →`,'sku',`class="text-button" data-sku="${esc(p.sku)}" data-currency="${esc(p.currency)}"`)}</td></tr>`))}</section>${data.subscriptionCatalog?`<section class="insight-surface"><header><h2>当前售价核对</h2></header><p class="scope-note">${esc($('productSubscriptionCatalog').textContent)}</p></section>`:''}`;
+  return `${paywallHTML(data.paywallPolicy)}<section class="insight-surface"><header><h2>商品价格分布</h2><span>全部已观察订单</span></header><p class="scope-note">这里展示历史已验证订单的价格，不代表当前 App Store 售价；不同币种分别统计。</p>${table(['商品','币种','最低价','最高价','订单数'],data.observedPrices.map(p=>`<tr><td>${esc(p.sku)}</td><td>${esc(p.currency)}</td><td>${money(p.minimumMilliunits,p.currency)}</td><td>${money(p.maximumMilliunits,p.currency)}</td><td>${btn(`${p.count} 笔 →`,'sku',`class="text-button" data-sku="${esc(p.sku)}" data-currency="${esc(p.currency)}"`)}</td></tr>`))}</section>${data.subscriptionCatalog?`<section class="insight-surface"><header><h2>当前售价核对</h2></header><p class="scope-note">${esc($('productSubscriptionCatalog').textContent)}</p></section>`:''}`;
 }
 function render() {
   document.querySelectorAll('.product-nav a').forEach(link=>{if(link.getAttribute('href')==='#'+viewPanels[view])link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');});
@@ -109,7 +110,7 @@ function render() {
 }
 function receive(next) {
   if(next.product!==picker.value) return;
-  if(lastProduct===next.product&&data&&marketingEditing(next.product))return;
+  if(lastProduct===next.product&&data&&(marketingEditing(next.product)||paywallEditing()))return;
   snapshot=next; loading=next.status==='loading';
   if(lastProduct!==next.product) {data=null;view=lastProduct?'overview':initialView;lastProduct=next.product;exactAccount='';exactSku='';query='';status='all';page=1;listStart='';listEnd='';orderCurrency='';selectedDay='';start='';end='';liveToday=false;receivedAt=null;}
   if(next.status==='ready') {
@@ -119,6 +120,8 @@ function receive(next) {
     if(!start || end>latest || start<data.daily[0]?.date) {end=latest;start=shiftDay(end,-6);}
     if(!currencies().includes(currency)) currency=currencies()[0]||'';
   }
+  $('productPaywallPolicy').innerHTML=next.status==='ready'?paywallHTML(data.paywallPolicy):'';
+  $('productPaywallPolicy').hidden=next.product!=='cleaner';
   $('productMarketing').innerHTML=next.status==='ready'?marketingHTML({...data.marketing,subscriptions:data.subscriptions}):'<p>当前产品投放数据尚未就绪</p>';
   render();
 }
@@ -194,3 +197,5 @@ window.addEventListener('hashchange',()=>setView(viewFromHash()));
 window.addEventListener('admin-marketing-change',()=>{if(data&&snapshot?.status==='ready'&&snapshot.product===picker.value){$('productMarketing').innerHTML=marketingHTML({...data.marketing,subscriptions:data.subscriptions});render();}});
 picker.addEventListener('change',()=>{if(dialog.open)dialog.close();});
 if(window.adminProductSnapshot)receive(window.adminProductSnapshot); else render();
+
+window.addEventListener('admin-paywall-change',()=>{if(data&&picker.value==='cleaner'){$('productPaywallPolicy').innerHTML=paywallHTML(data.paywallPolicy);render();}});

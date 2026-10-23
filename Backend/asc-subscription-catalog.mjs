@@ -1,10 +1,10 @@
 import {createSign} from 'node:crypto';
 
 const expectedProductId = 'com.hecathehe.PhoneCleaner.weekly';
-const target = Object.freeze({territory: 'USA', currency: 'USD', price: '9.90', period: 'ONE_WEEK', trialDays: 7});
+const target = Object.freeze({territory: 'USA', currency: 'USD', price: '9.99', period: 'ONE_WEEK', trialDays: 7});
 const baseURL = 'https://api.appstoreconnect.apple.com';
 
-function tokenFor({keyId, issuerId, privateKey}, now) {
+export function tokenFor({keyId, issuerId, privateKey}, now) {
   const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
   const header = encode({alg: 'ES256', kid: keyId, typ: 'JWT'});
   const issuedAt = Math.floor(now / 1000);
@@ -25,7 +25,7 @@ function relationshipId(item, name) {
   return item.relationships?.[name]?.data?.id || null;
 }
 
-async function pages(path, token, fetcher) {
+export async function pages(path, token, fetcher) {
   let url = new URL(path, baseURL);
   const data = [];
   const included = [];
