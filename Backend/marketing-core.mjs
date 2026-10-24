@@ -234,6 +234,22 @@ export function buildGrowthReport(data, filters={}) {
       record['cancelRateD'+d]=rate(record['cancelD'+d],record.subD0);
       if(record['cancelD'+d]===null)record['cancelRateD'+d]=null;
     }
+    const cumulativeCovered=Array.isArray(cancelEvents)&&Number.isFinite(trackingStart)&&trackingStart<=start&&
+      !d0Subs.some(u=>people.get(u.id)?.autoRenewStatus==null);
+    const d0Ids=new Set(d0Subs.map(u=>u.id));
+    record.cancelToDate=cumulativeCovered?new Set(cancelEvents.filter(e=>d0Ids.has(e.id)&&e.at>=firstSub(members.find(u=>u.id===e.id))&&e.at<=now).map(e=>e.id)).size:null;
+    record.paidToDate=members.filter(u=>{const first=paidOrders(u)[0];return first&&ms(first.purchasedAt)>=ms(u.acquiredAt);}).length;
+    // A second distinct charged transaction on the same subscription chain is a renewal.
+    // A trial's first charge and purchases on another chain are not renewals.
+    record.renewedToDate=members.filter(u=>{
+      const chains=new Map();
+      for(const o of paidOrders(u)){
+        if(o.kind!=='subscription'||!o.originalTransactionId||!o.transactionId||ms(o.purchasedAt)<ms(u.acquiredAt))continue;
+        if(!chains.has(o.originalTransactionId))chains.set(o.originalTransactionId,new Set());
+        chains.get(o.originalTransactionId).add(o.transactionId);
+      }
+      return [...chains.values()].some(ids=>ids.size>=2);
+    }).length;
     const ended=members.filter(u=>subscriptions(u).some(o=>o.isFreeTrial&&ms(o.purchasedAt)>=ms(u.acquiredAt)&&o.expiresAt&&ms(o.expiresAt)<=now));
     record.endedTrials=ended.length;
     record.convertedTrials=ended.filter(u=>subscriptions(u).some(t=>t.isFreeTrial&&ms(t.purchasedAt)>=ms(u.acquiredAt)&&t.expiresAt&&ms(t.expiresAt)<=now&&paidOrders(u).some(p=>p.originalTransactionId===t.originalTransactionId&&ms(p.purchasedAt)>=ms(t.expiresAt)))).length;
@@ -244,7 +260,7 @@ export function buildGrowthReport(data, filters={}) {
     return growthRates(record);
   });
   // Totals recompute ratios from matching summed numerators and denominators.
-  const additive=['spend','impressions','clicks','installs','users','subD0','freeD0','paidD0','cleanupD0','grossD0','refundD0','netD0','gross','refund','net','endedTrials','convertedTrials','cancelD0','cancelD3','cancelD7','unknownSource'];
+  const additive=['spend','impressions','clicks','installs','users','subD0','freeD0','paidD0','cleanupD0','grossD0','refundD0','netD0','gross','refund','net','endedTrials','convertedTrials','cancelD0','cancelD3','cancelD7','cancelToDate','paidToDate','renewedToDate','unknownSource'];
   const total={date:'合计',channel:'all',observed:rows.some(r=>r.observed)};
   for(const k of additive)total[k]=rows.length&&rows.every(r=>r[k]!==null)?rows.reduce((n,r)=>n+r[k],0):null;
   for(const d of [0,3,7,8,14,30]){
@@ -256,7 +272,7 @@ export function buildGrowthReport(data, filters={}) {
 }
 function growthRates(r){
   const divide=(n,d,m=1)=>n!=null&&d>0?n/d*m:null;
-  return {...r,ctr:divide(r.clicks,r.impressions,100),cpi:divide(r.spend,r.installs),subRateD0:divide(r.subD0,r.users,100),
+  return {...r,cancelRateToDate:divide(r.cancelToDate,r.subD0,100),paidRateToDate:divide(r.paidToDate,r.users,100),ctr:divide(r.clicks,r.impressions,100),cpi:divide(r.spend,r.installs),subRateD0:divide(r.subD0,r.users,100),
     costPerSubD0:divide(r.spend,r.subD0),paidRateD0:divide(r.paidD0,r.users,100),trialPaidRate:divide(r.convertedTrials,r.endedTrials,100),
     ltv:divide(r.net,r.users),roas:r.users>0?divide(r.net,r.spend,100):null,contribution:r.users>0&&r.net!=null&&r.spend!=null?r.net-r.spend:null,
     roi:r.users>0&&r.net!=null&&r.spend>0?(r.net-r.spend)/r.spend*100:null};
