@@ -96,7 +96,7 @@ export function createCleanerCatalogReader({keyId, issuerId, privateKey, subscri
         const [subscriptionResponse, priceList, offerList] = await Promise.all([
           pages(`/v1/subscriptions/${id}`, token, fetcher),
           pages(`/v1/subscriptions/${id}/prices${query}`, token, fetcher),
-          pages(`/v1/subscriptions/${id}/introductoryOffers?filter%5Bterritory%5D=USA&limit=200`, token, fetcher)
+          pages(`/v1/subscriptions/${id}/introductoryOffers?filter%5Bterritory%5D=USA&include=territory&limit=200`, token, fetcher)
         ]);
         result = interpretCleanerCatalog(subscriptionResponse.data[0], priceList, offerList, timestamp);
       } catch (error) {
