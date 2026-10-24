@@ -33,6 +33,15 @@ const receipts = Object.fromEntries(Array.from({length:12}, (_,i) => [`demo-orde
   singular_purchase:{status:i===5?'uncertain':'sent'}, singular_refund:i===2?{status:'sent'}:null
 }]));
 for(const i of [7,8,9,10,11]){const user=accounts[`demo-${String(i+1).padStart(3,'0')}`];receipts[`demo-trial-${i}`]={transaction_id:`demo-trial-${i}`,original_transaction_id:`demo-original-${i+1}`,customer_id:user.id,sku:'cleaner.weekly',environment:'Production',purchased_at:Date.parse(user.createdAt)/1000,price:0,currency:'USD',purchase_kind:'subscription',offer_discount_type:'FREE_TRIAL',expires_at:Date.parse(user.createdAt)+7*86400000};}
+// Synthetic exposure fixtures only; never imported into live customer data.
+Object.values(accounts).forEach((u,i)=>{
+  if(i%6===0)return;
+  const first=Object.values(receipts).filter(r=>r.customer_id===u.id).sort((a,b)=>a.purchased_at-b.purchased_at)[0];
+  const start=first?first.purchased_at*1000:Date.parse(u.createdAt);
+  const metadata={presentationId:`demo-presentation-${i}`,revision:1,tier:i%2?'intro099':'free7',template:['storage','compact','comparison'][i%3],surface:'main',entryPoint:'return_visit',productId:first?.sku||'cleaner.weekly'};
+  u.paywallEvents=[{...metadata,id:`open-${i}`,name:'paywall_open',at:start},
+    ...(i%4!==0?[{...metadata,id:`click-${i}`,name:'purchase_attempt',at:start}]:[])];
+});
 function marketingFixture(product){
   if(product!=='cleaner')return {};
   const costs={},attributions={};

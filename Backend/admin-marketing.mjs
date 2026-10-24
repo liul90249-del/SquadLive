@@ -6,6 +6,10 @@ const ratio=(n,d)=>d>0?n/d*100:null;
 const names={all:'全部来源',unknown:'归因未知',organic:'自然量',applovin:'AppLovin'};
 const title=r=>[names[r.channel]||r.channel,r.campaignName||r.campaignId,r.adGroupName||r.adGroupId,r.creativeName||r.creativeId].filter(Boolean).join(' / ');
 const help={
+  paywallViewers:'所选获客批次中，实际记录过该配置版本、价格档位、模板和展示位置的去重用户。一个用户看过多种方案会出现在多行，不能跨行相加。',
+  paywallClicks:'有同次页面曝光记录的去重购买点击人数。点击不是扣款。点击率 = 点击人数 ÷ 看到页面人数。',
+  paywallPaid:'仅苹果验证的首次观察订阅。关联到购买前 24 小时内同商品的最近一次有效点击。免费试用的首次扣款按同一苹果订阅链回补原方案；之后续费不重复计入。扣款转化率 = 首次扣款人数 ÷ 看到页面人数。跨币种去重。',
+  paywallNet:'已关联方案用户的第一笔实际扣款减该订单已知退款，仅所选币种。包括免费试用结束后的第一笔扣款，不含其后的续费。未扣苹果佣金和税费。',
   spend:'已导入的广告花费；按 UTC 日期、所选币种与来源筛选。缺少成本记录显示 —，不视为免费获客。重复导入同一日期、广告层级和币种会更新原记录，不累加。',
   users:'所选获客日期内的新增用户，按后台记录的安装 ID 去重。同一 ID 多次打开只计一次；重装 App 或换设备可能生成新的 ID，因此不等于独立自然人数。包含自然量、已归因广告用户和归因未知用户。按首次获客日期统计；没有归因时间时使用后台注册日期。归因未知表示尚不能确定来源，不能直接算作广告获客。与广告平台报表安装数不是同一口径。',
   paid:'所选获客批次中，截至目前首次观察到实际扣款的用户；7 天免费试用的 0 元订单不算。所有币种去重，退款不撤销首次付费身份。',
@@ -112,6 +116,10 @@ export function marketingHTML(data) {
   <section class="insight-surface"><header><h2>渠道与素材表现</h2><button data-market="export">导出当前获客表 CSV</button></header><p class="scope-note">点击来源继续下钻。只导入系列成本时，素材层不会分摊或编造花费。${h('归因范围','coverage')}</p>
   ${table(['来源',h('花费','spend'),'展示','点击',h('点击率','ctr'),'报表安装',h('安装成本','cpi'),h('新增用户（按安装 ID 去重）','users'),'试用',h('实际付费','paid'),h('首次付费成本','cpp'),h('已关联净扣款','net')],r.groups.map((g,i)=>`<tr><td><button class="market-link" data-market="drill" data-row="${i}">${esc(title(g))}</button></td><td>${g.costRows?money(g.spend):'未导入'}${g.missingCostCohorts?'<small>部分日期缺成本</small>':''}</td><td>${g.costRows?g.impressions:'—'}</td><td>${g.costRows?g.clicks:'—'}</td><td>${pct(g.costRows?ratio(g.clicks,g.impressions):null)}</td><td>${g.costRows?g.installs:'—'}</td><td>${money(g.costRows&&g.installs?g.spend/g.installs:null)}</td><td>${g.users}</td><td>${g.trial}</td><td>${g.paid}</td><td>${money(g.costRows&&!g.missingCostCohorts&&g.paid?g.spend/g.paid:null)}</td><td>${money(g.net)}</td></tr>`))}</section>
   ${growthHTML(data,s)}
+  ${data.product==='cleaner'?`<section class="insight-surface paywall-comparison"><header><h2>价格与付费页表现</h2></header>
+  <p class="scope-note">按所选获客批次比较页面配置，实际优惠资格由苹果决定。点击列名旁问号查看统计口径。净扣款币种：${esc(r.currency)}。这是行为关联结果，不代表随机实验或因果结论。</p>
+  <p class="scope-note">无方案记录 ${r.paywall.missing} 人 · 历史不完整 ${r.paywall.incomplete} 人 · 无法关联方案的首次订阅 ${r.paywall.unassigned} 人。旧版未上报的数据不会推断补齐。</p>
+  ${table(['配置版本','页面方案','模板 / 展示位置',h('看到页面人数','paywallViewers'),h('点击人数','paywallClicks'),h('点击率','paywallClicks'),h('免费试用人数','trial'),h('首次扣款人数','paywallPaid'),h('扣款转化率','paywallPaid'),h('首笔净扣款','paywallNet')],r.paywall.rows.map(g=>`<tr><td>${g.revision}</td><td>${g.surface!=='main'?'年订阅特惠':esc(({default:'默认方案',free7:'7 天免费',intro099:'首周 $0.99',intro199:'首周 $1.99',intro399:'首周 $3.99',intro699:'首周 $6.99'})[g.tier]||g.tier)}</td><td>${esc(({storage:'存储展示',compact:'简洁版',comparison:'方案对比',special_annual:'年订阅特惠'})[g.template]||g.template)}<small>${esc(({main:'常规订阅页',policy_surprise:'策略特惠',secret_annual:'快捷入口特惠'})[g.surface]||g.surface)}</small></td><td>${g.viewers}</td><td>${g.clickers}</td><td>${pct(g.clickRate)}</td><td>${g.trials}</td><td>${g.payers}</td><td>${pct(g.paidRate)}</td><td>${money(g.net)}</td></tr>`))}</section>`:''}
   <section class="insight-surface"><header><h2>获客批次与回本</h2>${h('D7 / D14 / D30','roas')}</header><p class="scope-note">按获客日期从近到远排列。窗口内净扣款随后续退款回补；观察期未结束时不下回本结论。</p>
   ${table(['获客日 / 来源',h('新增用户（按安装 ID 去重）','users'),'花费',...['D7','D14','D30'].map(x=>h(x+' 净扣款 / ROAS','window'))],r.cohorts.slice(0,s.limit).map(c=>`<tr><td><b>${c.date}</b><small>${esc(title(c))}</small></td><td>${c.acquiredUsers}</td><td>${c.cost?money(c.cost.spendMilliunits):'未导入'}</td>${[7,14,30].map(n=>`<td>${money(c.windows[n].net)}<small>${!c.windows[n].mature?'观察中':c.windows[n].roas===null?'成本或关联用户不足':pct(c.windows[n].roas)}</small></td>`).join('')}</tr>`))}
   <footer class="insight-pagination"><span>已展示 ${Math.min(s.limit,r.cohorts.length)} / ${r.cohorts.length} 批</span>${s.limit<r.cohorts.length?'<button data-market="more">加载更早 30 批</button>':''}</footer></section>

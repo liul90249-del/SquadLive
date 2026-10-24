@@ -1,4 +1,5 @@
 import {FUNNEL_EVENTS} from './marketing-core.mjs';
+import {validatePaywallEvents,mergePaywallEvents} from './paywall-events.mjs';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -15,8 +16,9 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
  const clientFor=product=>clients[product]||null;
  const productFor=product=>products[product]||null;
 
- async function session(product,{credential,deviceId,singularSdid,serverRevenueV1,cleanupTrackingV1,hasCompletedCleanup,firstCleanupAt,funnelEvents,funnelTrackingV1},req) {
+ async function session(product,{credential,deviceId,singularSdid,serverRevenueV1,cleanupTrackingV1,hasCompletedCleanup,firstCleanupAt,funnelEvents,funnelTrackingV1,paywallEvents,paywallHistoryIncomplete},req) {
   if(!productFor(product))throw fail('Product is not connected',404);
+  const validatedPaywallEvents=product==='cleaner'?validatePaywallEvents(paywallEvents,now()):[];
   if(product==='cleaner' && cleanupTrackingV1===true && (typeof hasCompletedCleanup!=='boolean' ||
    (firstCleanupAt!==undefined && (!hasCompletedCleanup || !Number.isSafeInteger(firstCleanupAt) || firstCleanupAt<=0 || firstCleanupAt>now()+300000))))throw fail('Invalid cleanup completion metadata');
   if(funnelTrackingV1===true && (!funnelEvents || typeof funnelEvents!=='object' || Array.isArray(funnelEvents) ||
@@ -53,6 +55,8 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   // to persist the cutover timestamp before any purchase can use S2S.
   if(serverRevenueV1===true&&account.singularSdid&&singularClients[product]&&singularEnrollments[product])account.singularS2SEnabledAt||=now()+60000;
   account.lastSeenAt=seenAt;
+  if(product==='cleaner')mergePaywallEvents(account,validatedPaywallEvents,now());
+  if(product==='cleaner'&&paywallHistoryIncomplete===true)account.paywallHistoryTruncated=true;
   if(product==='cleaner' && cleanupTrackingV1===true){
    account.cleanupTrackedFrom ||= seenAt;
    account.hasCompletedCleanup=!!(account.hasCompletedCleanup || hasCompletedCleanup);
@@ -70,6 +74,7 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   onSession(root,account,req);
   await saveStore(root);
   return {token,account_token:account.accountToken,user_id:account.id,device_id:account.deviceId,expires_in:31536000,
+   accepted_paywall_event_ids:validatedPaywallEvents.map(e=>e.id),
    server_revenue_enabled_at:account.singularS2SEnabledAt||null};
  }
 

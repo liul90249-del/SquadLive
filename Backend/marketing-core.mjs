@@ -16,6 +16,7 @@ export function marketingDataset(store,product,operations,now=Date.now()) {
       const account=accounts[u.id]||{}, a=state.attributions?.[u.id];
       return {id:u.id,createdAt:u.createdAt,acquiredAt:a?.acquiredAt||u.createdAt,
         attribution:a||null,events:account.funnelEvents||{},trackedFrom:account.funnelTrackedFrom||null,
+        paywallEvents:account.paywallEvents||[],paywallHistoryTruncated:account.paywallHistoryTruncated===true,
         hasCompletedCleanup:u.hasCompletedCleanup,firstCleanupAt:u.firstCleanupAt};
     }),
     orders:operations.orders.map(o=>({...o,
@@ -103,6 +104,7 @@ export function buildMarketingReport(data,{start='',end='',channel='',campaignId
     else if(b.channel!=='organic')g.missingCostCohorts++;
   }
   return {currency,start,end,cohorts,groups:[...groups.values()],quality,events,
+    paywall:buildPaywallReport(users,data.orders,{now,currency}),
     totals:{...acquisitionTotals,spend:costs.length?sum(costs,'spendMilliunits'):null,
       impressions:costs.length?sum(costs,'impressions'):null,clicks:costs.length?sum(costs,'clicks'):null,installs:costs.length?sum(costs,'installs'):null,
       gross:sum(cohorts,'gross'),refunds:sum(cohorts,'refunds'),net:sum(cohorts,'net')},
@@ -110,6 +112,56 @@ export function buildMarketingReport(data,{start='',end='',channel='',campaignId
       unknownEnd:trialPeople.filter(u=>!trials(u).some(t=>t.expiresAt)).length,
       pending:trialPeople.filter(u=>trials(u).some(t=>t.expiresAt)&&!endedTrials.includes(u)).length},
     imports:data.imports,now};
+}
+
+// Observational attribution, not a randomized experiment. Assign an initial
+// subscription to its latest same-product click within 24 hours. Renewals and
+// existing subscribers are excluded; unmatched orders remain unassigned.
+export function buildPaywallReport(users, orders, {now,currency='USD'}) {
+  const groups=new Map();let unassigned=0;
+  const key=e=>JSON.stringify([e.revision,e.tier,e.template,e.surface]);
+  const group=e=>{
+    const k=key(e);
+    if(!groups.has(k))groups.set(k,{revision:e.revision,tier:e.tier,template:e.template,surface:e.surface,
+      viewers:new Set(),clickers:new Set(),payers:new Set(),trials:new Set(),net:0});
+    return groups.get(k);
+  };
+  const userIDs=new Set(users.map(u=>u.id));
+  const byUser=new Map();
+  for(const o of orders) {
+    if(!userIDs.has(o.accountId)||!Number.isFinite(ms(o.purchasedAt))||ms(o.purchasedAt)>now)continue;
+    if(!byUser.has(o.accountId))byUser.set(o.accountId,[]);
+    byUser.get(o.accountId).push(o);
+  }
+  for(const u of users) {
+    const events=(u.paywallEvents||[]).filter(e=>e.at>=ms(u.acquiredAt)&&e.at<=now);
+    const opens=events.filter(e=>e.name==='paywall_open');
+    const attempts=events.filter(e=>e.name==='purchase_attempt'&&opens.some(o=>o.presentationId===e.presentationId&&key(o)===key(e)&&o.at<=e.at));
+    for(const e of opens)group(e).viewers.add(u.id);
+    for(const e of attempts)group(e).clickers.add(u.id);
+    // The earliest observed subscription is the only acquisition conversion.
+    // Missing older history is explicitly a limitation of this report.
+    const first=(byUser.get(u.id)||[]).filter(o=>o.isFreeTrial||o.priceMilliunits>0)
+      .sort((a,b)=>ms(a.purchasedAt)-ms(b.purchasedAt)||String(a.transactionId).localeCompare(String(b.transactionId)))[0];
+    if(!first||ms(first.purchasedAt)<ms(u.acquiredAt))continue;
+    const candidates=attempts.filter(e=>e.productId===first.sku&&e.at<=ms(first.purchasedAt)&&ms(first.purchasedAt)-e.at<=DAY)
+      .sort((a,b)=>b.at-a.at||a.id.localeCompare(b.id));
+    if(!candidates.length){unassigned++;continue;}
+    const g=group(candidates[0]);
+    if(first.isFreeTrial)g.trials.add(u.id);
+    const firstCharge=first.priceMilliunits>0?first:first.isFreeTrial&&first.originalTransactionId&&first.expiresAt?
+      (byUser.get(u.id)||[]).filter(o=>o.originalTransactionId===first.originalTransactionId&&o.priceMilliunits>0&&ms(o.purchasedAt)>=ms(first.expiresAt))
+        .sort((a,b)=>ms(a.purchasedAt)-ms(b.purchasedAt))[0]:null;
+    if(firstCharge){
+      g.payers.add(u.id);
+      if(firstCharge.currency===currency)g.net+=firstCharge.priceMilliunits-(firstCharge.refundedMilliunits||0);
+    }
+  }
+  return {currency,unassigned,missing:users.filter(u=>!(u.paywallEvents||[]).length).length,
+    incomplete:users.filter(u=>u.paywallHistoryTruncated).length,
+    rows:[...groups.values()].map(g=>({...g,viewers:g.viewers.size,clickers:g.clickers.size,payers:g.payers.size,trials:g.trials.size,
+      clickRate:rate(g.clickers.size,g.viewers.size),paidRate:rate(g.payers.size,g.viewers.size)}))
+      .sort((a,b)=>b.revision-a.revision||a.tier.localeCompare(b.tier)||a.template.localeCompare(b.template))};
 }
 
 // Connection state must distinguish a scheduled job from fresh, successful data.
