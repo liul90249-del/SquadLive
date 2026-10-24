@@ -207,10 +207,10 @@ export function buildGrowthReport(data, filters={}) {
       return values.length?Math.min(...values):null;
     };
     const d0Subs=members.filter(u=>{const t=firstSub(u);return t!==null&&t>=ms(u.acquiredAt)&&t>=start&&t<end;});
-    const amount=(days=null, selected=members)=>{
+    const amount=(days=null, selected=members, subscriptionOnly=false)=>{
       const until=days===null?now:Math.min(now,start+days*DAY-1);
-      const orders=selected.flatMap(u=>paidOrders(u).filter(o=>o.currency===currency&&ms(o.purchasedAt)>=ms(u.acquiredAt)&&ms(o.purchasedAt)<=until));
-      const incomplete=selected.some(u=>(orderMap.get(u.id)||[]).some(o=>ms(o.purchasedAt)>=ms(u.acquiredAt)&&ms(o.purchasedAt)<=until&&(o.priceMilliunits==null||!o.currency)));
+      const orders=selected.flatMap(u=>paidOrders(u).filter(o=>(!subscriptionOnly||o.kind==='subscription')&&o.currency===currency&&ms(o.purchasedAt)>=ms(u.acquiredAt)&&ms(o.purchasedAt)<=until));
+      const incomplete=selected.some(u=>(orderMap.get(u.id)||[]).some(o=>(!subscriptionOnly||o.kind==='subscription')&&ms(o.purchasedAt)>=ms(u.acquiredAt)&&ms(o.purchasedAt)<=until&&(o.priceMilliunits==null||!o.currency)));
       const gross=orders.reduce((n,o)=>n+o.priceMilliunits,0),refunds=orders.reduce((n,o)=>n+(o.refundedMilliunits||0),0);
       return {gross:incomplete?null:gross,refunds:incomplete?null:refunds,net:incomplete?null:gross-refunds};
     };
@@ -228,7 +228,7 @@ export function buildGrowthReport(data, filters={}) {
       grossD0:day0.gross,refundD0:day0.refunds,netD0:day0.net,
       gross:current.gross,refund:current.refunds,net:current.net,
       observed:now<end,unknownSource:members.filter(u=>!u.attribution||u.attribution.channel==='unknown').length,
-      adRevenue:null,totalRevenue:null,totalProfit:null,forecastLtv:null,forecastRoas:null};
+      adRevenue:null,adRevenueApplicable:data.product!=='cleaner',totalRevenue:data.product==='cleaner'?amount(null,members,true).net:null,totalProfit:null,forecastLtv:null,forecastRoas:null};
     const tracked=members.filter(u=>u.trackedFrom&&ms(u.trackedFrom)<=end);
     record.cleanupD0=tracked.length===members.length?members.filter(u=>Number.isFinite(u.events?.cleanup_completed)&&u.events.cleanup_completed>=ms(u.acquiredAt)&&u.events.cleanup_completed<end).length:null;
     const cancelEvents=data.subscriptions?.cancellationEvents;
@@ -269,8 +269,8 @@ export function buildGrowthReport(data, filters={}) {
     return growthRates(record);
   });
   // Totals recompute ratios from matching summed numerators and denominators.
-  const additive=['spend','impressions','clicks','installs','users','subD0','freeD0','paidD0','cleanupD0','grossD0','refundD0','netD0','gross','refund','net','endedTrials','convertedTrials','cancelD0','cancelD3','cancelD7','cancelToDate','paidToDate','renewedToDate','unknownSource','matchedUsers','matchedNet'];
-  const total={date:'合计',channel:'all',observed:rows.some(r=>r.observed)};
+  const additive=['spend','impressions','clicks','installs','users','subD0','freeD0','paidD0','cleanupD0','grossD0','refundD0','netD0','gross','refund','net','endedTrials','convertedTrials','cancelD0','cancelD3','cancelD7','cancelToDate','paidToDate','renewedToDate','unknownSource','matchedUsers','matchedNet','totalRevenue'];
+  const total={date:'合计',channel:'all',adRevenueApplicable:data.product!=='cleaner',observed:rows.some(r=>r.observed)};
   for(const k of additive)total[k]=rows.length&&rows.every(r=>r[k]!==null)?rows.reduce((n,r)=>n+r[k],0):null;
   for(const d of [0,3,7,8,14,30]){
     total['netD'+d]=rows.length&&rows.every(r=>r['netD'+d]!==null)?rows.reduce((n,r)=>n+r['netD'+d],0):null;
