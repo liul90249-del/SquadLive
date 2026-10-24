@@ -16,12 +16,12 @@ const help={
   net:'所选获客批次已关联用户的苹果验证扣款，减去目前已知退款，按所选币种计算；包含后续续费。不含苹果佣金与税费调整，不是到账或利润。未知归因和未绑定订单可能使渠道收入不完整。',
   ctr:'广告点击数 ÷ 展示数，来自导入报表。分母为 0 或未导入时显示 —。',
   cpi:'广告花费 ÷ 广告报表中的归因安装数。与后台首次打开人数是不同来源，不能直接等同。',
-  cpp:'广告花费 ÷ 该获客批次中首次实际扣款的去重用户。包含免费试用结束后扣款，不包含仍在免费期的用户。成本或归因不完整时不计算。',
+  cpp:'广告花费 ÷ 匹配同日、同来源花费记录的首次实际扣款去重用户。包含免费试用结束后扣款，不包含仍在免费期的用户。成本或归因不完整时不计算。',
   trial:'仅使用苹果验证交易中明确标记 FREE_TRIAL 的试用记录，不把所有 0 元订单都当试用。到期转付费分母为已到苹果记录试用结束时间的用户，分子为同一订阅随后真实扣款者。仍在试用期及结束时间未知者不进入分母；不是最终固定转化率。',
-  roas:'同一获客日期和广告来源的 D7/D14/D30 已关联净扣款 ÷ 当日对应广告花费。D7 为获客 UTC 日期起的 7 个自然日，D14/D30 同理。未满观察窗口显示“观察中”。后续退款回补原批次；不同币种不混算，不代表全量广告平台或 SKAN 估算 ROAS。',
+  roas:'同一获客日期和广告来源的 D7/D14/D30 广告匹配净扣款 ÷ 当日对应广告花费。仅计入匹配到花费记录的广告用户；自然量、未知归因和未匹配素材的收入不计入 ROAS。D7 为获客 UTC 日期起的 7 个自然日，D14/D30 同理。未满观察窗口显示“观察中”。后续退款回补原批次；不同币种不混算，不代表全量广告平台或 SKAN 估算 ROAS。',
   funnel:'按同一获客批次统计各阶段到达人数；每人每阶段一次，比例以有新版行为记录的用户为分母。阶段可以跳过或顺序不同，不把相邻数字相减当流失率。老版本未采集与更新后部分记录单列。清理行为是旁路，不要求先清理再订阅。',
   coverage:'广告报表安装数、按安装 ID 去重的新增用户数和 iOS 隐私汇总归因是不同口径。未知不能当自然量，也不能强行映射到某条素材。只有明确映射到后台用户 ID 的首次获客归因才能导入；SKAN 汇总数据不能导入用户明细。',
-  window:'按获客日期回看后续收入，而不是把当天所有收入除以当天广告费。窗口内扣款减去截至当前已知退款。未关联用户的订单不分摊给广告。'
+  window:'按获客日期回看后续收入，而不是把当天所有收入除以当天广告费。净扣款展示该批次所有用户的窗口内扣款减去截至当前已知退款；ROAS 仅使用匹配同日、同来源花费的广告用户收入。因此净扣款总数不一定等于 ROAS 的分子。未关联用户的订单不分摊给广告。'
 };
 const h=(label,key)=>`<span class="market-label">${label}<button type="button" data-market="help" data-help="${key}" aria-label="${label}：投放指标说明" title="${esc(help[key])}">?</button></span>`;
 const growthColumns=[
@@ -121,7 +121,7 @@ export function marketingHTML(data) {
   <div class="market-secondary">${errors.map(e=>`<span>${stageNames[e.key]} <b>${e.count??'未采集'}</b></span>`).join('')}</div>
   <p class="scope-note">行为未采集 ${r.quality.funnelUnknown} 人 · 更新后才开始采集 ${r.quality.funnelPartial} 人。旁路行为不强制先后，首次发生记录不代表当天发生次数。</p></section>
   <section class="insight-surface"><header><h2>渠道与素材表现</h2><button data-market="export">导出当前获客表 CSV</button></header><p class="scope-note">点击来源继续下钻。只导入系列成本时，素材层不会分摊或编造花费。${h('归因范围','coverage')}</p>
-  ${table(['来源',h('花费','spend'),'展示','点击',h('点击率','ctr'),'报表安装',h('安装成本','cpi'),h('新增用户（按安装 ID 去重）','users'),'试用',h('实际付费','paid'),h('首次付费成本','cpp'),h('已关联净扣款','net')],r.groups.map((g,i)=>`<tr><td><button class="market-link" data-market="drill" data-row="${i}">${esc(title(g))}</button></td><td>${g.costRows?money(g.spend):'未导入'}${g.missingCostCohorts?'<small>部分日期缺成本</small>':''}</td><td>${g.costRows?g.impressions:'—'}</td><td>${g.costRows?g.clicks:'—'}</td><td>${pct(g.costRows?ratio(g.clicks,g.impressions):null)}</td><td>${g.costRows?g.installs:'—'}</td><td>${money(g.costRows&&g.installs?g.spend/g.installs:null)}</td><td>${g.users}</td><td>${g.trial}</td><td>${g.paid}</td><td>${money(g.costRows&&!g.missingCostCohorts&&g.paid?g.spend/g.paid:null)}</td><td>${money(g.net)}</td></tr>`))}</section>
+  ${table(['来源',h('花费','spend'),'展示','点击',h('点击率','ctr'),'报表安装',h('安装成本','cpi'),h('新增用户（按安装 ID 去重）','users'),'试用',h('实际付费','paid'),h('首次付费成本','cpp'),h('已关联净扣款','net')],r.groups.map((g,i)=>`<tr><td><button class="market-link" data-market="drill" data-row="${i}">${esc(title(g))}</button></td><td>${g.costRows?money(g.spend):'未导入'}${g.missingCostCohorts?'<small>部分日期缺成本</small>':''}</td><td>${g.costRows?g.impressions:'—'}</td><td>${g.costRows?g.clicks:'—'}</td><td>${pct(g.costRows?ratio(g.clicks,g.impressions):null)}</td><td>${g.costRows?g.installs:'—'}</td><td>${money(g.costRows&&g.installs?g.spend/g.installs:null)}</td><td>${g.users}</td><td>${g.trial}</td><td>${g.paid}</td><td>${money(g.costRows&&!g.missingCostCohorts&&g.matchedPayers?g.spend/g.matchedPayers:null)}</td><td>${money(g.net)}</td></tr>`))}</section>
   ${growthHTML(data,s)}
   ${data.product==='cleaner'?`<section class="insight-surface paywall-comparison"><header><h2>价格与付费页表现</h2></header>
   <p class="scope-note">按所选获客批次比较页面配置，实际优惠资格由苹果决定。点击列名旁问号查看统计口径。净扣款币种：${esc(r.currency)}。这是行为关联结果，不代表随机实验或因果结论。</p>
