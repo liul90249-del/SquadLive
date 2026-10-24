@@ -19,9 +19,15 @@ export function policyCatalogEntry(subscription,prices,offers,territory,now){
 }
 // Prices alone do not prove a product is offered in a storefront.
 export async function requireAvailableTerritories(subscriptionId, territories, token, fetcher) {
-  const availability = await pages(`/v1/subscriptions/${encodeURIComponent(subscriptionId)}/subscriptionAvailability`, token, fetcher);
+  const availability = await pages(`/v1/subscriptions/${encodeURIComponent(subscriptionId)}/subscriptionAvailability?include=availableTerritories`, token, fetcher);
   const id = availability.data[0]?.id;
   if (!id) throw Object.assign(new Error('苹果未返回商品销售范围，不能发布'), {status:422});
+  // Apple exposes this relationship to Developer keys even when the separate
+  // territory collection requires a broader role. Partial inclusion proves
+  // presence only; never infer absence from the first ten returned territories.
+  const linked = availability.data[0]?.relationships?.availableTerritories?.data || [];
+  const linkedIds = new Set(linked.filter(item => item.type === 'territories').map(item => item.id));
+  if (territories.every(territory => linkedIds.has(territory))) return;
   const available = await pages(`/v1/subscriptionAvailabilities/${encodeURIComponent(id)}/availableTerritories?limit=200`, token, fetcher);
   const ids = new Set(available.data.map(item => item.id));
   if (territories.some(territory => !ids.has(territory))) {
