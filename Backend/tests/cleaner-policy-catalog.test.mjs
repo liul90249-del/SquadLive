@@ -26,3 +26,15 @@ test('missing or failed availability prevents publishing rather than assuming wo
   await assert.rejects(()=>requireAvailableTerritories('weekly',['USA'],'test',async()=>({ok:true,json:async()=>({data:[]})})),/未返回商品销售范围/);
   await assert.rejects(()=>requireAvailableTerritories('weekly',['USA'],'test',async()=>({ok:false,status:503})),/503/);
 });
+test('explicit included storefronts suffice, while partial inclusion never proves another storefront',async()=>{
+  let calls=0;
+  const fetcher=async url=>{
+    calls++;
+    if(!url.pathname.endsWith('/subscriptionAvailability'))return {ok:false,status:403};
+    assert.equal(url.searchParams.get('include'),'availableTerritories');
+    return {ok:true,json:async()=>({data:{id:'weekly',relationships:{availableTerritories:{meta:{paging:{total:175,limit:10}},data:[{type:'territories',id:'USA'}]}}}})};
+  };
+  await requireAvailableTerritories('weekly',['USA'],'test',fetcher);
+  assert.equal(calls,1);
+  await assert.rejects(()=>requireAvailableTerritories('weekly',['CAN'],'test',fetcher),/403/);
+});
