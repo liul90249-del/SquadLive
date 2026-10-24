@@ -46,3 +46,22 @@ test('cost without linked users does not claim zero ROAS or a loss',()=>{
   const r=buildGrowthReport(d).rows[0];
   assert.equal(r.roas,null);assert.equal(r.roi,null);assert.equal(r.contribution,null);
 });
+
+test('cohort cancellations continue beyond D7 and renewals exclude the first trial charge',()=>{
+  const d=fixture();
+  d.subscriptions.cancellationEvents=[{id:'a',at:start+12*DAY},{id:'a',at:start+13*DAY},{id:'b',at:start+50*DAY}];
+  let r=buildGrowthReport(d).rows[0];
+  assert.equal(r.cancelD7,0);assert.equal(r.cancelToDate,1);assert.equal(r.cancelRateToDate,50);
+  assert.equal(r.paidToDate,2);assert.equal(r.paidRateToDate,100);
+  assert.equal(r.renewedToDate,1); // b has two charged transactions on one chain, across currencies.
+  d.orders=d.orders.filter(o=>o.transactionId!=='other-currency');
+  assert.equal(buildGrowthReport(d).rows[0].renewedToDate,0);
+  d.orders.push({...d.orders[1],transactionId:'renewal',purchasedAt:iso(14.1)});
+  d.orders.push({...d.orders[1]}); // duplicate transaction does not add a renewal
+  r=buildGrowthReport(d).rows[0];assert.equal(r.renewedToDate,1);
+  const total=buildGrowthReport(d).total;
+  assert.equal(total.cancelToDate,1);assert.equal(total.cancelRateToDate,50);assert.equal(total.paidToDate,2);
+  d.subscriptions.trackingStartedAt=start+DAY;
+  assert.equal(buildGrowthReport(d).rows[0].cancelToDate,null);
+  assert.equal(buildGrowthReport(d).total.cancelRateToDate,null);
+});

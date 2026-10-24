@@ -39,12 +39,17 @@ const growthColumns=[
   ['freeD0','D0 免费试用人数','number','行为与订阅','D0 首次订阅中，苹果明确标记 FREE_TRIAL 的去重人数。低价首期不算免费试用。'],
   ['paidD0','D0 首次扣款人数','number','扣款与退款','获客当天首次发生大于 0 的已验证扣款人数；包含低价首期，排除免费试用。'],
   ['paidRateD0','D0 付费转化率','percent','扣款与退款','D0 首次扣款人数 ÷ 本批新增用户。'],
+  ['paidToDate','累计实际付费人数','number','扣款与退款','本批用户截至当前首次观察到真实扣款的人数，包含低价首期；不含免费试用，退款不撤销付费身份。跨币种去重。'],
+  ['paidRateToDate','累计付费转化率','percent','扣款与退款','累计实际付费人数 ÷ 本批新增用户；随试用结束后的扣款继续更新。'],
+  ['renewedToDate','累计续费人数','number','扣款与退款','同一苹果订阅链观察到至少两笔不同的实际扣款交易的人数。免费试用后的第一笔扣款不是续费；另一订阅链的购买不算，退款不撤销历史续费行为。旧交易未接入时可能少计。'],
   ['endedTrials','已到期试用人数','number','扣款与退款','本批用户中，苹果明确免费试用且已到实际结束时间的人数。未知结束时间、仍在试用者不计入。'],
   ['convertedTrials','试用后扣款人数','number','扣款与退款','已到期试用用户中，同一订阅链在试用结束后发生已验证扣款的人数。'],
   ['trialPaidRate','到期试用转付费率','percent','扣款与退款','试用后扣款人数 ÷ 已到期试用人数。不是所有订阅人数的付费比例；不用固定七天推断到期。'],
   ...[0,3,7].flatMap(d=>[
     ['cancelD'+d,`D${d} 关闭续订人数`,'number','退订',`D0 首次订阅用户中，从订阅起到获客日 D${d} 结束曾关闭自动续订的人数；恢复后仍保留历史关闭记录。窗口未结束或历史通知不完整时显示 —。不是退款或会员到期人数。`],
     ['cancelRateD'+d,`D${d} 关闭续订率`,'percent','退订',`D${d} 关闭续订人数 ÷ D0 首次订阅人数；仅统计已记录的苹果通知，无法用当前续订状态还原历史取消日期。`]]),
+  ['cancelToDate','累计关闭续订人数','number','退订','D0 首次订阅用户截至当前曾关闭自动续订的去重人数，不限于七天；之后恢复续订仍保留历史记录。通知历史不完整显示 —。'],
+  ['cancelRateToDate','累计关闭续订率','percent','退订','累计关闭续订人数 ÷ D0 首次订阅人数。历史获客日期持续回补，不是当天发生的退订人数，也不是当前关闭续订的比例。'],
   ['grossD0','D0 订阅扣款','money','扣款与退款','本批用户获客当天的已验证实际扣款，含当日续费；按所选币种统计，不含免费试用。'],
   ['refundD0','D0 订单后续退款','money','扣款与退款','D0 扣款订单截至当前已知退款，退款发生后回补获客日。不是退款发生当天的现金流。'],
   ['netD0','D0 净扣款','money','扣款与退款','D0 实际扣款减去这些订单截至当前已知退款。未扣苹果佣金与税费。'],
@@ -61,7 +66,7 @@ const growthColumns=[
   ['forecastRoas','一年预估 ROAS','percent','待接入','需经过验证的一年收益预测和同批次成本。目前未建立模型，显示 —；不照搬竞品预测数字。']
 ];
 for(const [key,,,group,description] of growthColumns)help['growth-'+key]=`${group}：${description}`;
-const growthPresets={overview:['spend','users','cpi','subD0','subRateD0','paidD0','trialPaidRate','cancelRateD7','net','roas','ltv'],
+const growthPresets={overview:['spend','users','cpi','subD0','subRateD0','paidToDate','trialPaidRate','cancelRateToDate','net','roas','ltv'],
   acquisition:growthColumns.filter(c=>c[3]==='获客').map(c=>c[0]),subscription:growthColumns.filter(c=>c[3]==='行为与订阅').map(c=>c[0]),
   payment:growthColumns.filter(c=>c[3]==='扣款与退款').map(c=>c[0]),cancellation:growthColumns.filter(c=>c[3]==='退订').map(c=>c[0]),
   returns:growthColumns.filter(c=>c[3]==='回本').map(c=>c[0]),pending:growthColumns.filter(c=>c[3]==='待接入').map(c=>c[0]),all:growthColumns.map(c=>c[0])};
