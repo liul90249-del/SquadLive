@@ -96,3 +96,21 @@ test('connection health prioritizes failures and stale data over the enabled fla
   assert.match(marketingSyncHealth({...connected,lastSuccess:null},now).label,/首次同步/);
   assert.match(marketingSyncHealth(null,now).label,/配置/);
 });
+
+test('campaign and date returns exclude unmatched creatives, organic and unknown income',()=>{
+  const data=fixture();
+  data.users.push(user('unmatched',{attribution:{...source,creativeId:'a9'}}),user('organic',{attribution:{channel:'organic'}}));
+  data.orders.push(order('unmatched-charge','unmatched',1,100000),order('organic-charge','organic',1,200000));
+  const campaign=buildMarketingReport(data,{level:'campaign'}).cohorts.find(c=>c.channel==='meta');
+  assert.equal(campaign.windows[7].net,120000);
+  assert.equal(campaign.windows[7].matchedNet,20000);
+  assert.equal(campaign.windows[7].roas,200);
+  assert.equal(campaign.firstPayers,2);
+  assert.equal(campaign.matchedPayers,1);
+  assert.equal(campaign.costPerPayer,10000);
+  const dated=buildMarketingReport(data,{level:'date'}).cohorts[0];
+  assert.equal(dated.windows[7].net,329000);
+  assert.equal(dated.windows[7].roas,200);
+  data.costs=[cost({currency:'GBP'})];
+  assert.equal(buildMarketingReport(data,{level:'date'}).cohorts[0].windows[7].roas,null);
+});

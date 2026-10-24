@@ -74,16 +74,19 @@ export function buildMarketingReport(data,{start='',end='',channel='',campaignId
   for(const u of users)bucket(dateOf(ms(u.acquiredAt)),project(u.attribution||{channel:'unknown'})).users.push(u);
   const cohorts=[...cohortMap.values()].map(b=>{
     const totals=b.users.map(u=>amount(u)).reduce((a,b)=>({gross:a.gross+b.gross,refunds:a.refunds+b.refunds}),{gross:0,refunds:0});
+    const matchedUsers=b.users.filter(u=>u.attribution&&!['organic','unknown'].includes(u.attribution.channel)&&costs.some(c=>c.date===b.date&&c.channel===u.attribution.channel&&['campaignId','adGroupId','creativeId'].every(k=>!c[k]||c[k]===u.attribution[k])));
     const maturity=days=>now>=Date.parse(b.date+'T00:00:00Z')+days*DAY;
     const windows=Object.fromEntries([7,14,30].map(days=>{
       const v=b.users.map(u=>amount(u,days)).reduce((n,r)=>n+r.gross-r.refunds,0);
-      return [days,{mature:maturity(days),net:v,roas:maturity(days)&&b.cost?.spendMilliunits>0&&b.users.length>0?v/b.cost.spendMilliunits*100:null}];
+      const matchedNet=matchedUsers.map(u=>amount(u,days)).reduce((n,r)=>n+r.gross-r.refunds,0);
+      return [days,{mature:maturity(days),net:v,matchedNet:matchedUsers.length?matchedNet:null,roas:maturity(days)&&b.cost?.spendMilliunits>0&&matchedUsers.length>0?matchedNet/b.cost.spendMilliunits*100:null}];
     }));
     const firstPayers=b.users.filter(u=>paid(u).length>0&&ms(paid(u)[0].purchasedAt)>=ms(u.acquiredAt)).length;
+    const matchedPayers=matchedUsers.filter(u=>paid(u).length>0&&ms(paid(u)[0].purchasedAt)>=ms(u.acquiredAt)).length;
     const trialUsers=b.users.filter(u=>trials(u).length).length;
-    return {...b,users:undefined,acquiredUsers:b.users.length,firstPayers,trialUsers,...totals,
+    return {...b,users:undefined,acquiredUsers:b.users.length,matchedUsers:matchedUsers.length,matchedPayers,firstPayers,trialUsers,...totals,
       net:totals.gross-totals.refunds,windows,
-      costPerPayer:b.cost&&firstPayers?b.cost.spendMilliunits/firstPayers:null};
+      costPerPayer:b.cost&&matchedPayers?b.cost.spendMilliunits/matchedPayers:null};
   }).sort((a,b)=>b.date.localeCompare(a.date)||a.channel.localeCompare(b.channel));
   const acquisitionTotals={users:users.length,paid:users.filter(u=>paid(u).length>0&&ms(paid(u)[0].purchasedAt)>=ms(u.acquiredAt)).length,trial:users.filter(u=>trials(u).length).length};
   const trialPeople=users.filter(u=>trials(u).length);
@@ -98,8 +101,8 @@ export function buildMarketingReport(data,{start='',end='',channel='',campaignId
   const groups=new Map();
   for(const b of cohorts) {
     const key=sourceKey(b);
-    if(!groups.has(key))groups.set(key,{channel:b.channel,campaignId:b.campaignId,adGroupId:b.adGroupId,creativeId:b.creativeId,campaignName:b.campaignName,adGroupName:b.adGroupName,creativeName:b.creativeName,users:0,trial:0,paid:0,net:0,spend:0,impressions:0,clicks:0,installs:0,costRows:0,missingCostCohorts:0});
-    const g=groups.get(key);g.users+=b.acquiredUsers;g.trial+=b.trialUsers;g.paid+=b.firstPayers;g.net+=b.net;
+    if(!groups.has(key))groups.set(key,{channel:b.channel,campaignId:b.campaignId,adGroupId:b.adGroupId,creativeId:b.creativeId,campaignName:b.campaignName,adGroupName:b.adGroupName,creativeName:b.creativeName,users:0,trial:0,paid:0,matchedPayers:0,net:0,spend:0,impressions:0,clicks:0,installs:0,costRows:0,missingCostCohorts:0});
+    const g=groups.get(key);g.users+=b.acquiredUsers;g.trial+=b.trialUsers;g.paid+=b.firstPayers;g.matchedPayers+=b.matchedPayers;g.net+=b.net;
     if(b.cost){g.costRows++;g.spend+=b.cost.spendMilliunits;g.impressions+=b.cost.impressions;g.clicks+=b.cost.clicks;g.installs+=b.cost.installs;}
     else if(b.channel!=='organic')g.missingCostCohorts++;
   }
