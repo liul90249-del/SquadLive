@@ -37,6 +37,9 @@ test('read-only ASC request interprets current price and caches the result', asy
   const reader = createCleanerCatalogReader({keyId:'TESTKEY',issuerId:'issuer',privateKey:privateKey.export({format:'pem',type:'pkcs8'}),
     subscriptionId:'123',now:()=>now,fetcher:async(url,options)=>{
       calls.push(String(url));
+      if (url.pathname.endsWith('/introductoryOffers')) {
+        assert.equal(url.searchParams.get('include'), 'territory', 'Apple omits territory relationships unless explicitly included');
+      }
       assert.match(options.headers.Authorization,/^Bearer [^.]+\.[^.]+\.[^.]+$/);
       const body = url.pathname.endsWith('/prices') ? prices
         : url.pathname.endsWith('/introductoryOffers') ? {data:[offer]} : {data:subscription};
