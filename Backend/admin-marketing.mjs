@@ -61,8 +61,8 @@ const growthColumns=[
   ['contribution','投放收支差','money','回本','广告关联净扣款 − 广告花费。未扣苹果佣金、税费和其他成本，不能称为净利润。'],
   ['roi','投放 ROI（扣费前）','percent','回本','（广告关联净扣款 − 广告花费）÷ 广告花费。与 ROAS 不同，未扣苹果佣金、税费和其他成本。'],
   ...[0,3,7,8,14,30].map(d=>['roasD'+d,`D${d} ROAS`,'percent','回本',`获客日到 D${d} 结束的广告关联净扣款 ÷ 同批广告花费。自然流量和未知归因不计入。D0 为获客当日，D7 含 D0–D7 共 8 个自然日；与上方“7 日窗口”不同。窗口未结束显示 —，退款会回补。`]),
-  ['adRevenue','广告变现收入','money','待接入','这是产品内展示广告带来的收入，不是 AppLovin 买量花费。目前没有接入广告变现收入，显示 —。'],
-  ['totalRevenue','总收入','money','待接入','需明确并接入订阅净收入、广告变现收入及统一币种后计算，目前不以订阅扣款替代。'],
+  ['adRevenue','广告变现收入','money','待接入','这是产品内展示广告带来的收入，不是 AppLovin 买量花费。Smart Cleaner 仅靠订阅收入，此项不适用；其他产品未接入时显示 —。'],
+  ['totalRevenue','总收入（扣费前）','money','扣款与退款','Smart Cleaner 仅有订阅收入：所选获客批次、所选币种的已验证订阅扣款减已知退款，后续续费与退款持续回补。未扣苹果佣金、税费，不是到账金额；不含未关联用户的订单。其他产品收入来源未核对时显示 —。'],
   ['totalProfit','总利润','money','待接入','需扣除苹果佣金、税费、投放和其他成本。当前数据不足，显示 —。'],
   ['forecastLtv','一年预估 LTV','money','待接入','需按续费周期、流失、退款、国家和价格分组建立并验证预测模型。当前未建立，显示 —，不把当前 LTV 乘 365。'],
   ['forecastRoas','一年预估 ROAS','percent','待接入','需经过验证的一年收益预测和同批次成本。目前未建立模型，显示 —；不照搬竞品预测数字。']
@@ -75,7 +75,7 @@ const growthPresets={overview:['spend','users','cpi','subD0','subRateD0','paidTo
 function growthSelection(s){const keys=growthPresets[s.growthGroup]||growthPresets.overview;return growthColumns.filter(c=>keys.includes(c[0]));}
 function growthHTML(data,s){
   const g=buildGrowthReport(data,s),columns=growthSelection(s);
-  const cell=(row,[key,,type])=>{const v=row[key];return v==null?'—':type==='money'?money(v):type==='percent'?pct(v):String(v);};
+  const cell=(row,[key,,type])=>{const v=row[key];if(key==='adRevenue'&&row.adRevenueApplicable===false)return '不适用';return v==null?'—':type==='money'?money(v):type==='percent'?pct(v):String(v);};
   const rowHTML=row=>`<tr><td><b>${esc(row.date)}</b>${row.channel!=='all'?`<small>${esc(title(row))}</small>`:''}${row.observed?'<small>当日未结束</small>':''}</td>${columns.map(col=>`<td>${cell(row,col)}</td>`).join('')}</tr>`;
   return `<section class="insight-surface growth-report"><header><h2>增长日报</h2><button data-market="export-growth">导出当前分组 CSV</button></header>
   <div class="growth-controls"><label>排列维度<select data-growth="dimension">${options([['date','日期汇总'],['source','日期与当前来源层级']],s.growthDimension||'date')}</select></label><label>指标分组<select data-growth="group">${options([['overview','常用概览'],['acquisition','获客'],['subscription','行为与订阅'],['payment','扣款与退款'],['cancellation','退订'],['returns','回本'],['pending','待接入与预测'],['all','全部指标']],s.growthGroup||'overview')}</select></label><span>${esc(g.currency)} · UTC · 最新日期在前</span></div>
@@ -182,7 +182,7 @@ document.addEventListener('click',async event=>{
   if(action==='export-growth'){
     const g=buildGrowthReport(data,s),cols=growthSelection(s);
     const quote=v=>'"'+String(v??'').replace(/^[=+\-@\t\r]/,"'"+'$&').replaceAll('"','""')+'"';
-    const rows=[['UTC获客日','来源','币种',...cols.map(c=>c[1]),'当日状态'],...[g.total,...g.rows].map(row=>[row.date,title(row),g.currency,...cols.map(([key,,type])=>row[key]==null?'':type==='money'?row[key]/1000:row[key]),row.observed?'当日未结束':'已结束'])];
+    const rows=[['UTC获客日','来源','币种',...cols.map(c=>c[1]),'当日状态'],...[g.total,...g.rows].map(row=>[row.date,title(row),g.currency,...cols.map(([key,,type])=>key==='adRevenue'&&row.adRevenueApplicable===false?'不适用':row[key]==null?'':type==='money'?row[key]/1000:row[key]),row.observed?'当日未结束':'已结束'])];
     download(`${product}-growth-${s.growthGroup||'overview'}.csv`,rows.map(r=>r.map(quote).join(',')).join('\r\n'));return;
   }
   if(action==='export'){

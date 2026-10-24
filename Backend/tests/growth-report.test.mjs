@@ -83,3 +83,21 @@ test('date-level ad returns exclude organic, unknown and unmatched campaign reve
   assert.equal(buildGrowthReport(d).rows[0].matchedNet,108990);
   assert.equal(buildGrowthReport(d).rows[0].spend,30000);
 });
+
+test('cleaner subscription-only revenue excludes other products and preserves unknown amounts',()=>{
+  const d=fixture();
+  d.orders.push({accountId:'a',transactionId:'non-sub',kind:'consumable',purchasedAt:iso(2),priceMilliunits:5000,currency:'USD'});
+  let g=buildGrowthReport(d);
+  assert.equal(g.rows[0].adRevenueApplicable,false);
+  assert.equal(g.total.adRevenueApplicable,false);
+  assert.equal(g.rows[0].totalRevenue,8990);
+  assert.equal(g.total.totalRevenue,8990);
+  assert.equal(g.rows[0].net,13990);
+  assert.equal(g.rows[0].totalProfit,null);
+  d.product='dailyme';g=buildGrowthReport(d);
+  assert.equal(g.rows[0].totalRevenue,null);
+  assert.equal(g.total.totalRevenue,null);
+  assert.equal(g.rows[0].adRevenueApplicable,true);
+  d.product='cleaner';d.orders.push({accountId:'a',kind:'subscription',purchasedAt:iso(3),priceMilliunits:null,currency:'USD'});
+  g=buildGrowthReport(d);assert.equal(g.rows[0].totalRevenue,null);assert.equal(g.total.totalRevenue,null);
+});
