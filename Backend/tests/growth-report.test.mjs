@@ -65,3 +65,21 @@ test('cohort cancellations continue beyond D7 and renewals exclude the first tri
   assert.equal(buildGrowthReport(d).rows[0].cancelToDate,null);
   assert.equal(buildGrowthReport(d).total.cancelRateToDate,null);
 });
+
+test('date-level ad returns exclude organic, unknown and unmatched campaign revenue without dropping it from LTV',()=>{
+  const d=fixture();
+  for(const [id,attribution] of [['organic',{channel:'organic'}],['unknown',null],['other',{channel:'applovin',campaignId:'unmatched'}]]){
+    d.users.push({...d.users[0],id,attribution});
+    d.orders.push({accountId:id,transactionId:id,kind:'subscription',purchasedAt:iso(.3),priceMilliunits:100000,currency:'USD'});
+  }
+  const {rows:[r],total}=buildGrowthReport(d);
+  assert.equal(r.net,308990);assert.equal(r.ltv,61798);
+  assert.equal(r.matchedUsers,2);assert.equal(r.matchedNet,8990);
+  assert.equal(r.roas,89.9);assert.equal(r.roasD7,89.9);assert.equal(r.contribution,-1010);assert.equal(r.roi,-10.100000000000001);
+  assert.equal(total.roas,r.roas);assert.equal(total.roasD7,r.roasD7);
+  d.costs.push({...d.costs[0],campaignId:'unmatched',currency:'GBP'});
+  assert.equal(buildGrowthReport(d).rows[0].matchedNet,8990);
+  d.costs.push({...d.costs[0],campaignId:'unmatched',spendMilliunits:20000});
+  assert.equal(buildGrowthReport(d).rows[0].matchedNet,108990);
+  assert.equal(buildGrowthReport(d).rows[0].spend,30000);
+});
