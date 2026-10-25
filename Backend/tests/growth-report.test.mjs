@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildGrowthReport,DAY} from '../marketing-core.mjs';
+import {buildGrowthReport,buildMarketingReport,DAY} from '../marketing-core.mjs';
 const start=Date.parse('2026-10-01T00:00:00Z');
 const iso=n=>new Date(start+n*DAY).toISOString();
 const fixture=()=>({now:start+40*DAY,product:'cleaner',imports:[],
@@ -117,4 +117,23 @@ test('30 percent estimates use subscription net refunds and preserve missing inp
   d.product='dailyme';g=buildGrowthReport(d);assert.equal(g.total.estimatedProceeds,null);
   d.product='cleaner';d.orders.push({accountId:'a',kind:'subscription',purchasedAt:iso(3),priceMilliunits:null,currency:'USD'});
   g=buildGrowthReport(d);assert.equal(g.total.estimatedAppleFee,null);assert.equal(g.total.estimatedProfit,null);
+});
+
+
+test('two-year cohorts retain later renewals and refund backfill with exact maturity boundaries',()=>{
+  const d=fixture();d.now=start+730*DAY;
+  d.orders.push({accountId:'a',transactionId:'year-renewal',originalTransactionId:'a',kind:'subscription',purchasedAt:iso(400),priceMilliunits:10000,currency:'USD',refundedMilliunits:1000});
+  d.orders.push({accountId:'a',transactionId:'last-day',originalTransactionId:'a',kind:'subscription',purchasedAt:iso(729.5),priceMilliunits:10000,currency:'USD'});
+  let c=buildMarketingReport(d,{start:'2026-10-01',end:'2026-10-01'}).cohorts[0];
+  assert.equal(c.windows[365].net,8990);
+  assert.equal(c.windows[730].net,27990);
+  assert.equal(c.windows[730].mature,true);
+  assert.equal(c.windows[730].roas,279.9);
+  d.now=start+730*DAY-1;
+  c=buildMarketingReport(d).cohorts[0];assert.equal(c.windows[730].mature,false);assert.equal(c.windows[730].roas,null);
+  d.now=start+731*DAY;
+  const g=buildGrowthReport(d,{start:'2026-10-01',end:'2026-10-01'});
+  assert.equal(g.rows[0].roasD365,89.9);assert.equal(g.rows[0].roasD730,279.9);assert.equal(g.total.roasD730,279.9);
+  d.orders.at(-1).refundedMilliunits=10000;
+  assert.equal(buildGrowthReport(d).rows[0].roasD730,179.9);
 });

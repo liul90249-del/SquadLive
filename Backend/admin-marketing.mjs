@@ -1,4 +1,4 @@
-import {buildMarketingReport,buildGrowthReport,dateOf,DAY,marketingSyncHealth} from './marketing-core.mjs';
+import {buildMarketingReport,buildGrowthReport,dateOf,DAY,RETURN_WINDOWS,GROWTH_DAYS,marketingSyncHealth} from './marketing-core.mjs';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>v===null||v===undefined?'—':(v/1000).toLocaleString('zh-CN',{maximumFractionDigits:2,minimumFractionDigits:2});
 const pct=v=>v===null||v===undefined?'—':v.toFixed(1)+'%';
@@ -18,7 +18,7 @@ const help={
   cpi:'广告花费 ÷ 广告报表中的归因安装数。与后台首次打开人数是不同来源，不能直接等同。',
   cpp:'广告花费 ÷ 匹配同日、同来源花费记录的首次实际扣款去重用户。包含免费试用结束后扣款，不包含仍在免费期的用户。成本或归因不完整时不计算。',
   trial:'仅使用苹果验证交易中明确标记 FREE_TRIAL 的试用记录，不把所有 0 元订单都当试用。到期转付费分母为已到苹果记录试用结束时间的用户，分子为同一订阅随后真实扣款者。仍在试用期及结束时间未知者不进入分母；不是最终固定转化率。',
-  roas:'同一获客日期和广告来源的 D7/D14/D30 广告匹配净扣款 ÷ 当日对应广告花费。仅计入匹配到花费记录的广告用户；自然量、未知归因和未匹配素材的收入不计入 ROAS。D7 为获客 UTC 日期起的 7 个自然日，D14/D30 同理。未满观察窗口显示“观察中”。后续退款回补原批次；不同币种不混算，不代表全量广告平台或 SKAN 估算 ROAS。',
+  roas:'同一获客日期和广告来源的 7 至 730 日广告匹配净扣款 ÷ 当日对应广告花费。仅计入匹配到花费记录的广告用户；自然量、未知归因和未匹配素材的收入不计入 ROAS。按获客 UTC 日期起计算自然日；365 日约 1 年、730 日约 2 年。未满观察窗口显示“观察中”。后续退款回补原批次；不同币种不混算，不代表全量广告平台或 SKAN 估算 ROAS。',
   funnel:'按同一获客批次统计各阶段到达人数；每人每阶段一次，比例以有新版行为记录的用户为分母。阶段可以跳过或顺序不同，不把相邻数字相减当流失率。老版本未采集与更新后部分记录单列。清理行为是旁路，不要求先清理再订阅。',
   coverage:'广告报表安装数、按安装 ID 去重的新增用户数和 iOS 隐私汇总归因是不同口径。未知不能当自然量，也不能强行映射到某条素材。只有明确映射到后台用户 ID 的首次获客归因才能导入；SKAN 汇总数据不能导入用户明细。',
   window:'按获客日期回看后续收入，而不是把当天所有收入除以当天广告费。净扣款展示该批次所有用户的窗口内扣款减去截至当前已知退款；ROAS 仅使用匹配同日、同来源花费的广告用户收入。因此净扣款总数不一定等于 ROAS 的分子。未关联用户的订单不分摊给广告。'
@@ -62,7 +62,7 @@ const growthColumns=[
   ['roas','当前 ROAS','percent','回本','广告关联净扣款 ÷ 广告花费。仅含匹配同批花费的广告用户；自然流量和未知归因排除。'],
   ['contribution','投放收支差','money','回本','广告关联净扣款 − 广告花费。未扣苹果佣金、税费和其他成本，不能称为净利润。'],
   ['roi','投放 ROI（扣费前）','percent','回本','（广告关联净扣款 − 广告花费）÷ 广告花费。与 ROAS 不同，未扣苹果佣金、税费和其他成本。'],
-  ...[0,3,7,8,14,30].map(d=>['roasD'+d,`D${d} ROAS`,'percent','回本',`获客日到 D${d} 结束的广告关联净扣款 ÷ 同批广告花费。自然流量和未知归因不计入。D0 为获客当日，D7 含 D0–D7 共 8 个自然日；与上方“7 日窗口”不同。窗口未结束显示 —，退款会回补。`]),
+  ...GROWTH_DAYS.map(d=>['roasD'+d,`D${d} ROAS`,'percent','回本',`获客日到 D${d} 结束的广告关联净扣款 ÷ 同批广告花费。自然流量和未知归因不计入。D0 为获客当日，D7 含 D0–D7 共 8 个自然日；与上方“7 日窗口”不同。窗口未结束显示 —，退款会回补。`]),
   ['adRevenue','广告变现收入','money','待接入','这是产品内展示广告带来的收入，不是 AppLovin 买量花费。Smart Cleaner 仅靠订阅收入，此项不适用；其他产品未接入时显示 —。'],
   ['totalRevenue','总收入（扣费前）','money','扣款与退款','Smart Cleaner 仅有订阅收入：所选获客批次、所选币种的已验证订阅扣款减已知退款，后续续费与退款持续回补。未扣苹果佣金、税费，不是到账金额；不含未关联用户的订单。其他产品收入来源未核对时显示 —。'],
   ['estimatedAppleFee','预估苹果扣费（30%）','money','回本','仅 Smart Cleaner：该获客批次订阅扣款减已知退款后，按 30% 估算苹果扣费；按所选币种统计。这是运营假设，不是苹果实际账单。'],
@@ -118,6 +118,7 @@ export function marketingHTML(data) {
   return `<div class="marketing-workspace" data-market-product="${esc(data.product)}">
   <section class="insight-surface market-intro"><header><div><h2>广告投放</h2><p>从获客到真实扣款，查看每一批用户的回本进度</p></div><span class="status-badge">${data.costs.length?'已有成本记录':connection?.lastSuccess?'已同步 · 暂无成本记录':connection?.configured?'已连接 · 等待同步':'成本未接入'}</span></header>
   <p class="scope-note">全部日期为 UTC · 北京时间 08:00 结束上一统计日 · 金额按原币种分开 · 当前渠道收益仅覆盖已关联用户，非全量平台归因估算。</p>
+  <div class="growth-controls"><span>获客日期快捷选择</span>${[30,90,180,365,730].map(n=>`<button type="button" data-market="date-range" data-days="${n}">近 ${n} 天</button>`).join('')}</div>
   <form id="marketingFilters" class="insight-filters"><label>获客开始<input type="date" name="start" value="${s.start}" required></label><label>获客结束<input type="date" name="end" value="${s.end}" required></label><label>渠道<select name="channel">${options([['','全部渠道'],...channels.map(c=>[c,names[c]||c])],s.channel)}</select></label><label>查看层级<select name="level">${options([['channel','渠道'],['campaign','广告系列'],['adGroup','广告组'],['creative','广告素材']],s.level)}</select></label><label>收入与成本币种<select name="currency">${options(currencies.map(c=>[c,c]),s.currency)}</select></label><button type="submit" class="primary">查看</button><button type="button" data-market="reset">重置</button></form>
   ${s.campaignId?`<p class="market-breadcrumb">当前路径：${esc(s.channel)} / ${esc(s.campaignId)} ${esc(s.adGroupId)} ${esc(s.creativeId)} <button data-market="clear-path">返回全部层级</button></p>`:''}</section>
   ${data.product==='cleaner'?`<section class="insight-surface market-connection"><details ${s.connectionOpen?'open':''}><summary>AppLovin 数据连接<span class="status-badge" ${syncHealth.warning?'role="status"':''}>${esc(syncHealth.label)}</span></summary><div><p>广告花费 → 展示 → 点击 → 安装，由 AppLovin 广告主报表读取。每次更新最近 7 个完整 UTC 日，启用后北京时间 08:00 自动核对；失败会保留原数据并重试。</p><p class="scope-note">AppLovin 素材组显示在“广告组”层；单条素材成本未接入时不分摊。用户归因仍需 Singular 等来源与后台用户 ID 关联，广告安装数不会直接变成后台用户数。</p><p>${connection?.lastSuccess?'最近成功：'+esc(beijingTime(connection.lastSuccess))+'（北京时间）'+' · '+connection.rows+' 行 · 报表日期 '+esc(connection.start||'—')+' 至 '+esc(connection.end||'—')+'（UTC）':'尚未完成真实账户同步'}${connection?.currency?' · '+esc(connection.currency):''}</p>${connection?.error?`<p role="alert">${esc(connection.error)}</p>`:''}<button data-market="sync-applovin" ${!connection?.configured||document.body.dataset.demo?'disabled':''}>立即核对 AppLovin 成本</button><p role="status">${esc(s.syncMessage||'')}</p></div></details></section>`:''}
@@ -134,8 +135,8 @@ export function marketingHTML(data) {
   <p class="scope-note">按所选获客批次比较页面配置，实际优惠资格由苹果决定。点击列名旁问号查看统计口径。净扣款币种：${esc(r.currency)}。这是行为关联结果，不代表随机实验或因果结论。</p>
   <p class="scope-note">无方案记录 ${r.paywall.missing} 人 · 历史不完整 ${r.paywall.incomplete} 人 · 无法关联方案的首次订阅 ${r.paywall.unassigned} 人。旧版未上报的数据不会推断补齐。</p>
   ${table(['配置版本','页面方案','模板 / 展示位置',h('看到页面人数','paywallViewers'),h('点击人数','paywallClicks'),h('点击率','paywallClicks'),h('免费试用人数','trial'),h('首次扣款人数','paywallPaid'),h('扣款转化率','paywallPaid'),h('首笔净扣款','paywallNet')],r.paywall.rows.map(g=>`<tr><td>${g.revision}</td><td>${g.surface!=='main'?'年订阅特惠':esc(({default:'默认方案',free7:'7 天免费',intro099:'首周 $0.99',intro199:'首周 $1.99',intro399:'首周 $3.99',intro699:'首周 $6.99'})[g.tier]||g.tier)}</td><td>${esc(({storage:'存储展示',compact:'简洁版',comparison:'方案对比',special_annual:'年订阅特惠'})[g.template]||g.template)}<small>${esc(({main:'常规订阅页',policy_surprise:'策略特惠',secret_annual:'快捷入口特惠'})[g.surface]||g.surface)}</small></td><td>${g.viewers}</td><td>${g.clickers}</td><td>${pct(g.clickRate)}</td><td>${g.trials}</td><td>${g.payers}</td><td>${pct(g.paidRate)}</td><td>${money(g.net)}</td></tr>`))}</section>`:''}
-  <section class="insight-surface"><header><h2>获客批次与回本</h2>${h('D7 / D14 / D30','roas')}</header><p class="scope-note">按获客日期从近到远排列。窗口内净扣款随后续退款回补；观察期未结束时不下回本结论。</p>
-  ${table(['获客日 / 来源',h('新增用户（按安装 ID 去重）','users'),'花费',...['D7','D14','D30'].map(x=>h(x+' 净扣款 / ROAS','window'))],r.cohorts.slice(0,s.limit).map(c=>`<tr><td><b>${c.date}</b><small>${esc(title(c))}</small></td><td>${c.acquiredUsers}</td><td>${c.cost?money(c.cost.spendMilliunits):'未导入'}</td>${[7,14,30].map(n=>`<td>${money(c.windows[n].net)}<small>${!c.windows[n].mature?'观察中':c.windows[n].roas===null?'成本或关联用户不足':pct(c.windows[n].roas)}</small></td>`).join('')}</tr>`))}
+  <section class="insight-surface"><header><h2>获客批次与回本</h2>${h('7 日至 730 日（2 年）','roas')}</header><p class="scope-note">按获客日期从近到远排列，支持 7、14、30、60、90、180、365、540、730 日实际回报。窗口内续费持续累计，后续退款回补；观察期未结束时显示观察中。这是实际追踪，不是一年或两年收益预测。</p>
+  ${table(['获客日 / 来源',h('新增用户（按安装 ID 去重）','users'),'花费',...RETURN_WINDOWS.map(n=>h(n+' 日净扣款 / ROAS','window'))],r.cohorts.slice(0,s.limit).map(c=>`<tr><td><b>${c.date}</b><small>${esc(title(c))}</small></td><td>${c.acquiredUsers}</td><td>${c.cost?money(c.cost.spendMilliunits):'未导入'}</td>${RETURN_WINDOWS.map(n=>`<td>${money(c.windows[n].net)}<small>${!c.windows[n].mature?'观察中':c.windows[n].roas===null?'成本或关联用户不足':pct(c.windows[n].roas)}</small></td>`).join('')}</tr>`))}
   <footer class="insight-pagination"><span>已展示 ${Math.min(s.limit,r.cohorts.length)} / ${r.cohorts.length} 批</span>${s.limit<r.cohorts.length?'<button data-market="more">加载更早 30 批</button>':''}</footer></section>
   <div class="market-bottom"><section class="insight-surface"><header><h2>试用转付费</h2>${h('计算方式','trial')}</header><div class="market-trial"><strong>${pct(r.trial.rate)}</strong><p>${r.trial.converted} 人实际扣款 / ${r.trial.ended} 人已结束试用</p><p>试用中 ${r.trial.pending} 人 · 结束时间未知 ${r.trial.unknownEnd} 人</p></div><p class="scope-note">不是“全部订阅转付费率”。历史未保存试用类型的交易不推断为试用；需苹果新交易或重新核对补齐。</p></section>
   <section class="insight-surface"><header><h2>数据完整性</h2>${h('为什么有缺口','coverage')}</header><ul class="market-quality"><li>归因未知 <b>${r.quality.unknownAttribution} 人</b></li><li>未绑定用户的订单（购买日口径） <b>${r.quality.unlinkedOrders} 笔</b></li><li>金额或币种未知 <b>${r.quality.unknownAmounts} 笔</b></li><li>其他币种扣款（未并入当前金额） <b>${r.quality.mixedCurrencyOrders} 笔</b></li><li>收入归因上报待核对 <b>${r.quality.attributionDeliveryIssues} 笔</b></li></ul><p class="scope-note">这里只展示已同步或已导入记录；账户连接状态见上方。缺失成本、归因和行为记录需补齐后再评估渠道效果。</p></section></div>
@@ -174,6 +175,7 @@ document.addEventListener('click',async event=>{
     }catch(e){s.syncMessage=e.message;}
     changed();return;
   }
+  if(action==='date-range'){const days=Number(b.dataset.days);if([30,90,180,365,730].includes(days)){s.start=dateOf(data.now-(days-1)*DAY);s.end=dateOf(data.now);s.limit=30;}}
   if(action==='more')s.limit+=30;
   if(action==='clear-path'){s.channel='';s.campaignId='';s.adGroupId='';s.creativeId='';}
   if(action==='reset'){states.delete(product);}
@@ -194,8 +196,8 @@ document.addEventListener('click',async event=>{
   }
   if(action==='export'){
     const csv=v=>{let t=String(v??'');if(/^[=+\-@\t\r]/.test(t))t="'"+t;return '"'+t.replaceAll('"','""')+'"';};
-    const rows=buildMarketingReport(data,s).cohorts.map(c=>[c.date,title(c),s.currency,c.acquiredUsers,c.cost?c.cost.spendMilliunits/1000:'',...[7,14,30].flatMap(n=>[c.windows[n].net/1000,c.windows[n].mature?'完整':'观察中',c.windows[n].roas??''])]);
-    download(`${product}-acquisition.csv`,[['UTC获客日','来源','币种','新增用户（按安装 ID 去重）','花费','D7净扣款','D7窗口','D7ROAS百分比','D14净扣款','D14窗口','D14ROAS百分比','D30净扣款','D30窗口','D30ROAS百分比'],...rows].map(r=>r.map(csv).join(',')).join('\r\n'));return;
+    const rows=buildMarketingReport(data,s).cohorts.map(c=>[c.date,title(c),s.currency,c.acquiredUsers,c.cost?c.cost.spendMilliunits/1000:'',...RETURN_WINDOWS.flatMap(n=>[c.windows[n].net/1000,c.windows[n].mature?'完整':'观察中',c.windows[n].roas??''])]);
+    download(`${product}-acquisition.csv`,[['UTC获客日','来源','币种','新增用户（按安装 ID 去重）','花费',...RETURN_WINDOWS.flatMap(n=>[n+'日净扣款',n+'日窗口',n+'日ROAS百分比'])],...rows].map(r=>r.map(csv).join(',')).join('\r\n'));return;
   }
   if(action==='save-import'){
     if(document.body.dataset.demo||!s.preview)return;
