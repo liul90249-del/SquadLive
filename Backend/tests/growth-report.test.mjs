@@ -101,3 +101,20 @@ test('cleaner subscription-only revenue excludes other products and preserves un
   d.product='cleaner';d.orders.push({accountId:'a',kind:'subscription',purchasedAt:iso(3),priceMilliunits:null,currency:'USD'});
   g=buildGrowthReport(d);assert.equal(g.rows[0].totalRevenue,null);assert.equal(g.total.totalRevenue,null);
 });
+
+test('30 percent estimates use subscription net refunds and preserve missing inputs',()=>{
+  const d=fixture();
+  d.orders.push({accountId:'a',transactionId:'extra',kind:'consumable',purchasedAt:iso(2),priceMilliunits:5000,currency:'USD'});
+  let g=buildGrowthReport(d);
+  for(const row of [g.rows[0],g.total]){
+    assert.equal(row.estimatedAppleFee,2697);
+    assert.equal(row.estimatedProceeds,6293);
+    assert.equal(row.estimatedProfit,6293-row.spend);
+  }
+  d.costs=[];g=buildGrowthReport(d);
+  assert.equal(g.rows[0].estimatedProceeds,6293);
+  assert.equal(g.rows[0].estimatedProfit,null);
+  d.product='dailyme';g=buildGrowthReport(d);assert.equal(g.total.estimatedProceeds,null);
+  d.product='cleaner';d.orders.push({accountId:'a',kind:'subscription',purchasedAt:iso(3),priceMilliunits:null,currency:'USD'});
+  g=buildGrowthReport(d);assert.equal(g.total.estimatedAppleFee,null);assert.equal(g.total.estimatedProfit,null);
+});

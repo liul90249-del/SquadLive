@@ -65,13 +65,16 @@ const growthColumns=[
   ...[0,3,7,8,14,30].map(d=>['roasD'+d,`D${d} ROAS`,'percent','回本',`获客日到 D${d} 结束的广告关联净扣款 ÷ 同批广告花费。自然流量和未知归因不计入。D0 为获客当日，D7 含 D0–D7 共 8 个自然日；与上方“7 日窗口”不同。窗口未结束显示 —，退款会回补。`]),
   ['adRevenue','广告变现收入','money','待接入','这是产品内展示广告带来的收入，不是 AppLovin 买量花费。Smart Cleaner 仅靠订阅收入，此项不适用；其他产品未接入时显示 —。'],
   ['totalRevenue','总收入（扣费前）','money','扣款与退款','Smart Cleaner 仅有订阅收入：所选获客批次、所选币种的已验证订阅扣款减已知退款，后续续费与退款持续回补。未扣苹果佣金、税费，不是到账金额；不含未关联用户的订单。其他产品收入来源未核对时显示 —。'],
-  ['totalProfit','总利润','money','待接入','需扣除苹果佣金、税费、投放和其他成本。当前数据不足，显示 —。'],
+  ['estimatedAppleFee','预估苹果扣费（30%）','money','回本','仅 Smart Cleaner：该获客批次订阅扣款减已知退款后，按 30% 估算苹果扣费；按所选币种统计。这是运营假设，不是苹果实际账单。'],
+  ['estimatedProceeds','扣费后预估收入','money','回本','订阅净扣款减预估苹果扣费（30%），即约保留 70%；未进一步核算税费，不等于实际到账。按获客批次统计，包含同批自然量及未知归因用户。'],
+  ['estimatedProfit','预估收支差（扣费后）','money','回本','同一获客批次扣费后预估收入减已导入广告花费。含同批自然量及未知归因收入，不是广告 ROAS，也不是净利润。未扣其他运营成本；成本未导入或收入未知时显示 —。'],
+  ['totalProfit','实际总利润','money','待接入','需扣除苹果佣金、税费、投放和其他成本。当前数据不足，显示 —。'],
   ['forecastLtv','一年预估 LTV','money','待接入','需按续费周期、流失、退款、国家和价格分组建立并验证预测模型。当前未建立，显示 —，不把当前 LTV 乘 365。'],
   ['forecastRoas','一年预估 ROAS','percent','待接入','需经过验证的一年收益预测和同批次成本。目前未建立模型，显示 —；不照搬竞品预测数字。']
 ];
 for(const [key,,,group,description] of growthColumns)help['growth-'+key]=`${group}：${description}`;
 const growthPresets={overview:['spend','users','cpi','subD0','subRateD0','paidToDate','trialPaidRate','cancelRateToDate','net','roas','ltv'],
-  testing:['spend','users','cpi','subD0','subRateD0','costPerSubD0','freeD0','paidD0','trialPaidRate','cancelRateD0','cancelRateD3','cancelRateD7','cancelRateToDate','net','ltv','roasD0','roasD3','roasD7','roasD8','roasD14','roasD30','contribution'],
+  testing:['spend','users','cpi','subD0','subRateD0','costPerSubD0','freeD0','paidD0','trialPaidRate','cancelRateD0','cancelRateD3','cancelRateD7','cancelRateToDate','net','ltv','roasD0','roasD3','roasD7','roasD8','roasD14','roasD30','contribution','estimatedAppleFee','estimatedProceeds','estimatedProfit'],
   acquisition:growthColumns.filter(c=>c[3]==='获客').map(c=>c[0]),subscription:growthColumns.filter(c=>c[3]==='行为与订阅').map(c=>c[0]),
   payment:growthColumns.filter(c=>c[3]==='扣款与退款').map(c=>c[0]),cancellation:growthColumns.filter(c=>c[3]==='退订').map(c=>c[0]),
   returns:growthColumns.filter(c=>c[3]==='回本').map(c=>c[0]),pending:growthColumns.filter(c=>c[3]==='待接入').map(c=>c[0]),all:growthColumns.map(c=>c[0])};
