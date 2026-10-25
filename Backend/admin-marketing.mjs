@@ -53,6 +53,8 @@ const growthColumns=[
   ['grossD0','D0 订阅扣款','money','扣款与退款','本批用户获客当天的已验证实际扣款，含当日续费；按所选币种统计，不含免费试用。'],
   ['refundD0','D0 订单后续退款','money','扣款与退款','D0 扣款订单截至当前已知退款，退款发生后回补获客日。不是退款发生当天的现金流。'],
   ['netD0','D0 净扣款','money','扣款与退款','D0 实际扣款减去这些订单截至当前已知退款。未扣苹果佣金与税费。'],
+  ['gross','累计扣款','money','扣款与退款','同一获客批次截至当前的已验证实际扣款，含后续续费，按所选币种统计；免费试用不产生收入。'],
+  ['refund','累计订单退款','money','扣款与退款','同一获客批次扣款订单截至当前的已知退款，持续回补原获客日期；不是当天发生的退款流水。'],
   ['net','累计净扣款','money','回本','该获客批次截至当前的扣款减已知退款，含后续续费，仅所选币种；不代表苹果结算到账金额。'],
   ['ltv','当前 LTV（净扣款）','money','回本','该批次累计净扣款 ÷ 本批新增用户。实际观察值，不是终身收入预测。'],
   ['matchedUsers','已匹配花费的用户','integer','回本','具有明确广告归因，且获客日、渠道及广告层级能匹配所选币种花费的用户。自然流量和未知归因不计入。'],
@@ -69,16 +71,18 @@ const growthColumns=[
 ];
 for(const [key,,,group,description] of growthColumns)help['growth-'+key]=`${group}：${description}`;
 const growthPresets={overview:['spend','users','cpi','subD0','subRateD0','paidToDate','trialPaidRate','cancelRateToDate','net','roas','ltv'],
+  testing:['spend','users','cpi','subD0','subRateD0','costPerSubD0','freeD0','paidD0','trialPaidRate','cancelRateD0','cancelRateD3','cancelRateD7','cancelRateToDate','net','ltv','roasD0','roasD3','roasD7','roasD8','roasD14','roasD30','contribution'],
   acquisition:growthColumns.filter(c=>c[3]==='获客').map(c=>c[0]),subscription:growthColumns.filter(c=>c[3]==='行为与订阅').map(c=>c[0]),
   payment:growthColumns.filter(c=>c[3]==='扣款与退款').map(c=>c[0]),cancellation:growthColumns.filter(c=>c[3]==='退订').map(c=>c[0]),
   returns:growthColumns.filter(c=>c[3]==='回本').map(c=>c[0]),pending:growthColumns.filter(c=>c[3]==='待接入').map(c=>c[0]),all:growthColumns.map(c=>c[0])};
-function growthSelection(s){const keys=growthPresets[s.growthGroup]||growthPresets.overview;return growthColumns.filter(c=>keys.includes(c[0]));}
+function growthSelection(s){const keys=s.growthGroup==='custom'&&Array.isArray(s.growthColumns)?s.growthColumns:(growthPresets[s.growthGroup]||growthPresets.overview);return growthColumns.filter(c=>keys.includes(c[0]));}
 function growthHTML(data,s){
   const g=buildGrowthReport(data,s),columns=growthSelection(s);
   const cell=(row,[key,,type])=>{const v=row[key];if(key==='adRevenue'&&row.adRevenueApplicable===false)return '不适用';return v==null?'—':type==='money'?money(v):type==='percent'?pct(v):String(v);};
   const rowHTML=row=>`<tr><td><b>${esc(row.date)}</b>${row.channel!=='all'?`<small>${esc(title(row))}</small>`:''}${row.observed?'<small>当日未结束</small>':''}</td>${columns.map(col=>`<td>${cell(row,col)}</td>`).join('')}</tr>`;
   return `<section class="insight-surface growth-report"><header><h2>增长日报</h2><button data-market="export-growth">导出当前分组 CSV</button></header>
-  <div class="growth-controls"><label>排列维度<select data-growth="dimension">${options([['date','日期汇总'],['source','日期与当前来源层级']],s.growthDimension||'date')}</select></label><label>指标分组<select data-growth="group">${options([['overview','常用概览'],['acquisition','获客'],['subscription','行为与订阅'],['payment','扣款与退款'],['cancellation','退订'],['returns','回本'],['pending','待接入与预测'],['all','全部指标']],s.growthGroup||'overview')}</select></label><span>${esc(g.currency)} · UTC · 最新日期在前</span></div>
+  <div class="growth-controls"><label>排列维度<select data-growth="dimension">${options([['date','日期汇总'],['source','日期与当前来源层级']],s.growthDimension||'date')}</select></label><label>指标分组<select data-growth="group">${options([['overview','常用概览'],['testing','投放测试'],['custom','自定义列'],['acquisition','获客'],['subscription','行为与订阅'],['payment','扣款与退款'],['cancellation','退订'],['returns','回本'],['pending','待接入与预测'],['all','全部指标']],s.growthGroup||'overview')}</select></label><span>${esc(g.currency)} · UTC · 最新日期在前</span></div>
+  <details class="growth-column-picker" ${s.columnPickerOpen?'open':''}><summary>自定义显示列（已选 ${columns.length} 项）</summary><p>按用户路径排列，勾选后立即应用，导出使用相同列。至少保留一项指标。</p>${['获客','行为与订阅','扣款与退款','退订','回本','待接入'].map(group=>`<fieldset><legend>${group}</legend>${growthColumns.filter(c=>c[3]===group).map(c=>`<label><input type="checkbox" data-growth-column="${c[0]}" ${columns.some(x=>x[0]===c[0])?'checked':''} ${columns.length===1&&columns[0][0]===c[0]?'disabled':''}>${esc(c[1])}</label>`).join('')}</fieldset>`).join('')}</details>
   <p class="scope-note">按上方获客日期和来源筛选，同批用户后续扣款与退款持续回补。D0 是获客当日，D3 / D7 分别截至第 3 / 7 天结束。— 表示无分母、未接入、历史不完整或观察期未结束，点击列名旁问号查看口径。当前日期不是最终结算数据。</p>
   ${table([h('获客日期','users'),...columns.map(c=>h(c[1],'growth-'+c[0]))],[rowHTML(g.total),...g.rows.slice(0,s.limit).map(rowHTML)])}
   <footer class="insight-pagination"><span>显示 ${Math.min(s.limit,g.rows.length)} / ${g.rows.length} 行 · 合计覆盖全部筛选结果，比例按总分子与总分母计算</span>${s.limit<g.rows.length?'<button data-market="more">加载更早 30 行</button>':''}</footer>
@@ -145,9 +149,9 @@ const headers={
   attribution:'accountId,acquiredAt,channel,campaignId,campaignName,adGroupId,adGroupName,creativeId,creativeName,source'
 };
 document.addEventListener('toggle',event=>{
-  if(!event.target.matches('.market-import,.market-connection details')||!event.target.isConnected||!event.target.getClientRects().length)return;
+  if(!event.target.matches('.market-import,.market-connection details,.growth-column-picker')||!event.target.isConnected||!event.target.getClientRects().length)return;
   const scope=event.target.closest('[data-market-product]');
-  if(scope&&datasets.has(scope.dataset.marketProduct)){const s=state(datasets.get(scope.dataset.marketProduct));s[event.target.matches('.market-import')?'importOpen':'connectionOpen']=event.target.open;}
+  if(scope&&datasets.has(scope.dataset.marketProduct)){const s=state(datasets.get(scope.dataset.marketProduct));s[event.target.matches('.growth-column-picker')?'columnPickerOpen':event.target.matches('.market-import')?'importOpen':'connectionOpen']=event.target.open;}
 },true);
 document.addEventListener('click',async event=>{
   const b=event.target.closest('[data-market]');if(!b)return;
@@ -204,9 +208,18 @@ document.addEventListener('click',async event=>{
   changed();
 });
 document.addEventListener('change',async event=>{
+  if(event.target.dataset.growthColumn){
+    const scope=event.target.closest('[data-market-product]');if(!scope)return;
+    const data=datasets.get(scope.dataset.marketProduct);if(!data)return;
+    const s=state(data),keys=new Set(growthSelection(s).map(c=>c[0]));
+    if(event.target.checked)keys.add(event.target.dataset.growthColumn);else keys.delete(event.target.dataset.growthColumn);
+    if(keys.size){s.growthColumns=[...keys];s.growthGroup='custom';s.columnPickerOpen=true;}
+    changed();return;
+  }
   if(event.target.dataset.growth){
     const scope=event.target.closest('[data-market-product]');if(!scope)return;
     const s=state(datasets.get(scope.dataset.marketProduct));
+    if(event.target.dataset.growth==='group'&&event.target.value==='custom'){s.growthColumns=growthSelection(s).map(c=>c[0]);s.columnPickerOpen=true;}
     s[event.target.dataset.growth==='group'?'growthGroup':'growthDimension']=event.target.value;changed();return;
   }
   const form=event.target.closest('#marketingImport');if(!form)return;
