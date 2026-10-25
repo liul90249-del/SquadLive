@@ -137,6 +137,20 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
       day1Retention: retention(1),
       day7Retention: retention(7)
     },
+    // Admin diagnostics only; sandbox transactions never enter orders or totals.
+    testOrders: sharedReceipts.filter(item => item.environment === 'Sandbox').map(item => ({
+      transactionId: item.transaction_id,
+      originalTransactionId: item.original_transaction_id,
+      accountId: item.customer_id || null,
+      sku: item.sku,
+      environment: 'Sandbox',
+      purchasedAt: iso(Number(item.purchased_at) * 1000),
+      verifiedAt: iso(item.created_at),
+      priceMilliunits: item.price ?? null,
+      currency: item.currency || null,
+      status: item.status,
+      singularPurchaseStatus: item.singular_purchase?.status || null
+    })).sort((a,b) => String(b.purchasedAt).localeCompare(String(a.purchasedAt))).slice(0,100),
     observedPrices: Object.values(observedPrices).sort((a, b) => a.sku.localeCompare(b.sku)),
     daily,
     users: accounts.map(account => ({
