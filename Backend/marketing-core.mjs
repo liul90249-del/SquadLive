@@ -1,5 +1,7 @@
 // Shared, pure reporting logic. All money uses integer milliunits, never FX guesses.
 export const DAY = 86400000;
+export const RETURN_WINDOWS = [7,14,30,60,90,180,365,540,730];
+export const GROWTH_DAYS = [0,3,7,8,14,30,60,90,180,365,540,730];
 export const FUNNEL_EVENTS = ['first_activation','onboarding_complete','photo_permission_granted','paywall_open','purchase_attempt','purchase_cancelled','purchase_failed','products_load_failed','cleanup_completed'];
 export const dateOf = ms => new Date(ms).toISOString().slice(0,10);
 const ms = value => typeof value === 'number' ? value : Date.parse(value);
@@ -76,7 +78,7 @@ export function buildMarketingReport(data,{start='',end='',channel='',campaignId
     const totals=b.users.map(u=>amount(u)).reduce((a,b)=>({gross:a.gross+b.gross,refunds:a.refunds+b.refunds}),{gross:0,refunds:0});
     const matchedUsers=b.users.filter(u=>u.attribution&&!['organic','unknown'].includes(u.attribution.channel)&&costs.some(c=>c.date===b.date&&c.channel===u.attribution.channel&&['campaignId','adGroupId','creativeId'].every(k=>!c[k]||c[k]===u.attribution[k])));
     const maturity=days=>now>=Date.parse(b.date+'T00:00:00Z')+days*DAY;
-    const windows=Object.fromEntries([7,14,30].map(days=>{
+    const windows=Object.fromEntries(RETURN_WINDOWS.map(days=>{
       const v=b.users.map(u=>amount(u,days)).reduce((n,r)=>n+r.gross-r.refunds,0);
       const matchedNet=matchedUsers.map(u=>amount(u,days)).reduce((n,r)=>n+r.gross-r.refunds,0);
       return [days,{mature:maturity(days),net:v,matchedNet:matchedUsers.length?matchedNet:null,roas:maturity(days)&&b.cost?.spendMilliunits>0&&matchedUsers.length>0?matchedNet/b.cost.spendMilliunits*100:null}];
@@ -261,7 +263,7 @@ export function buildGrowthReport(data, filters={}) {
     const ended=members.filter(u=>subscriptions(u).some(o=>o.isFreeTrial&&ms(o.purchasedAt)>=ms(u.acquiredAt)&&o.expiresAt&&ms(o.expiresAt)<=now));
     record.endedTrials=ended.length;
     record.convertedTrials=ended.filter(u=>subscriptions(u).some(t=>t.isFreeTrial&&ms(t.purchasedAt)>=ms(u.acquiredAt)&&t.expiresAt&&ms(t.expiresAt)<=now&&paidOrders(u).some(p=>p.originalTransactionId===t.originalTransactionId&&ms(p.purchasedAt)>=ms(t.expiresAt)))).length;
-    for(const d of [0,3,7,8,14,30]){
+    for(const d of GROWTH_DAYS){
       const a=amount(d+1);record['netD'+d]=a.net;
       const matchedWindow=amount(d+1,matchedMembers);record['matchedNetD'+d]=matchedMembers.length?matchedWindow.net:null;
       record['roasD'+d]=now>=start+(d+1)*DAY&&cost>0&&matchedMembers.length&&matchedWindow.net!==null?matchedWindow.net/cost*100:null;
@@ -272,7 +274,7 @@ export function buildGrowthReport(data, filters={}) {
   const additive=['spend','impressions','clicks','installs','users','subD0','freeD0','paidD0','cleanupD0','grossD0','refundD0','netD0','gross','refund','net','endedTrials','convertedTrials','cancelD0','cancelD3','cancelD7','cancelToDate','paidToDate','renewedToDate','unknownSource','matchedUsers','matchedNet','totalRevenue'];
   const total={date:'合计',channel:'all',adRevenueApplicable:data.product!=='cleaner',observed:rows.some(r=>r.observed)};
   for(const k of additive)total[k]=rows.length&&rows.every(r=>r[k]!==null)?rows.reduce((n,r)=>n+r[k],0):null;
-  for(const d of [0,3,7,8,14,30]){
+  for(const d of GROWTH_DAYS){
     total['netD'+d]=rows.length&&rows.every(r=>r['netD'+d]!==null)?rows.reduce((n,r)=>n+r['netD'+d],0):null;
     total['matchedNetD'+d]=rows.length&&rows.every(r=>r['matchedNetD'+d]!==null)?rows.reduce((n,r)=>n+r['matchedNetD'+d],0):null;
     total['roasD'+d]=rows.length&&rows.every(r=>r['roasD'+d]!==null)&&total.spend>0?total['matchedNetD'+d]/total.spend*100:null;
