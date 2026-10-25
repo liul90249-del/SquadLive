@@ -282,7 +282,10 @@ export function buildGrowthReport(data, filters={}) {
 }
 function growthRates(r){
   const divide=(n,d,m=1)=>n!=null&&d>0?n/d*m:null;
-  return {...r,cancelRateToDate:divide(r.cancelToDate,r.subD0,100),paidRateToDate:divide(r.paidToDate,r.users,100),ctr:divide(r.clicks,r.impressions,100),cpi:divide(r.spend,r.installs),subRateD0:divide(r.subD0,r.users,100),
+  const estimatedAppleFee=r.adRevenueApplicable===false&&r.totalRevenue!=null?Math.round(r.totalRevenue*0.30):null;
+  const estimatedProceeds=estimatedAppleFee!=null?r.totalRevenue-estimatedAppleFee:null;
+  const estimatedProfit=estimatedProceeds!=null&&r.spend!=null?estimatedProceeds-r.spend:null;
+  return {...r,estimatedAppleFee,estimatedProceeds,estimatedProfit,cancelRateToDate:divide(r.cancelToDate,r.subD0,100),paidRateToDate:divide(r.paidToDate,r.users,100),ctr:divide(r.clicks,r.impressions,100),cpi:divide(r.spend,r.installs),subRateD0:divide(r.subD0,r.users,100),
     costPerSubD0:divide(r.spend,r.subD0),paidRateD0:divide(r.paidD0,r.users,100),trialPaidRate:divide(r.convertedTrials,r.endedTrials,100),
     ltv:divide(r.net,r.users),roas:r.matchedUsers>0?divide(r.matchedNet,r.spend,100):null,contribution:r.matchedUsers>0&&r.matchedNet!=null&&r.spend!=null?r.matchedNet-r.spend:null,
     roi:r.matchedUsers>0&&r.matchedNet!=null&&r.spend>0?(r.matchedNet-r.spend)/r.spend*100:null};
