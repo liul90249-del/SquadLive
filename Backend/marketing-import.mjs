@@ -3,6 +3,7 @@ import {sourceKey} from './marketing-core.mjs';
 const fail=m=>Object.assign(new Error(m),{status:400});
 export const CSV_HEADERS={
   costs:['date','timezone','channel','campaignId','campaignName','adGroupId','adGroupName','creativeId','creativeName','currency','spend','impressions','clicks','installs'],
+  singular:['singularSdid','acquiredAt','channel','campaignId','campaignName','adGroupId','adGroupName','creativeId','creativeName','source'],
   attribution:['accountId','acquiredAt','channel','campaignId','campaignName','adGroupId','adGroupName','creativeId','creativeName','source']
 };
 export function csvRows(text) {
@@ -47,6 +48,14 @@ export function prepareMarketingImport(store,product,kind,text,now=Date.now()) {
         for(const h of ['impressions','clicks','installs'])r[h]=integer(r[h]);
         r.key=JSON.stringify([r.date,r.currency,sourceKey(r)]);
       }else{
+        if(kind==='singular'){
+          const sdid=r.singularSdid.toLowerCase();
+          if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(sdid))throw fail('Singular 设备标识格式无效');
+          const matches=Object.values(accounts).filter(a=>a.singularSdid?.toLowerCase()===sdid);
+          if(matches.length!==1)throw fail(matches.length?'该设备对应多个后台用户，需人工核对，不能自动分配':'该设备尚未关联后台用户，请先打开新版 App');
+          r.accountId=matches[0].id;
+          r.singularSdid=sdid;
+        }
         if(!accounts[r.accountId])throw fail('用户 ID 未在该产品后台找到；请先映射为后台用户 ID');
         if(!/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(r.acquiredAt)||!Number.isFinite(Date.parse(r.acquiredAt))||Date.parse(r.acquiredAt)>now+300000)throw fail('acquiredAt 需为带时区的有效时间，且不能在未来');
         if(Date.parse(r.acquiredAt)>Date.parse(accounts[r.accountId].createdAt)+300000)throw fail('获客时间晚于后台首次会话；本入口仅接受首次获客归因，不接受再营销归因');
