@@ -11,6 +11,9 @@ const help={
   paywallClicks:'有同次页面曝光记录的去重购买点击人数。点击不是扣款。点击率 = 点击人数 ÷ 看到页面人数。',
   paywallPaid:'仅苹果验证的首次观察订阅。关联到购买前 24 小时内同商品的最近一次有效点击。免费试用的首次扣款按同一苹果订阅链回补原方案；之后续费不重复计入。扣款转化率 = 首次扣款人数 ÷ 看到页面人数。跨币种去重。',
   paywallNet:'已关联方案用户的第一笔实际扣款减该订单已知退款，仅所选币种。包括免费试用结束后的第一笔扣款，不含其后的续费。未扣苹果佣金和税费。',
+  installs:'广告平台在所选 UTC 日期及来源下报告的归因安装数。不是后台新增用户，不包含无法归因给广告的自然量和来源未知用户。',
+  impressions:'广告平台在所选日期及来源下报告的展示次数。',
+  clicks:'广告平台在所选日期及来源下报告的点击次数。点击不等于安装或首次打开。',
   spend:'已导入的广告花费；按 UTC 日期、所选币种与来源筛选。缺少成本记录显示 —，不视为免费获客。重复导入同一日期、广告层级和币种会更新原记录，不累加。',
   users:'所选获客日期内的新增用户，按后台记录的安装 ID 去重。同一 ID 多次打开只计一次；重装 App 或换设备可能生成新的 ID，因此不等于独立自然人数。包含自然量、已归因广告用户和归因未知用户。按首次获客日期统计；没有归因时间时使用后台注册日期。归因未知表示尚不能确定来源，不能直接算作广告获客。与广告平台报表安装数不是同一口径。',
   paid:'所选获客批次中，截至目前首次观察到实际扣款的用户；7 天免费试用的 0 元订单不算。所有币种去重，退款不撤销首次付费身份。',
@@ -101,20 +104,22 @@ export function marketingEditing(product) {
     (el.querySelector('.market-import[open]')||el.contains(document.activeElement)&&document.activeElement.closest('form')));
 }
 function state(data) {
-  if(!states.has(data.product))states.set(data.product,{rangeDays:30,start:dateOf(data.now-29*DAY),end:dateOf(data.now),currency:'USD',level:'campaign',channel:'',campaignId:'',adGroupId:'',creativeId:'',limit:30,importKind:'costs',csv:'',preview:null,message:''});
+  if(!states.has(data.product))states.set(data.product,{scopeVersion:2,rangeDays:1,start:dateOf(data.now),end:dateOf(data.now),currency:'USD',level:'campaign',channel:'',campaignId:'',adGroupId:'',creativeId:'',limit:30,importKind:'costs',csv:'',preview:null,message:''});
   const s=states.get(data.product);
   if(!s.preferencesLoaded){
     const saved=readPreference(data.product,'marketing');
     for(const k of ['start','end','channel','currency','level','growthDimension','growthGroup'])if(typeof saved[k]==='string'&&saved[k].length<=160)s[k]=saved[k];
     if(Array.isArray(saved.growthColumns))s.growthColumns=saved.growthColumns.filter(k=>growthColumns.some(c=>c[0]===k));
-    if(saved.rangeDays===null||[30,90,180,365,730].includes(saved.rangeDays))s.rangeDays=saved.rangeDays;
+    if(saved.rangeDays===null||[1,7,30,90,180,365,730].includes(saved.rangeDays))s.rangeDays=saved.rangeDays;
+    // Old defaults combined a 30-day user cohort with today's first cost record.
+    if(saved.scopeVersion!==2){s.rangeDays=1;s.start=s.end=dateOf(data.now);}
     s.preferencesLoaded=true;
   }
   if(s.rangeDays){s.start=dateOf(data.now-(s.rangeDays-1)*DAY);s.end=dateOf(data.now);}
   return s;
 }
 function changed(){
-  for(const [product,s] of states)savePreference(product,'marketing',Object.fromEntries(['start','end','rangeDays','channel','currency','level','growthDimension','growthGroup','growthColumns'].map(k=>[k,s[k]])));
+  for(const [product,s] of states)savePreference(product,'marketing',Object.fromEntries(['scopeVersion','start','end','rangeDays','channel','currency','level','growthDimension','growthGroup','growthColumns'].map(k=>[k,s[k]])));
   window.dispatchEvent(new Event('admin-marketing-change'));
 }
 export function marketingHTML(data) {
@@ -126,19 +131,32 @@ export function marketingHTML(data) {
   const stages=r.events.filter(e=>['onboarding_complete','photo_permission_granted','paywall_open','purchase_attempt'].includes(e.key));
   const errors=r.events.filter(e=>['cleanup_completed','purchase_cancelled','purchase_failed','products_load_failed'].includes(e.key));
   const preview=s.preview;
+  const period=s.start===s.end?(s.start===dateOf(data.now)?'今天 · '+s.start:s.start):s.start+' 至 '+s.end;
+  const scopeText=period+'（UTC） · '+(names[s.channel]||s.channel||'全部来源');
+  const costDates=[...new Set(r.cohorts.filter(c=>c.cost).map(c=>c.date))].sort();
+  const costCoverage=costDates.length?'已返回花费记录：'+costDates[0]+(costDates.length>1?' 至 '+costDates.at(-1):'')+'，共 '+costDates.length+' 个统计日。未返回记录的日期不代表花费为 0。':'当前范围尚无广告成本记录。';
+  const sourceUsers=channel=>r.groups.filter(g=>g.channel===channel).reduce((n,g)=>n+g.users,0);
+  const organicUsers=sourceUsers('organic'),unknownUsers=sourceUsers('unknown'),adUsers=r.totals.users-organicUsers-unknownUsers;
+  const kpis=items=>`<div class="market-kpis">${items.map(([label,key,value])=>`<section>${h(label,key)}<strong>${value}</strong></section>`).join('')}</div>`;
   const connection=data.applovin, syncHealth=marketingSyncHealth(connection,data.now);
   const beijingTime=value=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
   return `<div class="marketing-workspace" data-market-product="${esc(data.product)}">
   <section class="insight-surface market-intro"><header><div><h2>广告投放</h2><p>从获客到真实扣款，查看每一批用户的回本进度</p></div><span class="status-badge">${data.costs.length?'已有成本记录':connection?.lastSuccess?'同步成功 · 返回 0 条成本记录':connection?.configured?'已连接 · 等待同步':'成本未接入'}</span></header>
   <p class="scope-note">全部日期为 UTC · 北京时间 08:00 结束上一统计日 · 金额按原币种分开 · 当前渠道收益仅覆盖已关联用户，非全量平台归因估算。</p>
-  <div class="growth-controls"><span>获客日期快捷选择</span>${[30,90,180,365,730].map(n=>`<button type="button" data-market="date-range" data-days="${n}">近 ${n} 天</button>`).join('')}</div>
-  <form id="marketingFilters" class="insight-filters"><label>获客开始<input type="date" name="start" value="${s.start}" required></label><label>获客结束<input type="date" name="end" value="${s.end}" required></label><label>渠道<select name="channel">${options([['','全部渠道'],...channels.map(c=>[c,names[c]||c])],s.channel)}</select></label><label>查看层级<select name="level">${options([['channel','渠道'],['campaign','广告系列'],['adGroup','广告组'],['creative','广告素材']],s.level)}</select></label><label>收入与成本币种<select name="currency">${options(currencies.map(c=>[c,c]),s.currency)}</select></label><button type="submit" class="primary">查看</button><button type="button" data-market="reset">重置</button></form>
+  <div class="growth-controls"><span>统计日期（广告发生日 / 用户首次获客日）</span>${[1,7,30,90,180,365,730].map(n=>`<button type="button" data-market="date-range" data-days="${n}" aria-pressed="${s.rangeDays===n}">${n===1?'今天':'近 '+n+' 天'}</button>`).join('')}</div>
+  <form id="marketingFilters" class="insight-filters"><label>开始日期<input type="date" name="start" value="${s.start}" required></label><label>结束日期<input type="date" name="end" value="${s.end}" required></label><label>渠道<select name="channel">${options([['','全部渠道'],...channels.map(c=>[c,names[c]||c])],s.channel)}</select></label><label>查看层级<select name="level">${options([['channel','渠道'],['campaign','广告系列'],['adGroup','广告组'],['creative','广告素材']],s.level)}</select></label><label>收入与成本币种<select name="currency">${options(currencies.map(c=>[c,c]),s.currency)}</select></label><button type="submit" class="primary">查看</button><button type="button" data-market="reset">重置</button></form>
   ${s.campaignId?`<p class="market-breadcrumb">当前路径：${esc(s.channel)} / ${esc(s.campaignId)} ${esc(s.adGroupId)} ${esc(s.creativeId)} <button data-market="clear-path">返回全部层级</button></p>`:''}</section>
   ${data.product==='cleaner'?`<section class="insight-surface market-connection"><details ${s.connectionOpen?'open':''}><summary>AppLovin 数据连接<span class="status-badge" ${syncHealth.warning?'role="status"':''}>${esc(syncHealth.label)}</span></summary><div><p>广告花费 → 展示 → 点击 → 安装，由 AppLovin 广告主报表读取。每 15 分钟同步当天及之前 7 个 UTC 日，与 AppLovin Real time 报表口径一致；当天数据持续更新，可能有平台延迟，后续同步会补齐修订。失败会保留原数据并重试。</p><p class="scope-note">AppLovin 素材组显示在“广告组”层；单条素材成本未接入时不分摊。用户归因仍需 Singular 等来源与后台用户 ID 关联，广告安装数不会直接变成后台用户数。</p><p>${connection?.lastSuccess?'最近接口核对成功：'+esc(beijingTime(connection.lastSuccess))+'（北京时间）'+' · 返回 '+connection.rows+' 条成本记录 · 报表日期 '+esc(connection.start||'—')+' 至 '+esc(connection.end||'—')+'（UTC）':'尚未完成真实账户同步'}${connection?.currency?' · '+esc(connection.currency):''}</p>${connection?.error?`<p role="alert">${esc(connection.error)}</p>`:''}<button data-market="sync-applovin" ${!connection?.configured||document.body.dataset.demo?'disabled':''}>立即核对 AppLovin 成本</button><p role="status">${esc(s.syncMessage||'')}</p></div></details></section>`:''}
-  <div class="market-kpis">${[['广告花费','spend',r.totals.spend===null?'暂无成本记录':`${s.currency} ${money(r.totals.spend)}`],['新增用户（按安装 ID 去重）','users',r.totals.users],['首次实际扣款人数','paid',r.totals.paid],['已关联净扣款','net',`${s.currency} ${money(r.totals.net)}`]].map(([label,key,value])=>`<section>${h(label,key)}<strong>${value}</strong></section>`).join('')}</div>
-  <section class="insight-surface"><header><h2>用户路径</h2>${h('阶段到达率','funnel')}</header>
-  <p class="scope-note">展示 ${r.totals.impressions??'—'} → 点击 ${r.totals.clicks??'—'} → 广告报表安装 ${r.totals.installs??'—'}。以下新增用户按安装 ID 去重，不与广告报表安装数强行一一对应。</p>
-  <div class="market-path"><div><small>后台首次会话</small><strong>${r.totals.users}</strong><span>新安装身份</span></div>${stages.map(e=>`<div><small>${stageNames[e.key]}</small><strong>${e.count??'—'}</strong><span>${pct(e.rate)} · 已采集 ${e.denominator} 人</span></div>`).join('')}<div><small>已验证免费试用</small><strong>${r.trial.started}</strong><span>仅明确的试用订单</span></div><div><small>首次实际扣款</small><strong>${r.totals.paid}</strong><span>不含 0 元试用</span></div></div>
+  <section class="insight-surface market-ad-summary"><header><div><h2>广告平台表现</h2><p>${esc(scopeText)}</p></div></header>
+  ${kpis([['广告花费','spend',r.totals.spend===null?'暂无成本记录':`${s.currency} ${money(r.totals.spend)}`],['广告展示','impressions',r.totals.impressions??'—'],['广告点击','clicks',r.totals.clicks??'—'],['广告归因安装','installs',r.totals.installs??'—']])}
+  <p class="scope-note">以上四项均来自同一筛选范围的广告平台报表。${esc(costCoverage)}</p></section>
+  <section class="insight-surface market-user-summary"><header><div><h2>后台新增用户与后续转化</h2><p>首次获客日期：${esc(scopeText)}</p></div></header>
+  <p class="scope-note">此处按首次获客日期筛选后台用户；${s.channel?'仅当前来源':'包含广告、自然量和来源未知用户'}。订阅与扣款持续追踪至今，不是所选日期当天发生的扣款，也不是上方广告花费带来的安装量。</p>
+  ${kpis([['后台新增用户','users',r.totals.users],['已验证免费试用人数','trial',r.trial.started],['累计首次扣款人数','paid',r.totals.paid],['累计已关联净扣款','net',`${s.currency} ${money(r.totals.net)}`]])}
+  <p class="scope-note">已归因广告用户 ${adUsers} 人 · 自然量 ${organicUsers} 人 · 来源未知 ${unknownUsers} 人。后台用户按安装 ID 去重，不能直接用于计算广告安装成本。</p></section>
+  <section class="insight-surface"><header><h2>后台用户后续行为</h2>${h('阶段到达率','funnel')}</header>
+  <p class="scope-note">首次获客日期：${esc(scopeText)} · 下方为该批后台用户截至目前的行为，不代表今天的广告安装漏斗。</p>
+  <div class="market-path"><div><small>所选批次后台新增</small><strong>${r.totals.users}</strong><span>按安装 ID 去重</span></div>${stages.map(e=>`<div><small>${stageNames[e.key]}</small><strong>${e.count??'—'}</strong><span>${pct(e.rate)} · 已采集 ${e.denominator} 人</span></div>`).join('')}<div><small>已验证免费试用</small><strong>${r.trial.started}</strong><span>仅明确的试用订单</span></div><div><small>首次实际扣款</small><strong>${r.totals.paid}</strong><span>不含 0 元试用</span></div></div>
   <div class="market-secondary">${errors.map(e=>`<span>${stageNames[e.key]} <b>${e.count??'未采集'}</b></span>`).join('')}</div>
   <p class="scope-note">行为未采集 ${r.quality.funnelUnknown} 人 · 更新后才开始采集 ${r.quality.funnelPartial} 人。旁路行为不强制先后，首次发生记录不代表当天发生次数。</p></section>
   <section class="insight-surface"><header><h2>渠道与素材表现</h2><button data-market="export">导出当前获客表 CSV</button></header><p class="scope-note">点击来源继续下钻。只导入系列成本时，素材层不会分摊或编造花费。${h('归因范围','coverage')}</p>
@@ -198,7 +216,7 @@ document.addEventListener('click',async event=>{
   if(action==='template'){const kind=scope.querySelector('[name="kind"]').value;download(`${product}-${kind}-template.csv`,headers[kind]+'\n');return;}
   if(action==='sync-applovin'){
     if(document.body.dataset.demo||!data.applovin?.configured)return;
-    b.disabled=true;s.syncMessage='正在核对最近 7 个完整统计日…';
+    b.disabled=true;s.syncMessage='正在核对今天及之前 7 个 UTC 日…';
     try{
       const result=await window.apiPost('/v1/admin/products/cleaner/applovin-sync',{});
       s.syncMessage=result.rows>0?'AppLovin 成本已更新，含当天数据；平台仍可能继续修订。':'接口已响应，但本次返回 0 条成本记录；这不代表今天没有花费，请核对平台报表。';
@@ -206,7 +224,7 @@ document.addEventListener('click',async event=>{
     }catch(e){s.syncMessage=e.message;}
     changed();return;
   }
-  if(action==='date-range'){const days=Number(b.dataset.days);if([30,90,180,365,730].includes(days)){s.rangeDays=days;s.start=dateOf(data.now-(days-1)*DAY);s.end=dateOf(data.now);s.limit=30;}}
+  if(action==='date-range'){const days=Number(b.dataset.days);if([1,7,30,90,180,365,730].includes(days)){s.rangeDays=days;s.start=dateOf(data.now-(days-1)*DAY);s.end=dateOf(data.now);s.limit=30;}}
   if(action==='more')s.limit+=30;
   if(action==='clear-path'){s.channel='';s.campaignId='';s.adGroupId='';s.creativeId='';}
   if(action==='reset'){savePreference(product,'marketing',{});states.delete(product);}
