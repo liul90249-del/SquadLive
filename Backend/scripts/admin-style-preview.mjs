@@ -51,10 +51,11 @@ function marketingFixture(product){
   Object.values(accounts).forEach((u,i)=>{if(i%5===0)return;const campaign=i%2+1;attributions[u.id]={accountId:u.id,acquiredAt:u.createdAt,channel:i%7===0?'organic':'applovin',campaignId:i%7===0?'':`campaign-${campaign}`,campaignName:i%7===0?'':campaign===1?'美国 · 清理空间':'美国 · 照片整理',adGroupId:i%7===0?'':`group-${campaign}`,creativeId:'',source:'Synthetic fixture'};});
   return {costs,attributions,imports:[{kind:'costs',at:now-3600000,count:84,replaced:0},{kind:'attribution',at:now-3000000,count:38,replaced:0}]};
 }
-function report(product) {
+accounts['demo-001'].createdAt=iso(-210);
+function report(product,historyDays=90) {
   // CatSwipe has no subscriptions/IAP; show an accurate empty order state.
   const state = {accounts, receipts:product==='catswipe'?{}:receipts, bindings:{}};
-  const operations=productOperations({sharedPartnerReferrals:{[product]:state}}, product, now);
+  const operations=productOperations({sharedPartnerReferrals:{[product]:state}}, product, now, null, historyDays);
   const lifecycle={chains:{},events:{},trackingStartedAt:Date.parse(iso(-60)),sync:{status:'complete',completedAt:now-8*3600000,completedDay:iso(0).slice(0,10),checked:12,failed:0}};
   Object.values(receipts).forEach((r,i)=>{
     lifecycle.chains[i]={originalId:r.original_transaction_id,firstSubscribedAt:Date.parse(iso(-i*4)),latestPurchaseAt:r.purchased_at*1000,
@@ -93,6 +94,7 @@ const server = http.createServer(async(req,res)=>{
   if(req.method!=='GET') return json({error:'演示预览为只读，未保存任何修改。'},403);
   try {
     if(url.pathname==='/__preview/requests') return json({requests});
+    if(url.pathname==='/__preview/operations-check') {res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(await readFile(resolve(root,'scripts/admin-operations-check.html')));}
     if(url.pathname==='/__preview/refresh-check') {res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(await readFile(resolve(root,'scripts/admin-refresh-check.html')));}
     if(url.pathname==='/admin' || url.pathname==='/') {
       const product = ['squadlive',...products].includes(url.searchParams.get('product'))?url.searchParams.get('product'):'cleaner';
@@ -104,11 +106,11 @@ const server = http.createServer(async(req,res)=>{
     const files={'/admin-appearance.css':['admin-appearance.css','text/css'], '/admin-appearance.js':['admin-appearance.js','text/javascript'],
       '/assets/landing/squadlive-logo.png':['assets/landing/squadlive-logo.png','image/png']};
     for (const product of products) files[`/assets/products/${product}.png`] = [`assets/products/${product}.png`, 'image/png'];
-    for (const file of ['admin-paywall.mjs','admin-insights.css','admin-insights.mjs','admin-refresh.mjs','admin-insights-core.mjs','admin-subscriptions.mjs','admin-subscriptions.css','admin-marketing.mjs','admin-marketing.css','marketing-core.mjs']) files[`/${file}`] = [file, file.endsWith('.css') ? 'text/css' : 'text/javascript'];
+    for (const file of ['admin-paywall.mjs','admin-insights.css','admin-insights.mjs','admin-refresh.mjs','admin-health.mjs','admin-preferences.mjs','admin-insights-core.mjs','admin-subscriptions.mjs','admin-subscriptions.css','admin-marketing.mjs','admin-marketing.css','marketing-core.mjs']) files[`/${file}`] = [file, file.endsWith('.css') ? 'text/css' : 'text/javascript'];
     if(files[url.pathname]) {const [file,type]=files[url.pathname];res.writeHead(200,{'content-type':type});return res.end(await readFile(resolve(root,file)));}
     if(url.pathname.startsWith('/v1/admin/')) requests++;
     const match=/^\/v1\/admin\/products\/([a-z]+)\/operations$/.exec(url.pathname);
-    if(match && products.includes(match[1])) return json(report(match[1]));
+    if(match && products.includes(match[1])) return json(report(match[1],Number(url.searchParams.get('days')||90)));
     if(url.pathname==='/v1/admin/overview') return json({overview});
     if(url.pathname==='/v1/admin/users') {const q=(url.searchParams.get('query')||'').toLowerCase();return json({users:users.filter(u=>[u.id,u.deviceId,u.displayName].some(v=>v.toLowerCase().includes(q)))});}
     if(url.pathname.startsWith('/v1/admin/users/')) {

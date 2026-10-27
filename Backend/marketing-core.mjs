@@ -11,6 +11,8 @@ export const sourceKey = r => JSON.stringify([r.channel,r.campaignId||'',r.adGro
 
 export function marketingDataset(store,product,operations,now=Date.now()) {
   const state=store.marketing?.[product]||{}, accounts=store.sharedPartnerReferrals?.[product]?.accounts||{};
+  const links=new Map();
+  for(const account of Object.values(accounts)){const id=String(account.singularSdid||'').toLowerCase();if(id)links.set(id,(links.get(id)||0)+1);}
   return {
     now, product, costs:Object.values(state.costs||{}),
     imports:(state.imports||[]).slice(-12).reverse(),
@@ -18,6 +20,9 @@ export function marketingDataset(store,product,operations,now=Date.now()) {
       const account=accounts[u.id]||{}, a=state.attributions?.[u.id];
       return {id:u.id,createdAt:u.createdAt,acquiredAt:a?.acquiredAt||u.createdAt,
         attribution:a||null,events:account.funnelEvents||{},trackedFrom:account.funnelTrackedFrom||null,
+        lastSeenAt:u.lastSeenAt||null,
+        identityLinkStatus:!account.singularSdid?'missing':links.get(String(account.singularSdid).toLowerCase())>1?'ambiguous':'ready',
+        activityTrackedFrom:account.activityTrackedFrom||null,
         paywallEvents:account.paywallEvents||[],paywallHistoryTruncated:account.paywallHistoryTruncated===true,
         hasCompletedCleanup:u.hasCompletedCleanup,firstCleanupAt:u.firstCleanupAt};
     }),
@@ -307,4 +312,32 @@ function growthRates(r){
     costPerSubD0:divide(r.spend,r.subD0),paidRateD0:divide(r.paidD0,r.users,100),trialPaidRate:divide(r.convertedTrials,r.endedTrials,100),
     ltv:divide(r.net,r.users),roas:r.matchedUsers>0?divide(r.matchedNet,r.spend,100):null,contribution:r.matchedUsers>0&&r.matchedNet!=null&&r.spend!=null?r.matchedNet-r.spend:null,
     roi:r.matchedUsers>0&&r.matchedNet!=null&&r.spend>0?(r.matchedNet-r.spend)/r.spend*100:null};
+}
+
+// Read-only traceability for the exact acquisition row shown in the growth table.
+export function growthDrilldown(data,filters,row,key) {
+  const byDate=filters.growthDimension!=='source',level=filters.level||'campaign';
+  const dimensions=['channel',...(level==='channel'?[]:['campaignId']),...(['adGroup','creative'].includes(level)?['adGroupId']:[]),...(level==='creative'?['creativeId']:[])];
+  const members=data.users.filter(u=>{
+    const a=u.attribution||{channel:'unknown'};
+    return (!row.date||row.date==='合计'||dateOf(ms(u.acquiredAt))===row.date)&&
+      (!filters.start||dateOf(ms(u.acquiredAt))>=filters.start)&&(!filters.end||dateOf(ms(u.acquiredAt))<=filters.end)&&
+      ['channel','campaignId','adGroupId','creativeId'].every(k=>!filters[k]||a[k]===filters[k])&&
+      (byDate||row.date==='合计'||dimensions.every(k=>(a[k]||'')===(row[k]||'')));
+  });
+  const people=new Map((data.subscriptions?.people||[]).map(p=>[p.id,p]));
+  const ordersFor=u=>(data.orders||[]).filter(o=>o.accountId===u.id&&ms(o.purchasedAt)<=data.now).sort((a,b)=>ms(a.purchasedAt)-ms(b.purchasedAt));
+  const selected=members.filter(u=>{
+    if(key==='subD0'){
+      const first=ordersFor(u).find(o=>o.kind==='subscription');
+      const values=[people.get(u.id)?.subscribedAt,first?ms(first.purchasedAt):null].filter(Number.isFinite);
+      const t=values.length?Math.min(...values):null;
+      return t!==null&&t>=ms(u.acquiredAt)&&dateOf(t)===dateOf(ms(u.acquiredAt));
+    }
+    if(key==='paidToDate'){const first=ordersFor(u).find(o=>o.priceMilliunits>0);return first&&ms(first.purchasedAt)>=ms(u.acquiredAt);}
+    return true;
+  });
+  const orders=selected.flatMap(u=>ordersFor(u).filter(o=>(o.priceMilliunits>0||o.priceMilliunits==null)&&
+    o.currency===(filters.currency||'USD')&&ms(o.purchasedAt)>=ms(u.acquiredAt)));
+  return {users:selected,orders};
 }

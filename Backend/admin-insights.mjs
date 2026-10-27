@@ -1,3 +1,5 @@
+import {dataFreshnessHTML} from './admin-health.mjs';
+import {readPreference,savePreference} from './admin-preferences.mjs';
 import {patchHTML} from './admin-refresh.mjs';
 import {paywallHTML,paywallEditing} from './admin-paywall.mjs';
 import {marketingHTML,marketingEditing} from './admin-marketing.mjs';
@@ -33,7 +35,7 @@ const viewFromHash = () => Object.keys(viewPanels).find(key=>'#'+viewPanels[key]
 const initialView = viewFromHash();
 let snapshot, data, view = initialView, metric = 'registrations', currency = '', start = '', end = '', page = 1;
 let query = '', status = 'all', sort = 'newest', dateField = 'purchasedAt', listStart = '', listEnd = '', orderCurrency = '', userMode = 'table';
-let liveToday = false, receivedAt = null;
+let liveToday = false, receivedAt = null, rangeDays=7;
 let selectedDay = '', lastProduct = '', loading = false, exactAccount = '', exactSku = '';
 const titles = {overview:'运营概览',trends:'趋势分析',users:'用户明细',orders:'订阅与订单',prices:'商品与价格',marketing:'广告投放'};
 const metrics = {registrations:'新增注册',activeUsers:'日均活跃',paidOrders:'实付订单',refunds:'退款事件',gross:'扣款金额'};
@@ -52,8 +54,16 @@ function setView(next, reset=true) {
   });
   render();
 }
+function saveViewPreferences(){
+  if(!lastProduct)return;
+  savePreference(lastProduct,'view',{start,end,rangeDays,liveToday,metric,currency,sort,status,listStart,listEnd,orderCurrency,dateField,userMode,historyDays:window.adminHistoryDays||90});
+}
+function todaySnapshot(){
+  const today=data.daily.at(-1);if(!today)return '';
+  return `<section class="insight-surface"><header><div><h2>今日经营 · ${today.date} UTC</h2><p>按今天发生的行为与扣款统计，包含新老用户；下面的增长日报按首次获客批次统计。</p></div><button data-action="today-overview">查看今日明细</button></header><div class="today-business">${[['今日新增',today.registrations,'registrations'],['今日活跃',today.activeUsers,'activeUsers'],['今日实付订单',today.paidOrders,'paidOrders'],['今日退款',today.refunds,'refunds']].map(([label,value,key])=>`<button data-action="today-metric" data-key="${key}"><span>${label}</span><strong>${num(value)}</strong></button>`).join('')}</div></section>`;
+}
 function periodControl() {
-  return `<form id="insightPeriod" class="insight-filters"><div class="range-presets">${btn('今日 · 实时','today',`aria-pressed="${liveToday}"`)}${[7,14,30].map(n=>btn(`近 ${n} 天`,'range',`data-days="${n}" aria-pressed="${!liveToday&&start===shiftDay(end,1-n)}"`)).join('')}</div><label>开始日期<input name="start" type="date" value="${start}" min="${data.daily[0]?.date || ''}" max="${end}" required></label><label>结束日期<input name="end" type="date" value="${end}" min="${start}" max="${data.daily.at(-1)?.date || ''}" required></label><button type="submit" class="primary">应用日期</button><span>${liveToday?`当天累计 · 每 30 秒自动刷新<br>更新于 ${receivedAt?new Date(receivedAt).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—'}（北京时间）<br>统计日 UTC · 北京时间 08:00 换日；上报可能延迟`:'UTC · 最后一天可能尚未结束'}</span></form>`;
+  return `<form id="insightPeriod" class="insight-filters"><div class="range-presets">${btn('今日 · 实时','today',`aria-pressed="${liveToday}"`)}${[7,14,30,90].filter(n=>n<=(data.historyDays||30)).map(n=>btn(`近 ${n} 天`,'range',`data-days="${n}" aria-pressed="${!liveToday&&start===shiftDay(end,1-n)}"`)).join('')}</div><label>开始日期<input name="start" type="date" value="${start}" min="${data.daily[0]?.date || ''}" max="${end}" required></label><label>结束日期<input name="end" type="date" value="${end}" min="${start}" max="${data.daily.at(-1)?.date || ''}" required></label><button type="submit" class="primary">应用日期</button><label>历史查询范围<select id="historyRange">${[30,90,180,365,730].map(n=>option(String(n),`最近 ${n} 天`,String(data.historyDays||30))).join('')}</select></label><span>${liveToday?`当天累计 · 每 30 秒自动刷新<br>更新于 ${receivedAt?new Date(receivedAt).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—'}（北京时间）<br>统计日 UTC · 北京时间 08:00 换日；上报可能延迟`:'UTC · 最后一天可能尚未结束'}<br>已保存记录始于 ${esc(data.availableFrom||'未知')}；接入前数据不补造</span></form>`;
 }
 function chart(rows,key) {
   if(!rows.length) return '<div class="insight-empty">此区间无趋势记录</div>';
@@ -107,7 +117,9 @@ function render(backgroundRefresh=false) {
   if(!data) return;
   const p=period(data.daily,start,end);
   const html=`<div class="workspace-heading"><div><p>${esc(picker.selectedOptions[0].textContent)} / ${titles[view]}</p><h2>${titles[view]}</h2></div><span class="scope-chip">${data.connected?'已接入':'接入未完成'}</span></div><p class="insight-source">${esc($('productNotice').textContent)} · ${view==='marketing'?'按首次获客批次追踪收入':view==='orders'&&data.subscriptions?'订阅日期覆盖全部已接入历史':`趋势仅提供最近 ${data.daily.length} 天`}${document.body.dataset.demo?' · 当前为演示数据':''}</p>${['overview','trends'].includes(view)?periodControl():''}${view==='overview'?overview(p):view==='trends'?trends(p):view==='users'?usersView():view==='orders'?ordersView():view==='marketing'?marketingHTML({...data.marketing,subscriptions:data.subscriptions}):pricesView()}`;
-  if(backgroundRefresh)patchHTML(host,html);else host.innerHTML=html;
+  const content=dataFreshnessHTML(data,receivedAt)+(view==='marketing'?todaySnapshot():'')+html;
+  if(backgroundRefresh)patchHTML(host,content);else host.innerHTML=content;
+  saveViewPreferences();
   revealWorkspace();
   if(selectedDay)selectDay(selectedDay);
 }
@@ -123,12 +135,25 @@ function receive(next) {
   }
   syncNotice.hidden=true;
   snapshot=next; loading=next.status==='loading';
-  if(lastProduct!==next.product) {data=null;view=lastProduct?'overview':initialView;lastProduct=next.product;exactAccount='';exactSku='';query='';status='all';page=1;listStart='';listEnd='';orderCurrency='';selectedDay='';start='';end='';liveToday=false;receivedAt=null;}
+  if(lastProduct!==next.product) {data=null;view=lastProduct?'overview':initialView;lastProduct=next.product;exactAccount='';exactSku='';query='';status='all';page=1;listStart='';listEnd='';orderCurrency='';selectedDay='';start='';end='';liveToday=false;receivedAt=null;rangeDays=7;
+    const prefs=readPreference(next.product,'view');
+    for(const [key,setter] of Object.entries({metric:v=>metric=v,currency:v=>currency=v,sort:v=>sort=v,status:v=>status=v,listStart:v=>listStart=v,listEnd:v=>listEnd=v,orderCurrency:v=>orderCurrency=v,dateField:v=>dateField=v,userMode:v=>userMode=v}))if(typeof prefs[key]==='string'&&prefs[key].length<=40)setter(prefs[key]);
+    if(prefs.rangeDays===null||[7,14,30,90,180,365,730].includes(prefs.rangeDays))rangeDays=prefs.rangeDays;
+    if(!Object.keys(metrics).includes(metric))metric='registrations';
+    if(!['newest','active','orders'].includes(sort))sort='newest';
+    if(!['all','paid','unpaid','charged','refund','review'].includes(status))status='all';
+    if(!['purchasedAt','refundedAt'].includes(dateField))dateField='purchasedAt';
+    if(!['table','board'].includes(userMode))userMode='table';
+    if(listStart&&!/^\d{4}-\d{2}-\d{2}$/.test(listStart))listStart='';
+    if(listEnd&&!/^\d{4}-\d{2}-\d{2}$/.test(listEnd))listEnd='';
+    liveToday=prefs.liveToday===true;
+    if(rangeDays===null&&/^\d{4}-\d{2}-\d{2}$/.test(prefs.start||'')&&/^\d{4}-\d{2}-\d{2}$/.test(prefs.end||'')&&prefs.start<=prefs.end){start=prefs.start;end=prefs.end;}
+  }
   if(next.status==='ready') {
     data=next.data;receivedAt=Date.now();
     const latest=data.daily.at(-1)?.date;
-    if(liveToday) {start=latest;end=latest;}
-    if(!start || end>latest || start<data.daily[0]?.date) {end=latest;start=shiftDay(end,-6);}
+    if(liveToday) {start=latest;end=latest;}else if(rangeDays){end=latest;start=shiftDay(latest,1-Math.min(rangeDays,data.daily.length));}
+    if(!start || end>latest || start<data.daily[0]?.date) {end=latest;start=shiftDay(end,1-Math.min(7,data.daily.length));}
     if(!currencies().includes(currency)) currency=currencies()[0]||'';
   }
   patchHTML($('productPaywallPolicy'),next.status==='ready'?paywallHTML(data.paywallPolicy):'');
@@ -163,9 +188,11 @@ function selectDay(date) {
 function action(event) {
   const b=event.target.closest('[data-action]');if(!b || !data)return;
   const a=b.dataset.action;
+  if(a==='today-overview'){setView('overview');liveToday=true;start=end=data.daily.at(-1).date;render();return;}
+  if(a==='today-metric'){liveToday=true;start=end=data.daily.at(-1).date;b.dataset.action='metric';return action(event);}
   if(a==='subscription-status'){setView('orders');return;}
   if(a==='today') {liveToday=true;start=end=data.daily.at(-1).date;selectedDay='';render();$('refresh').click();return;}
-  if(a==='range') {liveToday=false;end=data.daily.at(-1).date;start=shiftDay(end,1-Number(b.dataset.days));selectedDay='';}
+  if(a==='range') {liveToday=false;rangeDays=Number(b.dataset.days);end=data.daily.at(-1).date;start=shiftDay(end,1-Number(b.dataset.days));selectedDay='';}
   if(a==='day'){selectDay(b.dataset.date);return;}
   if(a==='metric') {
     const key=b.dataset.key;
@@ -195,12 +222,13 @@ host.addEventListener('submit',event=>{
   event.preventDefault();const f=new FormData(event.target);
   const a=String(f.get('start')||''),b=String(f.get('end')||'');
   if(a&&b&&a>b){event.target.elements.end.setCustomValidity('结束日期不能早于开始日期');event.target.elements.end.reportValidity();return;}
-  if(event.target.id==='insightPeriod'){liveToday=false;start=a;end=b;selectedDay='';}
+  if(event.target.id==='insightPeriod'){liveToday=false;rangeDays=null;start=a;end=b;selectedDay='';}
   else {query=String(f.get('query')||'');status=String(f.get('status')||'all');sort=String(f.get('sort')||'newest');listStart=a;listEnd=b;orderCurrency=String(f.get('currency')||'');dateField=String(f.get('dateField')||'purchasedAt');page=1;}
   render();
 });
 host.addEventListener('input',event=>{if(['start','end'].includes(event.target.name))event.target.form.elements.end.setCustomValidity('');});
-host.addEventListener('change',event=>{if(event.target.id==='trendMetric'){metric=event.target.value;render();}if(event.target.id==='trendCurrency'){currency=event.target.value;render();}});
+host.addEventListener('change',event=>{if(event.target.id==='historyRange'){window.adminHistoryDays=Number(event.target.value);rangeDays=window.adminHistoryDays;liveToday=false;saveViewPreferences();$('refresh').click();return;}if(event.target.id==='trendMetric'){metric=event.target.value;render();}if(event.target.id==='trendCurrency'){currency=event.target.value;render();}});
+window.addEventListener('admin-user-detail',event=>{if(data?.users.some(u=>u.id===event.detail))showDetail('user',event.detail);});
 window.addEventListener('admin-product-data',event=>receive(event.detail));
 window.addEventListener('admin-insight-view',event=>{if(data)setView(event.detail);});
 window.addEventListener('admin-style-change',render);

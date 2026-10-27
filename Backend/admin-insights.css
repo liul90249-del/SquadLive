@@ -121,3 +121,5 @@ html[data-admin-style="pearl"] .user-card { display:grid; width:100%; text-align
  @keyframes detail-reveal { from { opacity:0; transform:translateY(14px) scale(.98); } to { opacity:1; transform:none; } }
  @keyframes backdrop-reveal { from { opacity:0; } to { opacity:1; } }
 }
+
+.data-freshness{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;padding:18px 22px;margin:0 0 18px;background:#fff;border:1px solid #e0e8e4;border-radius:18px;font-size:13px;color:#52635e}.data-freshness div{display:flex;flex-direction:column;gap:5px}.data-freshness strong{font-size:14px;color:#26342e}.data-freshness small{color:#66756f}.data-freshness p{grid-column:1/-1;margin:0;line-height:1.6}.today-business{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:20px}.today-business button{display:flex;flex-direction:column;gap:8px;text-align:left;padding:18px;background:#f5f8fc;border:1px solid #e0e8ef;border-radius:14px;color:#273643}.today-business strong{font-size:30px}@media(max-width:700px){.today-business{grid-template-columns:repeat(2,minmax(0,1fr))}}

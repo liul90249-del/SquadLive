@@ -99,3 +99,15 @@ test('admin support lookup exposes installation ID, not credentials, and disting
  assert.equal(JSON.stringify(report).includes('private-account-token'),false);
  assert.equal(JSON.stringify(report).includes('private-hash'),false);
 });
+
+test('historical day ranges stay bounded, expose snapshot time and keep totals independent',()=>{
+  const now=Date.parse('2026-10-27T04:00:00Z');
+  const store={sharedPartnerReferrals:{cleaner:{accounts:{a:{id:'a',createdAt:'2026-01-02T00:00:00Z',activeDays:{'2026-01-02':true}}}}}};
+  const short=productOperations(store,'cleaner',now);
+  const long=productOperations(store,'cleaner',now,null,365);
+  assert.equal(short.daily.length,30);assert.ok(long.daily.length>30&&long.daily.length<=365);assert.equal(long.daily[0].date,'2026-01-02');
+  assert.equal(long.generatedAt,now);assert.equal(long.daily.at(-1).date,'2026-10-27');
+  assert.equal(long.daily.find(r=>r.date==='2026-01-02').registrations,1);
+  assert.deepEqual(long.totals,short.totals);
+  assert.equal(productOperations(store,'cleaner',now,null,999999).daily.length,30);
+});

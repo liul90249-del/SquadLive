@@ -1,0 +1,45 @@
+<!doctype html><meta charset="utf-8"><title>运营后台优化验证</title><h1>运营后台优化验证 · 独立演示数据</h1><pre id="results">检查中…</pre><iframe id="preview" width="1400" height="800"></iframe>
+<script>
+const frame=document.querySelector('iframe'),results=document.querySelector('#results'),checks=[];
+function check(name,ok){checks.push({name,pass:!!ok});if(!ok)throw Error(name);}
+const loaded=()=>new Promise(resolve=>frame.onload=resolve);
+const pause=()=>new Promise(r=>setTimeout(r,100));
+async function waitFor(fn){for(let n=0;n<100;n++){if(fn())return;await pause();}throw Error('等待页面状态超时');}
+(async()=>{try{
+ for(const section of ['view','marketing'])localStorage.removeItem(`admin.preferences.v1.cleaner.${section}`);
+ let load=loaded();frame.src='/admin?style=pearl&product=cleaner#productMarketingPanel';await load;
+ let w=frame.contentWindow,d=frame.contentDocument;
+ await waitFor(()=>d.querySelector('.growth-report'));
+ let snap=w.adminProductSnapshot;
+ check('页面刷新与业务发生时间独立显示',d.querySelector('.data-freshness').textContent.includes('服务端快照')&&d.querySelector('.data-freshness').textContent.includes('最近会话发生'));
+ check('今日经营直接使用API真实字段',d.querySelector('.today-business [data-key="registrations"] strong').textContent===String(snap.data.daily.at(-1).registrations));
+ const before=JSON.stringify(snap.data.marketing.users.map(u=>u.attribution));
+ d.querySelector('[data-market="quality"][data-kind="source"]').click();
+ check('来源缺口可展开，显示缺失标识的原因',d.querySelector('dialog[open]').textContent.includes('未收到 Singular 设备关联标识'));
+ d.querySelector('dialog[open] [data-market="close-help"]').click();
+ d.querySelector('[data-market="quality"][data-kind="tracking"]').click();
+ check('行为缺失展示原因而不推断故障',d.querySelector('dialog[open]').textContent.includes('不能仅凭缺口断定故障'));
+ d.querySelector('dialog[open] [data-market="close-help"]').click();
+ check('查看缺口不会改写来源',before===JSON.stringify(snap.data.marketing.users.map(u=>u.attribution)));
+ const usersButton=d.querySelector('.growth-report [data-market="growth-detail"][data-metric="users"][data-row="0"]');
+ const count=Number(usersButton.textContent);usersButton.click();
+ check('增长人数可追溯到对应用户',d.querySelector('dialog[open] tbody').rows.length===count);
+ d.querySelector('dialog[open] [data-market="inspect-user"]').click();
+ check('用户明细可继续打开',d.querySelector('dialog[open]').textContent.includes('用户详情'));
+ d.querySelector('dialog[open] form button').click();
+ const f=d.querySelector('#marketingFilters');f.elements.start.value='2026-09-20';f.elements.end.value='2026-10-18';f.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+ const group=d.querySelector('[data-growth="group"]');group.value='testing';group.dispatchEvent(new w.Event('change',{bubbles:true}));
+ load=loaded();w.location.reload();await load;w=frame.contentWindow;d=frame.contentDocument;await waitFor(()=>d.querySelector('.growth-report'));
+ check('刷新后保留历史日期及列分组',d.querySelector('#marketingFilters').elements.end.value==='2026-10-18'&&d.querySelector('[data-growth="group"]').value==='testing');
+ check('偏好保存不包含导入CSV或用户搜索',!Object.keys(JSON.parse(localStorage.getItem('admin.preferences.v1.cleaner.marketing'))).some(k=>['csv','query','credential'].includes(k)));
+ d.querySelector('.product-nav a[href="#productDailyPanel"]').click();
+ const range=d.querySelector('#historyRange');range.value='730';range.dispatchEvent(new w.Event('change',{bubbles:true}));
+ await waitFor(()=>w.adminProductSnapshot.status==='ready'&&w.adminProductSnapshot.data.historyDays===730);
+ check('两年查询取得已保存的长历史，不补造接入前数据',w.adminProductSnapshot.data.daily.length>180&&w.adminProductSnapshot.data.daily.length<=730&&d.querySelector('#historyRange').value==='730'&&w.adminProductSnapshot.data.daily[0].date===w.adminProductSnapshot.data.availableFrom);
+ check('历史范围偏好已保存',JSON.parse(localStorage.getItem('admin.preferences.v1.cleaner.view')).historyDays===730);
+ const stale=structuredClone(w.adminProductSnapshot);stale.data.generatedAt=Date.now()-180000;
+ w.dispatchEvent(new w.CustomEvent('admin-product-data',{detail:stale}));
+ check('旧快照会明确提示延迟',d.querySelector('.data-freshness').textContent.includes('超过 2 分钟'));
+ results.textContent=JSON.stringify({pass:true,checks},null,2);
+}catch(e){results.textContent=JSON.stringify({pass:false,error:e.message,checks},null,2);}})();
+</script>

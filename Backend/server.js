@@ -1444,7 +1444,7 @@ async function route(req, res) {
     return res.end(html);
   }
 
-  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs"].includes(url.pathname)) {
+  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-health.mjs", "/admin-preferences.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs"].includes(url.pathname)) {
     const content = await readFile(join(__dirname, url.pathname.slice(1)), "utf8");
     res.writeHead(200, { "content-type": url.pathname.endsWith('.css')
       ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" });
@@ -2242,7 +2242,9 @@ async function route(req, res) {
       if (!new Set(["cleaner", "dailyme", "nutriscan", "subguard", "sparkle", "catswipe"]).has(product))
         return jsonResponse(res, 404, { error: "Unknown product" });
       const verifiedReceipts = await readVerifiedProductReceipts(dataDir, product);
-      const operations=productOperations(store,product,Date.now(),verifiedReceipts);
+      const historyDays=Number(url.searchParams.get('days')||90);
+      if(![30,90,180,365,730].includes(historyDays))return jsonResponse(res,400,{error:'History days must be 30, 90, 180, 365 or 730'});
+      const operations=productOperations(store,product,Date.now(),verifiedReceipts,historyDays);
       const lifecycle=product==='cleaner'?await readSubscriptionLifecycle(dataDir,product):null;
       return jsonResponse(res, 200, { ...operations,
         marketing:{...marketingDataset(store,product,operations),applovin:product==='cleaner'?await applovinSync.status():null},

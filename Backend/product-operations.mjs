@@ -24,7 +24,7 @@ export async function readVerifiedProductReceipts(directory, product) {
   return results;
 }
 
-export function productOperations(store, product, now = Date.now(), verifiedReceipts = null) {
+export function productOperations(store, product, now = Date.now(), verifiedReceipts = null, historyDays = 30) {
   const state = store.sharedPartnerReferrals?.[product] || {};
   const accounts = Object.values(state.accounts || {});
   const sharedReceipts = Object.values(state.receipts || {});
@@ -49,6 +49,7 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
     // Preserve older attributed receipts if they predate file-backed inbox storage.
     ...sharedReceipts.filter(receipt => !verifiedKeys.has(`${receipt.environment}:${receipt.transaction_id}`))
   ];
+  const days=[30,90,180,365,730].includes(historyDays)?historyDays:30;
   const today = new Date(now).toISOString().slice(0, 10);
   const production = receipts.filter(item => item.environment === 'Production');
   const charged = production.filter(item => Number.isSafeInteger(item.price) && item.price > 0 && item.currency);
@@ -107,7 +108,15 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
     value.maximumMilliunits = Math.max(value.maximumMilliunits, order.priceMilliunits);
     value.count++;
   }
-  const daily = Array.from({length: 30}, (_, index) => dayAfter(today, index - 29)).map(date => {
+  const dates=[...accounts.flatMap(a=>[day(a.createdAt),day(a.activityTrackedFrom),...activityDays(a)]),
+    ...receipts.flatMap(r=>[iso(Number(r.purchased_at)*1000)?.slice(0,10),r.refunded_at?iso(Number(r.refunded_at))?.slice(0,10):null])]
+    .filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d||'')&&d<=today).sort();
+  const availableFrom=dates[0]||today;
+  const requestedFrom=dayAfter(today,1-days);
+  // A longer query exposes stored history; it must not manufacture pre-integration days.
+  const from=days>30&&availableFrom>requestedFrom?availableFrom:requestedFrom;
+  const count=Math.round((Date.parse(today)-Date.parse(from))/86400000)+1;
+  const daily = Array.from({length: count}, (_, index) => dayAfter(from,index)).map(date => {
     const dailyPaid = charged.filter(item => iso(Number(item.purchased_at) * 1000)?.slice(0, 10) === date);
     const dailyRefunded = refunded.filter(item => item.refunded_at && iso(Number(item.refunded_at))?.slice(0, 10) === date);
     return {
@@ -122,7 +131,7 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
     };
   });
   return {
-    product,
+    product, generatedAt: now, historyDays: days, availableFrom,
     totals: {
       registrations: accounts.length,
       registrationsToday: accounts.filter(account => day(account.createdAt) === today).length,

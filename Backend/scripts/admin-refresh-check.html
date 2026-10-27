@@ -1,10 +1,10 @@
 <!doctype html><meta charset="utf-8"><title>后台刷新回归检查</title>
 <h1>后台刷新回归检查（独立演示数据）</h1><pre id="results">正在检查…</pre>
-<iframe id="preview" width="1400" height="800" src="http://127.0.0.1:8896/admin?style=pearl&product=cleaner#productMarketingPanel"></iframe>
+<iframe id="preview" width="1400" height="800"></iframe>
 <script>
 const frame=document.querySelector('iframe'), results=document.querySelector('#results');
 const checks=[];function check(name,ok){checks.push({name,pass:!!ok});if(!ok)throw Error(name);}
-frame.onload=async()=>{try{
+frame.onload=async()=>{if(!frame.contentWindow.location.href.includes('/admin?'))return;try{
  const w=frame.contentWindow,d=frame.contentDocument;
  for(let n=0;n<100&&!d.querySelector('#insightWorkspace .growth-report');n++)await new Promise(r=>setTimeout(r,100));
  const host=d.querySelector('#insightWorkspace'),heading=host.querySelector('.workspace-heading'),report=host.querySelector('.growth-report');
@@ -40,4 +40,6 @@ frame.onload=async()=>{try{
  check('同步恢复后提示消失',host.previousElementSibling.hidden);
  results.textContent=JSON.stringify({pass:true,checks},null,2);
 }catch(e){results.textContent=JSON.stringify({pass:false,error:e.message,checks},null,2);}};
+for(const section of ['view','marketing'])localStorage.removeItem(`admin.preferences.v1.cleaner.${section}`);
+frame.src='/admin?style=pearl&product=cleaner#productMarketingPanel';
 </script>

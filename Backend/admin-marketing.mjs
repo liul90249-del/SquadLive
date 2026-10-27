@@ -1,4 +1,5 @@
-import {buildMarketingReport,buildGrowthReport,dateOf,DAY,RETURN_WINDOWS,GROWTH_DAYS,marketingSyncHealth} from './marketing-core.mjs';
+import {readPreference,savePreference} from './admin-preferences.mjs';
+import {buildMarketingReport,buildGrowthReport,growthDrilldown,dateOf,DAY,RETURN_WINDOWS,GROWTH_DAYS,marketingSyncHealth} from './marketing-core.mjs';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>v===null||v===undefined?'—':(v/1000).toLocaleString('zh-CN',{maximumFractionDigits:2,minimumFractionDigits:2});
 const pct=v=>v===null||v===undefined?'—':v.toFixed(1)+'%';
@@ -82,7 +83,7 @@ function growthSelection(s){const keys=s.growthGroup==='custom'&&Array.isArray(s
 function growthHTML(data,s){
   const g=buildGrowthReport(data,s),columns=growthSelection(s);
   const cell=(row,[key,,type])=>{const v=row[key];if(key==='adRevenue'&&row.adRevenueApplicable===false)return '不适用';return v==null?'—':type==='money'?money(v):type==='percent'?pct(v):String(v);};
-  const rowHTML=row=>`<tr><td><b>${esc(row.date)}</b>${row.channel!=='all'?`<small>${esc(title(row))}</small>`:''}${row.observed?'<small>当日未结束</small>':''}</td>${columns.map(col=>`<td>${cell(row,col)}</td>`).join('')}</tr>`;
+  const rowHTML=row=>`<tr><td><b>${esc(row.date)}</b>${row.channel!=='all'?`<small>${esc(title(row))}</small>`:''}${row.observed?'<small>当日未结束</small>':''}</td>${columns.map(col=>`<td>${['users','subD0','paidToDate','net'].includes(col[0])&&row[col[0]]!=null?`<button class="text-button" data-market="growth-detail" data-row="${row===g.total?'total':g.rows.indexOf(row)}" data-metric="${col[0]}" aria-label="${esc(row.date+' '+col[1]+'，查看明细')}">${cell(row,col)}</button>`:cell(row,col)}</td>`).join('')}</tr>`;
   return `<section class="insight-surface growth-report"><header><h2>增长日报</h2><button data-market="export-growth">导出当前分组 CSV</button></header>
   <div class="growth-controls"><label>排列维度<select data-growth="dimension">${options([['date','日期汇总'],['source','日期与当前来源层级']],s.growthDimension||'date')}</select></label><label>指标分组<select data-growth="group">${options([['overview','常用概览'],['testing','投放测试'],['custom','自定义列'],['acquisition','获客'],['subscription','行为与订阅'],['payment','扣款与退款'],['cancellation','退订'],['returns','回本'],['pending','待接入与预测'],['all','全部指标']],s.growthGroup||'overview')}</select></label><span>${esc(g.currency)} · UTC · 最新日期在前</span></div>
   <details class="growth-column-picker" ${s.columnPickerOpen?'open':''}><summary>自定义显示列（已选 ${columns.length} 项）</summary><p>按用户路径排列，勾选后立即应用，导出使用相同列。至少保留一项指标。</p>${['获客','行为与订阅','扣款与退款','退订','回本','待接入'].map(group=>`<fieldset><legend>${group}</legend>${growthColumns.filter(c=>c[3]===group).map(c=>`<label><input type="checkbox" data-growth-column="${c[0]}" ${columns.some(x=>x[0]===c[0])?'checked':''} ${columns.length===1&&columns[0][0]===c[0]?'disabled':''}>${esc(c[1])}</label>`).join('')}</fieldset>`).join('')}</details>
@@ -102,10 +103,20 @@ export function marketingEditing(product) {
 function state(data) {
   if(!states.has(data.product))states.set(data.product,{rangeDays:30,start:dateOf(data.now-29*DAY),end:dateOf(data.now),currency:'USD',level:'campaign',channel:'',campaignId:'',adGroupId:'',creativeId:'',limit:30,importKind:'costs',csv:'',preview:null,message:''});
   const s=states.get(data.product);
+  if(!s.preferencesLoaded){
+    const saved=readPreference(data.product,'marketing');
+    for(const k of ['start','end','channel','currency','level','growthDimension','growthGroup'])if(typeof saved[k]==='string'&&saved[k].length<=160)s[k]=saved[k];
+    if(Array.isArray(saved.growthColumns))s.growthColumns=saved.growthColumns.filter(k=>growthColumns.some(c=>c[0]===k));
+    if(saved.rangeDays===null||[30,90,180,365,730].includes(saved.rangeDays))s.rangeDays=saved.rangeDays;
+    s.preferencesLoaded=true;
+  }
   if(s.rangeDays){s.start=dateOf(data.now-(s.rangeDays-1)*DAY);s.end=dateOf(data.now);}
   return s;
 }
-function changed(){window.dispatchEvent(new Event('admin-marketing-change'));}
+function changed(){
+  for(const [product,s] of states)savePreference(product,'marketing',Object.fromEntries(['start','end','rangeDays','channel','currency','level','growthDimension','growthGroup','growthColumns'].map(k=>[k,s[k]])));
+  window.dispatchEvent(new Event('admin-marketing-change'));
+}
 export function marketingHTML(data) {
   if(!data)return '<div class="insight-empty">广告数据接口尚未接入当前后台版本。</div>';
   activeProduct=data.product;datasets.set(data.product,data);const s=state(data),r=buildMarketingReport(data,s);
@@ -118,12 +129,12 @@ export function marketingHTML(data) {
   const connection=data.applovin, syncHealth=marketingSyncHealth(connection,data.now);
   const beijingTime=value=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
   return `<div class="marketing-workspace" data-market-product="${esc(data.product)}">
-  <section class="insight-surface market-intro"><header><div><h2>广告投放</h2><p>从获客到真实扣款，查看每一批用户的回本进度</p></div><span class="status-badge">${data.costs.length?'已有成本记录':connection?.lastSuccess?'已同步 · 暂无成本记录':connection?.configured?'已连接 · 等待同步':'成本未接入'}</span></header>
+  <section class="insight-surface market-intro"><header><div><h2>广告投放</h2><p>从获客到真实扣款，查看每一批用户的回本进度</p></div><span class="status-badge">${data.costs.length?'已有成本记录':connection?.lastSuccess?'同步成功 · 返回 0 条成本记录':connection?.configured?'已连接 · 等待同步':'成本未接入'}</span></header>
   <p class="scope-note">全部日期为 UTC · 北京时间 08:00 结束上一统计日 · 金额按原币种分开 · 当前渠道收益仅覆盖已关联用户，非全量平台归因估算。</p>
   <div class="growth-controls"><span>获客日期快捷选择</span>${[30,90,180,365,730].map(n=>`<button type="button" data-market="date-range" data-days="${n}">近 ${n} 天</button>`).join('')}</div>
   <form id="marketingFilters" class="insight-filters"><label>获客开始<input type="date" name="start" value="${s.start}" required></label><label>获客结束<input type="date" name="end" value="${s.end}" required></label><label>渠道<select name="channel">${options([['','全部渠道'],...channels.map(c=>[c,names[c]||c])],s.channel)}</select></label><label>查看层级<select name="level">${options([['channel','渠道'],['campaign','广告系列'],['adGroup','广告组'],['creative','广告素材']],s.level)}</select></label><label>收入与成本币种<select name="currency">${options(currencies.map(c=>[c,c]),s.currency)}</select></label><button type="submit" class="primary">查看</button><button type="button" data-market="reset">重置</button></form>
   ${s.campaignId?`<p class="market-breadcrumb">当前路径：${esc(s.channel)} / ${esc(s.campaignId)} ${esc(s.adGroupId)} ${esc(s.creativeId)} <button data-market="clear-path">返回全部层级</button></p>`:''}</section>
-  ${data.product==='cleaner'?`<section class="insight-surface market-connection"><details ${s.connectionOpen?'open':''}><summary>AppLovin 数据连接<span class="status-badge" ${syncHealth.warning?'role="status"':''}>${esc(syncHealth.label)}</span></summary><div><p>广告花费 → 展示 → 点击 → 安装，由 AppLovin 广告主报表读取。每次更新最近 7 个完整 UTC 日，启用后北京时间 08:00 自动核对；失败会保留原数据并重试。</p><p class="scope-note">AppLovin 素材组显示在“广告组”层；单条素材成本未接入时不分摊。用户归因仍需 Singular 等来源与后台用户 ID 关联，广告安装数不会直接变成后台用户数。</p><p>${connection?.lastSuccess?'最近成功：'+esc(beijingTime(connection.lastSuccess))+'（北京时间）'+' · '+connection.rows+' 行 · 报表日期 '+esc(connection.start||'—')+' 至 '+esc(connection.end||'—')+'（UTC）':'尚未完成真实账户同步'}${connection?.currency?' · '+esc(connection.currency):''}</p>${connection?.error?`<p role="alert">${esc(connection.error)}</p>`:''}<button data-market="sync-applovin" ${!connection?.configured||document.body.dataset.demo?'disabled':''}>立即核对 AppLovin 成本</button><p role="status">${esc(s.syncMessage||'')}</p></div></details></section>`:''}
+  ${data.product==='cleaner'?`<section class="insight-surface market-connection"><details ${s.connectionOpen?'open':''}><summary>AppLovin 数据连接<span class="status-badge" ${syncHealth.warning?'role="status"':''}>${esc(syncHealth.label)}</span></summary><div><p>广告花费 → 展示 → 点击 → 安装，由 AppLovin 广告主报表读取。每次更新最近 7 个完整 UTC 日，启用后北京时间 08:00 自动核对；失败会保留原数据并重试。</p><p class="scope-note">AppLovin 素材组显示在“广告组”层；单条素材成本未接入时不分摊。用户归因仍需 Singular 等来源与后台用户 ID 关联，广告安装数不会直接变成后台用户数。</p><p>${connection?.lastSuccess?'最近成本同步成功：'+esc(beijingTime(connection.lastSuccess))+'（北京时间）'+' · 返回 '+connection.rows+' 条成本记录 · 报表日期 '+esc(connection.start||'—')+' 至 '+esc(connection.end||'—')+'（UTC）':'尚未完成真实账户同步'}${connection?.currency?' · '+esc(connection.currency):''}</p>${connection?.error?`<p role="alert">${esc(connection.error)}</p>`:''}<button data-market="sync-applovin" ${!connection?.configured||document.body.dataset.demo?'disabled':''}>立即核对 AppLovin 成本</button><p role="status">${esc(s.syncMessage||'')}</p></div></details></section>`:''}
   <div class="market-kpis">${[['广告花费','spend',r.totals.spend===null?'暂无成本记录':`${s.currency} ${money(r.totals.spend)}`],['新增用户（按安装 ID 去重）','users',r.totals.users],['首次实际扣款人数','paid',r.totals.paid],['已关联净扣款','net',`${s.currency} ${money(r.totals.net)}`]].map(([label,key,value])=>`<section>${h(label,key)}<strong>${value}</strong></section>`).join('')}</div>
   <section class="insight-surface"><header><h2>用户路径</h2>${h('阶段到达率','funnel')}</header>
   <p class="scope-note">展示 ${r.totals.impressions??'—'} → 点击 ${r.totals.clicks??'—'} → 广告报表安装 ${r.totals.installs??'—'}。以下新增用户按安装 ID 去重，不与广告报表安装数强行一一对应。</p>
@@ -141,7 +152,7 @@ export function marketingHTML(data) {
   ${table(['获客日 / 来源',h('新增用户（按安装 ID 去重）','users'),'花费',...RETURN_WINDOWS.map(n=>h(n+' 日净扣款 / ROAS','window'))],r.cohorts.slice(0,s.limit).map(c=>`<tr><td><b>${c.date}</b><small>${esc(title(c))}</small></td><td>${c.acquiredUsers}</td><td>${c.cost?money(c.cost.spendMilliunits):'未导入'}</td>${RETURN_WINDOWS.map(n=>`<td>${money(c.windows[n].net)}<small>${!c.windows[n].mature?'观察中':c.windows[n].roas===null?'成本或关联用户不足':pct(c.windows[n].roas)}</small></td>`).join('')}</tr>`))}
   <footer class="insight-pagination"><span>已展示 ${Math.min(s.limit,r.cohorts.length)} / ${r.cohorts.length} 批</span>${s.limit<r.cohorts.length?'<button data-market="more">加载更早 30 批</button>':''}</footer></section>
   <div class="market-bottom"><section class="insight-surface"><header><h2>试用转付费</h2>${h('计算方式','trial')}</header><div class="market-trial"><strong>${pct(r.trial.rate)}</strong><p>${r.trial.converted} 人实际扣款 / ${r.trial.ended} 人已结束试用</p><p>试用中 ${r.trial.pending} 人 · 结束时间未知 ${r.trial.unknownEnd} 人</p></div><p class="scope-note">不是“全部订阅转付费率”。历史未保存试用类型的交易不推断为试用；需苹果新交易或重新核对补齐。</p></section>
-  <section class="insight-surface"><header><h2>数据完整性</h2>${h('为什么有缺口','coverage')}</header><ul class="market-quality"><li>归因未知 <b>${r.quality.unknownAttribution} 人</b></li><li>未绑定用户的订单（购买日口径） <b>${r.quality.unlinkedOrders} 笔</b></li><li>金额或币种未知 <b>${r.quality.unknownAmounts} 笔</b></li><li>其他币种扣款（未并入当前金额） <b>${r.quality.mixedCurrencyOrders} 笔</b></li><li>收入归因上报待核对 <b>${r.quality.attributionDeliveryIssues} 笔</b></li></ul><p class="scope-note">这里只展示已同步或已导入记录；账户连接状态见上方。缺失成本、归因和行为记录需补齐后再评估渠道效果。</p></section></div>
+  <section class="insight-surface"><header><h2>数据完整性</h2>${h('为什么有缺口','coverage')}</header><ul class="market-quality"><li>行为未采集或覆盖不完整 <button class="text-button" data-market="quality" data-kind="tracking">${r.quality.funnelUnknown+r.quality.funnelPartial} 人 · 查看原因</button></li><li>归因未知 <button class="text-button" data-market="quality" data-kind="source">${r.quality.unknownAttribution} 人 · 查看待核对</button></li><li>未绑定用户的订单（购买日口径） <b>${r.quality.unlinkedOrders} 笔</b></li><li>金额或币种未知 <b>${r.quality.unknownAmounts} 笔</b></li><li>其他币种扣款（未并入当前金额） <b>${r.quality.mixedCurrencyOrders} 笔</b></li><li>收入归因上报待核对 <b>${r.quality.attributionDeliveryIssues} 笔</b></li></ul><p class="scope-note">这里只展示已同步或已导入记录；账户连接状态见上方。缺失成本、归因和行为记录需补齐后再评估渠道效果。</p></section></div>
   <section class="insight-surface"><details class="market-import" ${s.importOpen?'open':''}><summary>接入广告成本与首次获客归因</summary><p>先下载标准模板，将广告平台 / Singular 导出数据转换到模板列名。成本只接受 UTC、一个固定层级；归因可使用后台用户 ID，或选择 Singular 设备关联归因，按设备标识自动匹配唯一用户。仅导入首次安装记录，不能导入再营销或 SKAN 汇总数据。Singular 日志请选择 Singular Device ID 和 UTC 时间字段，再转换为模板；匹配不唯一或尚未关联时不会保存。先预览，确认后才保存。编辑期间暂停页面自动重绘，收起后恢复。</p>
   <form id="marketingImport"><label>导入类型<select name="kind">${options([['costs','每日广告成本'],['attribution','首次获客归因'],['singular','Singular 设备关联归因']],s.importKind)}</select></label><button type="button" data-market="template">下载当前模板</button><label>选择 CSV<input name="file" type="file" accept=".csv,text/csv"></label><label>CSV 内容<textarea name="csv" rows="5" spellcheck="false" placeholder="粘贴 CSV 或选择文件">${esc(s.csv)}</textarea></label><button type="submit">校验并预览</button></form>
   <div role="status" class="market-import-result">${esc(s.message)}</div>
@@ -164,9 +175,26 @@ document.addEventListener('click',async event=>{
   const b=event.target.closest('[data-market]');if(!b)return;
   if(b.dataset.market==='close-help'){dialog.close();return;}
   if(b.dataset.market==='help'){dialog.innerHTML=`<header><h2>投放指标说明</h2><button data-market="close-help">关闭</button></header><p class="metric-explanation">${esc(help[b.dataset.help])}</p>`;dialog.showModal();return;}
+  if(b.dataset.market==='inspect-user'){dialog.close();window.dispatchEvent(new CustomEvent('admin-user-detail',{detail:b.dataset.id}));return;}
   const scope=b.closest('[data-market-product]');if(!scope)return;
   const product=scope.dataset.marketProduct,data=datasets.get(product);if(!data)return;
   const s=state(data),action=b.dataset.market;
+  if(action==='inspect-user'){dialog.close();window.dispatchEvent(new CustomEvent('admin-user-detail',{detail:b.dataset.id}));return;}
+  if(action==='quality'){
+    const report=buildMarketingReport(data,s),ids=new Set(report.cohorts.flatMap(c=>data.users.filter(u=>dateOf(Date.parse(u.acquiredAt))===c.date).map(u=>u.id)));
+    const users=data.users.filter(u=>ids.has(u.id)&&['channel','campaignId','adGroupId','creativeId'].every(k=>!s[k]||(u.attribution?.[k]||(k==='channel'?'unknown':''))===s[k]));
+    const selected=users.filter(u=>b.dataset.kind==='source'?(!u.attribution||u.attribution.channel==='unknown'):!u.trackedFrom||Date.parse(u.trackedFrom)>Date.parse(u.createdAt)+DAY);
+    const sourceReason=u=>u.identityLinkStatus==='missing'?'未收到 Singular 设备关联标识：需新版 App 建立会话后核对':u.identityLinkStatus==='ambiguous'?'设备关联到多个安装身份：需人工核对，禁止自动分配':'设备标识已关联：尚无已导入的首次安装来源';
+    dialog.innerHTML=`<header><h2>${b.dataset.kind==='source'?'来源待核对':'行为采集覆盖'} · ${selected.length} 人</h2><button data-market="close-help">关闭</button></header><p>按当前获客日期及来源筛选。历史缺口不补造，不把未知来源当自然量；这里不会自动改写用户归因。</p>${table(['用户','首次获客 UTC','最近会话 UTC','记录状态 / 下一步'],selected.map(u=>`<tr><td><button class="text-button" data-market="inspect-user" data-id="${esc(u.id)}">${esc(u.id)}</button></td><td>${esc(u.acquiredAt)}</td><td>${esc(u.lastSeenAt||'未记录')}</td><td>${esc(b.dataset.kind==='source'?sourceReason(u):!u.trackedFrom?'未收到行为采集起始标记；需检查 App 版本与上报，不能仅凭缺口断定故障':'注册后才开始采集；此前行为未知，保留历史缺口')}</td></tr>`))}`;
+    dialog.showModal();return;
+  }
+  if(action==='growth-detail'){
+    const report=buildGrowthReport(data,s),row=b.dataset.row==='total'?report.total:report.rows[Number(b.dataset.row)];
+    if(!row||!['users','subD0','paidToDate','net'].includes(b.dataset.metric))return;
+    const detail=growthDrilldown(data,s,row,b.dataset.metric),label=growthColumns.find(c=>c[0]===b.dataset.metric)[1];
+    dialog.innerHTML=`<header><h2>${esc(row.date+' · '+label)}</h2><button data-market="close-help">关闭</button></header><p>首次获客批次口径；${esc(s.currency)}。新增 / 订阅 / 付费人数看用户，净扣款看订单。排除沙盒；免费试用不算实际扣款。</p>${b.dataset.metric==='net'?table(['交易','关联用户','购买时间 UTC','扣款','已知退款'],detail.orders.map(o=>`<tr><td>${esc(o.transactionId)}</td><td>${esc(o.accountId)}</td><td>${esc(o.purchasedAt)}</td><td>${money(o.priceMilliunits)}</td><td>${money(o.refundedMilliunits||0)}</td></tr>`)):table(['用户','首次获客 UTC','当前来源'],detail.users.map(u=>`<tr><td><button class="text-button" data-market="inspect-user" data-id="${esc(u.id)}">${esc(u.id)}</button></td><td>${esc(u.acquiredAt)}</td><td>${esc(names[u.attribution?.channel]||u.attribution?.channel||'归因未知')}</td></tr>`))}`;
+    dialog.showModal();return;
+  }
   if(action==='template'){const kind=scope.querySelector('[name="kind"]').value;download(`${product}-${kind}-template.csv`,headers[kind]+'\n');return;}
   if(action==='sync-applovin'){
     if(document.body.dataset.demo||!data.applovin?.configured)return;
@@ -181,7 +209,7 @@ document.addEventListener('click',async event=>{
   if(action==='date-range'){const days=Number(b.dataset.days);if([30,90,180,365,730].includes(days)){s.rangeDays=days;s.start=dateOf(data.now-(days-1)*DAY);s.end=dateOf(data.now);s.limit=30;}}
   if(action==='more')s.limit+=30;
   if(action==='clear-path'){s.channel='';s.campaignId='';s.adGroupId='';s.creativeId='';}
-  if(action==='reset'){states.delete(product);}
+  if(action==='reset'){savePreference(product,'marketing',{});states.delete(product);}
   if(action==='drill'){
     const row=buildMarketingReport(data,s).groups[Number(b.dataset.row)];if(!row)return;
     s.channel=row.channel;

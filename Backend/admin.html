@@ -684,10 +684,14 @@
       const target = document.getElementById("productCards");
       const requestVersion = ++productLoadVersion;
       const requestedProduct = state.product;
+      try {
+        const prefs=JSON.parse(localStorage.getItem(`admin.preferences.v1.${requestedProduct}.view`)||'null');
+        window.adminHistoryDays=[30,90,180,365,730].includes(prefs?.historyDays)?prefs.historyDays:90;
+      } catch {window.adminHistoryDays=90;}
       window.adminProductSnapshot = {product: requestedProduct, status: 'loading'};
       window.dispatchEvent(new CustomEvent('admin-product-data', {detail: window.adminProductSnapshot}));
       try {
-        const data = await api(`/v1/admin/products/${requestedProduct}/operations`);
+        const data = await api(`/v1/admin/products/${requestedProduct}/operations?days=${window.adminHistoryDays || 90}`);
         if (state.product !== requestedProduct || requestVersion !== productLoadVersion) return;
         const totals = data.totals;
         document.getElementById("productHeading").textContent = productPicker.selectedOptions[0].textContent;
