@@ -180,8 +180,10 @@ export function marketingSyncHealth(connection, now=Date.now()) {
   if(connection.error)return {label:'最近同步失败 · 原数据保留',warning:true};
   if(!connection.enabled)return {label:'自动同步关闭',warning:true};
   if(!connection.lastSuccess)return {label:'已启用 · 等待首次同步',warning:true};
-  if(now-connection.lastSuccess>36*60*60*1000)return {label:'同步数据已过期 · 请核对',warning:true};
-  return {label:'自动同步正常',warning:false};
+  if(now-connection.lastSuccess>(connection.intervalMinutes||15)*2*60000)return {label:'同步数据已过期 · 请核对',warning:true};
+  if(connection.rows===0)return {label:'已核对 · 暂无成本记录',warning:true};
+  if(connection.reportMode!=='realtime'||connection.end!==dateOf(now))return {label:'尚未同步当天数据',warning:true};
+  return {label:'自动同步正常 · 含当天',warning:false};
 }
 
 // Growth columns use acquisition cohorts; D0 is acquisition's UTC calendar day.

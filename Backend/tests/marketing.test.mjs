@@ -88,7 +88,7 @@ test('authenticated session first events are allowlisted, monotonic and cannot m
 
 test('connection health prioritizes failures and stale data over the enabled flag',async()=>{
   const {marketingSyncHealth}=await import('../marketing-core.mjs');
-  const connected={configured:true,enabled:true,lastSuccess:now};
+  const connected={reportMode:'realtime',end:new Date(now).toISOString().slice(0,10),rows:1,configured:true,enabled:true,lastSuccess:now};
   assert.equal(marketingSyncHealth(connected,now).warning,false);
   assert.match(marketingSyncHealth({...connected,error:'network failed'},now).label,/失败/);
   assert.match(marketingSyncHealth(connected,now+37*3600000).label,/过期/);
@@ -113,4 +113,13 @@ test('campaign and date returns exclude unmatched creatives, organic and unknown
   assert.equal(dated.windows[7].roas,200);
   data.costs=[cost({currency:'GBP'})];
   assert.equal(buildMarketingReport(data,{level:'date'}).cohorts[0].windows[7].roas,null);
+});
+
+test('zero-row response and yesterday-only success are not healthy live advertising data',async()=>{
+ const {marketingSyncHealth}=await import('../marketing-core.mjs');const now=Date.parse('2026-10-27T10:00:00Z');
+ const s={configured:true,enabled:true,lastSuccess:now,reportMode:'realtime',end:'2026-10-27',rows:1,intervalMinutes:15};
+ assert.equal(marketingSyncHealth(s,now).warning,false);
+ assert.match(marketingSyncHealth({...s,rows:0},now).label,/暂无成本记录/);
+ assert.match(marketingSyncHealth({...s,end:'2026-10-26'},now).label,/当天/);
+ assert.match(marketingSyncHealth(s,now+31*60000).label,/过期/);
 });

@@ -14,7 +14,7 @@ export function applovinStatus(config,state={}) {
   return {configured:Boolean(config.key&&/^[A-Z]{3}$/.test(config.currency)),enabled:config.enabled,
     currency:config.currency||null,lastAttempt:state.lastAttempt||null,lastSuccess:state.lastSuccess||null,
     error:state.error||null,rows:state.rows??null,start:state.start||null,end:state.end||null,
-    schedule:'00:00 UTC / 北京时间 08:00',granularity:'广告系列 / 素材组'};
+    schedule:'每 15 分钟（含当天 UTC 数据）',intervalMinutes:15,reportMode:state.reportMode||null,provisionalDate:state.provisionalDate||null,granularity:'广告系列 / 素材组'};
 }
 export function normalizeApplovinRows(rows,config,start,end) {
   if(!/^[A-Z]{3}$/.test(config.currency))throw failure('请在服务器配置并核实 AppLovin 报表币种');
@@ -33,7 +33,7 @@ export async function fetchApplovinCosts(config,{start,end,fetchImpl=fetch}={}) 
   const records=[];let emptyResponse=false;
   for(let offset=0;offset<=2000;offset+=500){
     const url=new URL('https://r.applovin.com/report');
-    const params={api_key:config.key,start,end,format:'csv',report_type:'advertiser',day_column:'day',
+    const params={api_key:config.key,start,end,format:'csv',report_type:'advertiser',
       columns:APPLOVIN_COLUMNS.join(','),filter_campaign_package_name:config.bundleId,
       filter_campaign_ad_type:'ua',limit:'500',offset:String(offset),sort_day:'ASC',
       sort_campaign_id_external:'ASC',sort_creative_set_id:'ASC'};
@@ -72,7 +72,7 @@ export function createApplovinSync({getStore,saveStore,config=applovinConfig(),f
   let running;
   const status=async()=>applovinStatus(config,(await getStore()).marketing?.cleaner?.applovin);
   async function perform(){
-    const now=clock(),end=dateOf(now-DAY),start=dateOf(now-7*DAY);
+    const now=clock(),end=dateOf(now),start=dateOf(now-7*DAY);
     const store=await getStore(),state=(store.marketing||={}).cleaner||={costs:{},attributions:{},imports:[]};
     state.applovin={...state.applovin,lastAttempt:now,error:null};
     try{
@@ -93,7 +93,7 @@ export function createApplovinSync({getStore,saveStore,config=applovinConfig(),f
         prepared.records.forEach(r=>{r.source='applovin-api';});
         applyMarketingImport(shadow,'cleaner',prepared,now);
       }
-      staged.applovin={lastAttempt:now,lastSuccess:now,error:null,rows:rows.length,start,end};
+      staged.applovin={lastAttempt:now,lastSuccess:now,error:null,rows:rows.length,start,end,reportMode:'realtime',provisionalDate:end};
       store.marketing.cleaner=staged;
       try{await saveStore(store);}catch(error){store.marketing.cleaner=current;throw error;}
       return applovinStatus(config,staged.applovin);
@@ -113,7 +113,8 @@ export function createApplovinSync({getStore,saveStore,config=applovinConfig(),f
   return {status,run,async tick(){
     if(!config.enabled)return;
     const s=await status(),now=clock();
-    if(!s.configured||s.lastSuccess&&!s.error&&dateOf(s.lastSuccess)===dateOf(now)||s.lastAttempt&&now-s.lastAttempt<3600000)return;
+    const retryAfter=s.error?3600000:15*60000;
+    if(!s.configured||s.lastAttempt&&now-s.lastAttempt<retryAfter)return;
     try{await run();}catch{/* Error is persisted and shown in authenticated admin. */}
   }};
 }

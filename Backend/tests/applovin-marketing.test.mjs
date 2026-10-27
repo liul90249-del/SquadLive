@@ -16,7 +16,7 @@ test('AppLovin normalization uses stable IDs, UTC, explicit currency and convers
 test('request is advertiser UA, filtered to Cleaner, pagination and errors never leak key',async()=>{
   const offsets=[];
   await fetchApplovinCosts(config,{start:'2026-10-13',end:'2026-10-19',fetchImpl:async(url,options)=>{
-    assert.equal(url.origin,'https://r.applovin.com');assert.equal(url.searchParams.get('report_type'),'advertiser');
+    assert.equal(url.origin,'https://r.applovin.com');assert.equal(url.searchParams.get('report_type'),'advertiser');assert.equal(url.searchParams.has('day_column'),false);
     assert.equal(url.searchParams.get('filter_campaign_package_name'),config.bundleId);
     assert.equal(url.searchParams.get('filter_campaign_ad_type'),'ua');assert.equal(options.redirect,'error');
     offsets.push(url.searchParams.get('offset'));
@@ -45,13 +45,14 @@ test('failed or mixed-ownership sync retains costs and retries no more than hour
   await sync.tick();assert.equal(calls,1);
   time+=3600000;await sync.tick();assert.equal(calls,2);
 });
-test('scheduler runs once per UTC day, disabled configuration never sends credentials',async()=>{
+test('scheduler refreshes within the day every 15 minutes, disabled configuration never sends credentials',async()=>{
   const store={};let time=now,calls=0;
   const args={getStore:async()=>store,saveStore:async()=>{},clock:()=>time,fetchImpl:async()=>{calls++;return response([]);}};
   await createApplovinSync({...args,config:{...config,enabled:false}}).tick();assert.equal(calls,0);
   const sync=createApplovinSync({...args,config});
   await sync.tick();await sync.tick();assert.equal(calls,1);
-  time+=86400000;await sync.tick();assert.equal(calls,2);
+  time+=14*60000;await sync.tick();assert.equal(calls,1);
+  time+=60000;await sync.tick();assert.equal(calls,2);
 });
 test('bad response or persistence failure cannot replace existing cost data',async()=>{
   const store={marketing:{cleaner:{costs:{old:{channel:'applovin',date:'2026-10-19',source:'applovin-api',spendMilliunits:123}},imports:[]}}};
@@ -91,3 +92,13 @@ test('a failed manual refresh after same-day success is retried after the hourly
   time+=3600000;fail=false;await sync.tick();assert.equal(calls,3);
   assert.equal((await sync.status()).error,null);
 });
+
+ test('sync includes today and replaces partial-day metrics without double counting',async()=>{
+ const store={};let amount='12.00';const seen=[];
+ const sync=createApplovinSync({config,getStore:async()=>store,saveStore:async()=>{},clock:()=>now,
+ fetchImpl:async url=>{seen.push([url.searchParams.get('start'),url.searchParams.get('end')]);return response([{...record(),day:'2026-10-20',cost:amount}]);}});
+ await sync.run();amount='57.12';await sync.run();
+ assert.deepEqual(seen,[['2026-10-13','2026-10-20'],['2026-10-13','2026-10-20']]);
+ const records=Object.values(store.marketing.cleaner.costs);assert.equal(records.length,1);assert.equal(records[0].spendMilliunits,57120);
+ const status=await sync.status();assert.equal(status.reportMode,'realtime');assert.equal(status.provisionalDate,'2026-10-20');assert.equal(status.intervalMinutes,15);
+ });
