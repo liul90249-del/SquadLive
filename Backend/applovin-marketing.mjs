@@ -21,8 +21,10 @@ export function normalizeApplovinRows(rows,config,start,end) {
   return rows.map(r=>{
     if(r.campaign_package_name!==config.bundleId||r.campaign_ad_type!=='ua')throw failure('AppLovin 返回了其他产品或再营销数据，已停止导入');
     if(!r.day||r.day<start||r.day>end||!r.campaign_id_external||!r.creative_set_id)throw failure('AppLovin 日期或稳定来源 ID 不完整');
-    if(!/^\d+(?:\.\d+)?$/.test(String(r.cost)))throw failure('AppLovin 花费格式无效');
-    const amount=Number(r.cost);
+    // Advertiser CSV uses "$59.04907" for USD, unlike JSON/numeric fixtures.
+    const cost=String(r.cost).trim().replace(config.currency==='USD'?/^\$/:/$^/,'');
+    if(!/^\d+(?:\.\d+)?$/.test(cost))throw failure('AppLovin 花费格式无效');
+    const amount=Number(cost);
     if(!Number.isFinite(amount)||amount>9999999999)throw failure('AppLovin 花费超出允许范围');
     return [r.day,'UTC','applovin',r.campaign_id_external,r.campaign,r.creative_set_id,r.creative_set,'','',
       config.currency,amount.toFixed(3),r.impressions,r.clicks,r.conversions];
@@ -40,10 +42,13 @@ export async function fetchApplovinCosts(config,{start,end,fetchImpl=fetch}={}) 
     for(const [k,v] of Object.entries(params))url.searchParams.set(k,v);
     let response,text;
     try{
-      response=await fetchImpl(url,{signal:AbortSignal.timeout(25000),redirect:'error'});
-      if(!response.ok)throw new Error();
+      response=await fetchImpl(url,{signal:AbortSignal.timeout(60000),redirect:'error'});
       text=await response.text();
-    }catch{throw failure('AppLovin 请求失败，请核对服务器 Report Key、权限与网络后重试');}
+    }catch(error){
+      if(error.name==='TimeoutError'||error.name==='AbortError')throw failure('AppLovin 报表请求超时，原成本保留；请稍后重试');
+      throw failure('AppLovin 请求失败，请核对服务器 Report Key、权限与网络后重试');
+    }
+    if(!response.ok)throw failure(`AppLovin 报表请求失败（HTTP ${Number(response.status)||0}），原成本保留`);
     if(Buffer.byteLength(text)>700000)throw failure('AppLovin 报表过大，已停止同步');
     const lines=text.replace(/^\uFEFF/,'').trim();
     // A new, inactive account can return HTTP 200 with a zero-byte CSV.
@@ -54,8 +59,8 @@ export async function fetchApplovinCosts(config,{start,end,fetchImpl=fetch}={}) 
     }
     // csvRows requires a data row; allow a valid header-only zero-spend report.
     const parsed=csvRows(lines+'\n'+APPLOVIN_COLUMNS.map(()=>'__sentinel__').join(','));
-    parsed.pop();const header=parsed.shift();
-    if(header.length!==APPLOVIN_COLUMNS.length||!APPLOVIN_COLUMNS.every(c=>header.includes(c)))throw failure('AppLovin 报表列不匹配，保留原数据');
+    parsed.pop();const header=parsed.shift().map(c=>c.trim().toLowerCase());
+    if(header.length!==APPLOVIN_COLUMNS.length||new Set(header).size!==header.length||!APPLOVIN_COLUMNS.every(c=>header.includes(c)))throw failure('AppLovin 报表列不匹配，保留原数据');
     for(const row of parsed){
       if(row.length!==header.length)throw failure('AppLovin 报表列数不匹配');
       records.push(Object.fromEntries(header.map((h,i)=>[h,row[i]])));

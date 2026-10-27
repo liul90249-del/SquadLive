@@ -102,3 +102,20 @@ test('a failed manual refresh after same-day success is retried after the hourly
  const records=Object.values(store.marketing.cleaner.costs);assert.equal(records.length,1);assert.equal(records[0].spendMilliunits,57120);
  const status=await sync.status();assert.equal(status.reportMode,'realtime');assert.equal(status.provisionalDate,'2026-10-20');assert.equal(status.intervalMinutes,15);
  });
+
+test('production CSV capitalization and USD prefix import actual spend and zero installs',async()=>{
+ const body='Day,Campaign_package_name,Campaign_ad_type,Campaign_id_external,Campaign,Creative_set_id,Creative_set,Cost,Impressions,Clicks,Conversions\n2026-10-27,com.hecathehe.PhoneCleaner,ua,campaign-id,Test,set-id,Creative,$59.04907,308,240,0';
+ const rows=await fetchApplovinCosts(config,{start:'2026-10-27',end:'2026-10-27',fetchImpl:async()=>({ok:true,text:async()=>body})});
+ assert.deepEqual(rows[0].slice(9),['USD','59.049','308','240','0']);
+ assert.throws(()=>normalizeApplovinRows([{...record(),cost:'$1.00'}],{...config,currency:'EUR'},'2026-10-13','2026-10-19'),/格式无效/);
+ assert.throws(()=>normalizeApplovinRows([{...record(),cost:'USD 1.00'}],config,'2026-10-13','2026-10-19'),/格式无效/);
+});
+test('HTTP and timeout diagnostics remain safe and preserve stored costs',async()=>{
+ const store={marketing:{cleaner:{costs:{old:{channel:'applovin',date:'2026-10-19',source:'applovin-api',spendMilliunits:123}},imports:[]}}};
+ const sync=createApplovinSync({config,getStore:async()=>store,saveStore:async()=>{},clock:()=>now,fetchImpl:async()=>({ok:false,status:429,text:async()=>config.key})});
+ await assert.rejects(sync.run(),/HTTP 429/);
+ assert.equal(store.marketing.cleaner.costs.old.spendMilliunits,123);
+ assert.equal(JSON.stringify(store).includes(config.key),false);
+ await assert.rejects(fetchApplovinCosts(config,{fetchImpl:async()=>{throw Object.assign(new Error(config.key),{name:'TimeoutError'});}}),/超时/);
+ await assert.rejects(fetchApplovinCosts(config,{fetchImpl:async()=>{throw Object.assign(new Error(config.key),{status:400});}}),e=>!e.message.includes(config.key));
+});
