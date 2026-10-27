@@ -13,6 +13,7 @@ async function waitFor(fn){for(let n=0;n<100;n++){if(fn())return;await pause();}
  let snap=w.adminProductSnapshot;
  check('页面刷新与业务发生时间独立显示',d.querySelector('.data-freshness').textContent.includes('服务端快照')&&d.querySelector('.data-freshness').textContent.includes('最近会话发生'));
  check('今日经营直接使用API真实字段',d.querySelector('.today-business [data-key="registrations"] strong').textContent===String(snap.data.daily.at(-1).registrations));
+ check('今日经营数字完整显示，没有被按钮高度裁切',[...d.querySelectorAll('.today-business button')].every(b=>b.querySelector('strong').getBoundingClientRect().bottom<=b.getBoundingClientRect().bottom));
  const before=JSON.stringify(snap.data.marketing.users.map(u=>u.attribution));
  d.querySelector('[data-market="quality"][data-kind="source"]').click();
  check('来源缺口可展开，显示缺失标识的原因',d.querySelector('dialog[open]').textContent.includes('未收到 Singular 设备关联标识'));
