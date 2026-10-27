@@ -1,0 +1,43 @@
+<!doctype html><meta charset="utf-8"><title>后台刷新回归检查</title>
+<h1>后台刷新回归检查（独立演示数据）</h1><pre id="results">正在检查…</pre>
+<iframe id="preview" width="1400" height="800" src="http://127.0.0.1:8896/admin?style=pearl&product=cleaner#productMarketingPanel"></iframe>
+<script>
+const frame=document.querySelector('iframe'), results=document.querySelector('#results');
+const checks=[];function check(name,ok){checks.push({name,pass:!!ok});if(!ok)throw Error(name);}
+frame.onload=async()=>{try{
+ const w=frame.contentWindow,d=frame.contentDocument;
+ for(let n=0;n<100&&!d.querySelector('#insightWorkspace .growth-report');n++)await new Promise(r=>setTimeout(r,100));
+ const host=d.querySelector('#insightWorkspace'),heading=host.querySelector('.workspace-heading'),report=host.querySelector('.growth-report');
+ check('演示后台成功加载',!!report);
+ const boundary=structuredClone(w.adminProductSnapshot);boundary.data.marketing.now=Date.parse('2026-10-26T23:59:00Z');w.dispatchEvent(new w.CustomEvent('admin-product-data',{detail:boundary}));
+ check('北京时间08点前默认截至26日',host.querySelector('#marketingFilters').elements.end.value==='2026-10-26');
+ boundary.data.marketing.now=Date.parse('2026-10-27T00:01:00Z');w.dispatchEvent(new w.CustomEvent('admin-product-data',{detail:boundary}));
+ check('北京时间08点后自动显示27日实时行',host.querySelector('#marketingFilters').elements.end.value==='2026-10-27'&&host.querySelector('.growth-report tbody tr:nth-child(2)').textContent.includes('2026-10-27')&&host.querySelector('.growth-report tbody tr:nth-child(2)').textContent.includes('当日未结束'));
+ const snap=structuredClone(w.adminProductSnapshot);snap.data.marketing.now=Date.parse('2026-10-27T06:00:00Z');w.dispatchEvent(new w.CustomEvent('admin-product-data',{detail:snap}));
+ const filters=host.querySelector('#marketingFilters');
+ filters.elements.start.value='2026-09-27';filters.elements.end.value='2026-10-26';
+ filters.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+ const rows=[...host.querySelectorAll('.growth-report tbody tr')];
+ check('首行日期为26日，后续连续25日和24日',rows[1].cells[0].textContent==='2026-10-26'&&rows[2].cells[0].textContent==='2026-10-25'&&rows[3].cells[0].textContent==='2026-10-24');
+ await new Promise(r=>setTimeout(r,600));
+ const table=host.querySelector('.growth-report .market-table'), originalTable=table;
+ const details=host.querySelector('.growth-column-picker');details.open=true;table.scrollLeft=120;
+ const scroll=table.scrollLeft, row=table.querySelector('tbody tr');
+ w.dispatchEvent(new w.CustomEvent('admin-product-data',{detail:{product:'cleaner',status:'loading'}}));
+ check('同步开始不清空表格',host.contains(originalTable)&&host.contains(row));
+ const updated=structuredClone(snap);updated.data.marketing.now+=1000;
+ const beforeUsers=Number(row.cells[3].textContent);
+ updated.data.marketing.users.push({...updated.data.marketing.users[0],id:'synthetic-new-user',createdAt:'2026-10-26T12:00:00Z',acquiredAt:'2026-10-26T12:00:00Z',attribution:null});
+ w.dispatchEvent(new w.CustomEvent('admin-product-data',{detail:updated}));
+ check('新数据实际更新，而非停止同步',Number(table.querySelector('tbody tr').cells[3].textContent)===beforeUsers+1);
+ check('同步完成保留原表格节点',host.querySelector('.growth-report .market-table')===originalTable);
+ check('保留展开状态及横向滚动',host.querySelector('.growth-column-picker').open&&table.scrollLeft===scroll);
+ check('同步后筛选结束日期仍为26日',host.querySelector('#marketingFilters').elements.end.value==='2026-10-26');
+ check('同步后无表格淡入动画',host.querySelectorAll('.market-table').length>0&&host.getAnimations({subtree:true}).length===0);
+ w.dispatchEvent(new w.CustomEvent('admin-product-data',{detail:{product:'cleaner',status:'error',message:'synthetic failure'}}));
+ check('同步失败保留表格并显示提示',host.contains(originalTable)&&host.previousElementSibling.textContent.includes('同步失败'));
+ w.dispatchEvent(new w.CustomEvent('admin-product-data',{detail:updated}));
+ check('同步恢复后提示消失',host.previousElementSibling.hidden);
+ results.textContent=JSON.stringify({pass:true,checks},null,2);
+}catch(e){results.textContent=JSON.stringify({pass:false,error:e.message,checks},null,2);}};
+</script>

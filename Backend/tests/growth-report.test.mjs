@@ -11,6 +11,26 @@ const fixture=()=>({now:start+40*DAY,product:'cleaner',imports:[],
     {accountId:'b',transactionId:'intro',originalTransactionId:'b',kind:'subscription',purchasedAt:iso(.2),priceMilliunits:990,currency:'USD'},
     {accountId:'b',transactionId:'other-currency',originalTransactionId:'b',kind:'subscription',purchasedAt:iso(1),priceMilliunits:20000,currency:'GBP'}],
   subscriptions:{trackingStartedAt:start-1,people:[{id:'a',subscribedAt:start+.1*DAY,autoRenewStatus:0},{id:'b',subscribedAt:start+.2*DAY,autoRenewStatus:1}],cancellationEvents:[{id:'a',at:start+3*DAY}]}});
+test('date summary includes every selected UTC day; empty dates preserve unknown costs and existing totals',()=>{
+  const d=fixture(), original=buildGrowthReport(d);
+  const g=buildGrowthReport(d,{start:'2026-10-01',end:'2026-10-04'});
+  assert.deepEqual(g.rows.map(r=>r.date),['2026-10-04','2026-10-03','2026-10-02','2026-10-01']);
+  const empty=g.rows[0];
+  assert.equal(empty.users,0);assert.equal(empty.net,0);
+  assert.equal(empty.spend,null);assert.equal(empty.cpi,null);assert.equal(empty.subRateD0,null);
+  assert.equal(empty.roas,null);assert.equal(empty.cancelRateToDate,null);
+  assert.deepEqual(g.total,original.total);
+  assert.equal(buildGrowthReport(d,{start:'2026-10-01',end:'2026-10-04',growthDimension:'source'}).rows.length,1);
+});
+test('yesterday is the first row for a yesterday cutoff, including completely empty selections',()=>{
+  const d=fixture();d.now=Date.parse('2026-10-27T06:00:00Z');
+  const filters={start:'2026-10-24',end:'2026-10-26'};
+  const g=buildGrowthReport(d,filters);
+  assert.deepEqual(g.rows.map(r=>r.date),['2026-10-26','2026-10-25','2026-10-24']);
+  assert.ok(g.rows.every(r=>r.users===0&&r.spend===null));
+  const today=buildGrowthReport(d,{...filters,end:'2026-10-28'});
+  assert.equal(today.rows[0].date,'2026-10-27');assert.equal(today.rows[0].observed,true);
+});
 test('growth separates trial, actual charge and cancellation; revenue respects currency and refunds',()=>{
   const {rows:[r]}=buildGrowthReport(fixture());
   assert.equal(r.subD0,2);assert.equal(r.freeD0,1);assert.equal(r.paidD0,1);assert.equal(r.subRateD0,100);

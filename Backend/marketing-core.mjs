@@ -197,7 +197,21 @@ export function buildGrowthReport(data, filters={}) {
     return ['channel','campaignId','adGroupId','creativeId'].every(k=>!filters[k]||a[k]===filters[k]);
   };
   const validUsers=[...new Map(data.users.filter(match).map(u=>[u.id,u])).values()];
-  const rows=report.cohorts.map(c=>{
+  // Calendar rows belong to date summary only; never invent a source/campaign.
+  const cohorts=[...report.cohorts];
+  if(level==='date' && /^\d{4}-\d{2}-\d{2}$/.test(filters.start||'') && /^\d{4}-\d{2}-\d{2}$/.test(filters.end||'')) {
+    const from=Date.parse(filters.start+'T00:00:00Z');
+    const until=Math.min(Date.parse(filters.end+'T00:00:00Z'),Date.parse(dateOf(now)+'T00:00:00Z'));
+    const dates=new Set(cohorts.map(c=>c.date));
+    if(Number.isFinite(from)&&Number.isFinite(until)&&until>=from&&(until-from)/DAY<10000) {
+      for(let day=until;day>=from;day-=DAY) {
+        const date=dateOf(day);
+        if(!dates.has(date))cohorts.push({date,channel:'all',cost:null,calendarOnly:true});
+      }
+      cohorts.sort((a,b)=>b.date.localeCompare(a.date));
+    }
+  }
+  const rows=cohorts.map(c=>{
     const start=Date.parse(c.date+'T00:00:00Z'), end=start+DAY;
     const members=validUsers.filter(u=>dateOf(ms(u.acquiredAt))===c.date && (level==='date'||
       ['channel',...(level==='channel'?[]:['campaignId']),...(['adGroup','creative'].includes(level)?['adGroupId']:[]),...(level==='creative'?['creativeId']:[])].every(k=>(u.attribution?.[k]||(k==='channel'?'unknown':''))===(c[k]||''))));
@@ -222,7 +236,7 @@ export function buildGrowthReport(data, filters={}) {
       data.costs.some(cost=>cost.date===c.date && cost.currency===currency && cost.channel===u.attribution.channel &&
         ['campaignId','adGroupId','creativeId'].every(k=>!cost[k]||cost[k]===u.attribution[k])));
     const current=amount(),day0=amount(1),matched=amount(null,matchedMembers),cost=c.cost?.spendMilliunits??null;
-    const record={date:c.date,channel:c.channel,campaignId:c.campaignId,adGroupId:c.adGroupId,creativeId:c.creativeId,
+    const record={calendarOnly:c.calendarOnly===true,date:c.date,channel:c.channel,campaignId:c.campaignId,adGroupId:c.adGroupId,creativeId:c.creativeId,
       spend:cost,impressions:c.cost?.impressions??null,clicks:c.cost?.clicks??null,installs:c.cost?.installs??null,
       users:members.length,matchedUsers:matchedMembers.length,matchedNet:matchedMembers.length?matched.net:null,subD0:d0Subs.length,
       freeD0:d0Subs.filter(u=>subscriptions(u).some(o=>o.isFreeTrial&&ms(o.purchasedAt)>=ms(u.acquiredAt)&&ms(o.purchasedAt)<end)).length,
@@ -270,14 +284,16 @@ export function buildGrowthReport(data, filters={}) {
     }
     return growthRates(record);
   });
+  // Calendar placeholders must not make known aggregate costs/coverage unknown.
+  const totalRows=rows.filter(r=>!r.calendarOnly);
   // Totals recompute ratios from matching summed numerators and denominators.
   const additive=['spend','impressions','clicks','installs','users','subD0','freeD0','paidD0','cleanupD0','grossD0','refundD0','netD0','gross','refund','net','endedTrials','convertedTrials','cancelD0','cancelD3','cancelD7','cancelToDate','paidToDate','renewedToDate','unknownSource','matchedUsers','matchedNet','totalRevenue'];
-  const total={date:'合计',channel:'all',adRevenueApplicable:data.product!=='cleaner',observed:rows.some(r=>r.observed)};
-  for(const k of additive)total[k]=rows.length&&rows.every(r=>r[k]!==null)?rows.reduce((n,r)=>n+r[k],0):null;
+  const total={date:'合计',channel:'all',adRevenueApplicable:data.product!=='cleaner',observed:totalRows.some(r=>r.observed)};
+  for(const k of additive)total[k]=totalRows.length&&totalRows.every(r=>r[k]!==null)?totalRows.reduce((n,r)=>n+r[k],0):null;
   for(const d of GROWTH_DAYS){
-    total['netD'+d]=rows.length&&rows.every(r=>r['netD'+d]!==null)?rows.reduce((n,r)=>n+r['netD'+d],0):null;
-    total['matchedNetD'+d]=rows.length&&rows.every(r=>r['matchedNetD'+d]!==null)?rows.reduce((n,r)=>n+r['matchedNetD'+d],0):null;
-    total['roasD'+d]=rows.length&&rows.every(r=>r['roasD'+d]!==null)&&total.spend>0?total['matchedNetD'+d]/total.spend*100:null;
+    total['netD'+d]=totalRows.length&&totalRows.every(r=>r['netD'+d]!==null)?totalRows.reduce((n,r)=>n+r['netD'+d],0):null;
+    total['matchedNetD'+d]=totalRows.length&&totalRows.every(r=>r['matchedNetD'+d]!==null)?totalRows.reduce((n,r)=>n+r['matchedNetD'+d],0):null;
+    total['roasD'+d]=totalRows.length&&totalRows.every(r=>r['roasD'+d]!==null)&&total.spend>0?total['matchedNetD'+d]/total.spend*100:null;
   }
   for(const d of [0,3,7])total['cancelRateD'+d]=total['cancelD'+d]!==null?rate(total['cancelD'+d],total.subD0):null;
   return {rows,total:growthRates(total),currency,now};

@@ -1,3 +1,4 @@
+import {patchHTML} from './admin-refresh.mjs';
 import {paywallHTML,paywallEditing} from './admin-paywall.mjs';
 import {marketingHTML,marketingEditing} from './admin-marketing.mjs';
 import {dateOf,shiftDay,period,aggregate,delta,filterUsers,filterOrders,needsReview,pageRows} from './admin-insights-core.mjs';
@@ -15,7 +16,7 @@ function revealWorkspace() {
   const scene = `${picker.value}:${view}`;
   const changed = scene !== lastScene;
   lastScene = scene;
-  if (reducedMotion.matches || document.hidden) return;
+  if (!changed || reducedMotion.matches || document.hidden) return;
   const targets = changed
     ? host.querySelectorAll('.workspace-heading, .insight-filters, .insight-metric, .insight-surface')
     : host.querySelectorAll('.insight-table, .user-board, .trend-panel svg');
@@ -25,6 +26,7 @@ function revealWorkspace() {
 }
 
 const host = document.createElement('div'); host.id = 'insightWorkspace'; $('section-product').prepend(host);
+const syncNotice=document.createElement('div');syncNotice.className='insight-empty';syncNotice.setAttribute('role','status');syncNotice.hidden=true;host.before(syncNotice);
 const dialog = document.createElement('dialog'); dialog.className = 'insight-dialog'; document.body.append(dialog);
 const viewPanels = {overview:'productCardsPanel',trends:'productDailyPanel',users:'productUsersPanel',orders:'productOrdersPanel',prices:'productPricesPanel',marketing:'productMarketingPanel'};
 const viewFromHash = () => Object.keys(viewPanels).find(key=>'#'+viewPanels[key]===location.hash) || 'overview';
@@ -97,20 +99,29 @@ function ordersView() {
 function pricesView() {
   return `${paywallHTML(data.paywallPolicy)}<section class="insight-surface"><header><h2>商品价格分布</h2><span>全部已观察订单</span></header><p class="scope-note">这里展示历史已验证订单的价格，不代表当前 App Store 售价；不同币种分别统计。</p>${table(['商品','币种','最低价','最高价','订单数'],data.observedPrices.map(p=>`<tr><td>${esc(p.sku)}</td><td>${esc(p.currency)}</td><td>${money(p.minimumMilliunits,p.currency)}</td><td>${money(p.maximumMilliunits,p.currency)}</td><td>${btn(`${p.count} 笔 →`,'sku',`class="text-button" data-sku="${esc(p.sku)}" data-currency="${esc(p.currency)}"`)}</td></tr>`))}</section>${data.subscriptionCatalog?`<section class="insight-surface"><header><h2>当前售价核对</h2></header><p class="scope-note">${esc($('productSubscriptionCatalog').textContent)}</p></section>`:''}`;
 }
-function render() {
+function render(backgroundRefresh=false) {
   document.querySelectorAll('.product-nav a').forEach(link=>{if(link.getAttribute('href')==='#'+viewPanels[view])link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');});
   host.hidden=document.documentElement.dataset.adminStyle!=='pearl';
   if(!snapshot || snapshot.product!==picker.value || loading) {host.innerHTML='<div class="insight-empty" role="status">正在读取当前产品数据…</div>';return;}
   if(snapshot.status==='error') {host.innerHTML=`<div class="insight-empty" role="alert">读取失败：${esc(snapshot.message)}。可点击页面右上角“刷新”重试。</div>`;return;}
   if(!data) return;
   const p=period(data.daily,start,end);
-  host.innerHTML=`<div class="workspace-heading"><div><p>${esc(picker.selectedOptions[0].textContent)} / ${titles[view]}</p><h2>${titles[view]}</h2></div><span class="scope-chip">${data.connected?'已接入':'接入未完成'}</span></div><p class="insight-source">${esc($('productNotice').textContent)} · ${view==='marketing'?'按首次获客批次追踪收入':view==='orders'&&data.subscriptions?'订阅日期覆盖全部已接入历史':`趋势仅提供最近 ${data.daily.length} 天`}${document.body.dataset.demo?' · 当前为演示数据':''}</p>${['overview','trends'].includes(view)?periodControl():''}${view==='overview'?overview(p):view==='trends'?trends(p):view==='users'?usersView():view==='orders'?ordersView():view==='marketing'?marketingHTML({...data.marketing,subscriptions:data.subscriptions}):pricesView()}`;
+  const html=`<div class="workspace-heading"><div><p>${esc(picker.selectedOptions[0].textContent)} / ${titles[view]}</p><h2>${titles[view]}</h2></div><span class="scope-chip">${data.connected?'已接入':'接入未完成'}</span></div><p class="insight-source">${esc($('productNotice').textContent)} · ${view==='marketing'?'按首次获客批次追踪收入':view==='orders'&&data.subscriptions?'订阅日期覆盖全部已接入历史':`趋势仅提供最近 ${data.daily.length} 天`}${document.body.dataset.demo?' · 当前为演示数据':''}</p>${['overview','trends'].includes(view)?periodControl():''}${view==='overview'?overview(p):view==='trends'?trends(p):view==='users'?usersView():view==='orders'?ordersView():view==='marketing'?marketingHTML({...data.marketing,subscriptions:data.subscriptions}):pricesView()}`;
+  if(backgroundRefresh)patchHTML(host,html);else host.innerHTML=html;
   revealWorkspace();
   if(selectedDay)selectDay(selectedDay);
 }
 function receive(next) {
   if(next.product!==picker.value) return;
   if(lastProduct===next.product&&data&&(marketingEditing(next.product)||paywallEditing()))return;
+  // Same-product polling keeps the visible snapshot until replacement data arrives.
+  if(lastProduct===next.product&&data&&next.status==='loading')return;
+  if(lastProduct===next.product&&data&&next.status==='error') {
+    syncNotice.hidden=false;
+    syncNotice.textContent='同步失败，正在显示上次成功读取的数据。可点击右上角“刷新”重试。';
+    return;
+  }
+  syncNotice.hidden=true;
   snapshot=next; loading=next.status==='loading';
   if(lastProduct!==next.product) {data=null;view=lastProduct?'overview':initialView;lastProduct=next.product;exactAccount='';exactSku='';query='';status='all';page=1;listStart='';listEnd='';orderCurrency='';selectedDay='';start='';end='';liveToday=false;receivedAt=null;}
   if(next.status==='ready') {
@@ -120,10 +131,10 @@ function receive(next) {
     if(!start || end>latest || start<data.daily[0]?.date) {end=latest;start=shiftDay(end,-6);}
     if(!currencies().includes(currency)) currency=currencies()[0]||'';
   }
-  $('productPaywallPolicy').innerHTML=next.status==='ready'?paywallHTML(data.paywallPolicy):'';
+  patchHTML($('productPaywallPolicy'),next.status==='ready'?paywallHTML(data.paywallPolicy):'');
   $('productPaywallPolicy').hidden=next.product!=='cleaner';
-  $('productMarketing').innerHTML=next.status==='ready'?marketingHTML({...data.marketing,subscriptions:data.subscriptions}):'<p>当前产品投放数据尚未就绪</p>';
-  render();
+  patchHTML($('productMarketing'),next.status==='ready'?marketingHTML({...data.marketing,subscriptions:data.subscriptions}):'<p>当前产品投放数据尚未就绪</p>');
+  render(true);
 }
 function showDetail(kind,id) {
   let title, values;

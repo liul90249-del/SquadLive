@@ -86,7 +86,7 @@ function growthHTML(data,s){
   return `<section class="insight-surface growth-report"><header><h2>增长日报</h2><button data-market="export-growth">导出当前分组 CSV</button></header>
   <div class="growth-controls"><label>排列维度<select data-growth="dimension">${options([['date','日期汇总'],['source','日期与当前来源层级']],s.growthDimension||'date')}</select></label><label>指标分组<select data-growth="group">${options([['overview','常用概览'],['testing','投放测试'],['custom','自定义列'],['acquisition','获客'],['subscription','行为与订阅'],['payment','扣款与退款'],['cancellation','退订'],['returns','回本'],['pending','待接入与预测'],['all','全部指标']],s.growthGroup||'overview')}</select></label><span>${esc(g.currency)} · UTC · 最新日期在前</span></div>
   <details class="growth-column-picker" ${s.columnPickerOpen?'open':''}><summary>自定义显示列（已选 ${columns.length} 项）</summary><p>按用户路径排列，勾选后立即应用，导出使用相同列。至少保留一项指标。</p>${['获客','行为与订阅','扣款与退款','退订','回本','待接入'].map(group=>`<fieldset><legend>${group}</legend>${growthColumns.filter(c=>c[3]===group).map(c=>`<label><input type="checkbox" data-growth-column="${c[0]}" ${columns.some(x=>x[0]===c[0])?'checked':''} ${columns.length===1&&columns[0][0]===c[0]?'disabled':''}>${esc(c[1])}</label>`).join('')}</fieldset>`).join('')}</details>
-  <p class="scope-note">按上方获客日期和来源筛选，同批用户后续扣款与退款持续回补。D0 是获客当日，D3 / D7 分别截至第 3 / 7 天结束。— 表示无分母、未接入、历史不完整或观察期未结束，点击列名旁问号查看口径。当前日期不是最终结算数据。</p>
+  <p class="scope-note">按上方获客日期和来源筛选，同批用户后续扣款与退款持续回补。D0 是获客当日，D3 / D7 分别截至第 3 / 7 天结束。— 表示无分母、未接入、历史不完整或观察期未结束，点击列名旁问号查看口径。日期汇总按所选范围逐日显示，含今天时显示实时数据；当前日期不是最终结算数据。</p>
   ${table([h('获客日期','users'),...columns.map(c=>h(c[1],'growth-'+c[0]))],[rowHTML(g.total),...g.rows.slice(0,s.limit).map(rowHTML)])}
   <footer class="insight-pagination"><span>显示 ${Math.min(s.limit,g.rows.length)} / ${g.rows.length} 行 · 合计覆盖全部筛选结果，比例按总分子与总分母计算</span>${s.limit<g.rows.length?'<button data-market="more">加载更早 30 行</button>':''}</footer>
   <details class="growth-dictionary"><summary>指标分类与参考表对应关系</summary><p>参考表“商品激活”未给出业务定义，已拆为首次订阅、免费试用、首次实际扣款；“ROI”按明确公式区分为 ROAS 与 ROI。参考数据仅用于整理字段，不导入真实业务统计。</p>${['获客','行为与订阅','扣款与退款','退订','回本','待接入'].map(group=>`<h3>${group}</h3><dl>${growthColumns.filter(c=>c[3]===group).map(c=>`<dt>${esc(c[1])}</dt><dd>${esc(c[4])}</dd>`).join('')}</dl>`).join('')}</details></section>`;
@@ -100,8 +100,10 @@ export function marketingEditing(product) {
     (el.querySelector('.market-import[open]')||el.contains(document.activeElement)&&document.activeElement.closest('form')));
 }
 function state(data) {
-  if(!states.has(data.product))states.set(data.product,{start:dateOf(data.now-29*DAY),end:dateOf(data.now),currency:'USD',level:'campaign',channel:'',campaignId:'',adGroupId:'',creativeId:'',limit:30,importKind:'costs',csv:'',preview:null,message:''});
-  return states.get(data.product);
+  if(!states.has(data.product))states.set(data.product,{rangeDays:30,start:dateOf(data.now-29*DAY),end:dateOf(data.now),currency:'USD',level:'campaign',channel:'',campaignId:'',adGroupId:'',creativeId:'',limit:30,importKind:'costs',csv:'',preview:null,message:''});
+  const s=states.get(data.product);
+  if(s.rangeDays){s.start=dateOf(data.now-(s.rangeDays-1)*DAY);s.end=dateOf(data.now);}
+  return s;
 }
 function changed(){window.dispatchEvent(new Event('admin-marketing-change'));}
 export function marketingHTML(data) {
@@ -176,7 +178,7 @@ document.addEventListener('click',async event=>{
     }catch(e){s.syncMessage=e.message;}
     changed();return;
   }
-  if(action==='date-range'){const days=Number(b.dataset.days);if([30,90,180,365,730].includes(days)){s.start=dateOf(data.now-(days-1)*DAY);s.end=dateOf(data.now);s.limit=30;}}
+  if(action==='date-range'){const days=Number(b.dataset.days);if([30,90,180,365,730].includes(days)){s.rangeDays=days;s.start=dateOf(data.now-(days-1)*DAY);s.end=dateOf(data.now);s.limit=30;}}
   if(action==='more')s.limit+=30;
   if(action==='clear-path'){s.channel='';s.campaignId='';s.adGroupId='';s.creativeId='';}
   if(action==='reset'){states.delete(product);}
@@ -250,6 +252,7 @@ document.addEventListener('submit',async event=>{
     if(String(f.get('start'))>String(f.get('end'))){form.elements.end.setCustomValidity('结束不能早于开始');form.elements.end.reportValidity();return;}
     form.elements.end.setCustomValidity('');
     if(s.channel!==f.get('channel')){s.campaignId='';s.adGroupId='';s.creativeId='';}
+    if(s.start!==f.get('start')||s.end!==f.get('end'))s.rangeDays=null;
     for(const k of ['start','end','channel','currency','level'])s[k]=String(f.get(k));s.limit=30;changed();return;
   }
   s.importKind=String(f.get('kind'));s.csv=String(f.get('csv'));s.message='正在校验…';s.preview=null;

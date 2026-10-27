@@ -93,6 +93,7 @@ const server = http.createServer(async(req,res)=>{
   if(req.method!=='GET') return json({error:'演示预览为只读，未保存任何修改。'},403);
   try {
     if(url.pathname==='/__preview/requests') return json({requests});
+    if(url.pathname==='/__preview/refresh-check') {res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(await readFile(resolve(root,'scripts/admin-refresh-check.html')));}
     if(url.pathname==='/admin' || url.pathname==='/') {
       const product = ['squadlive',...products].includes(url.searchParams.get('product'))?url.searchParams.get('product'):'cleaner';
       let html=await readFile(resolve(root,'admin.html'),'utf8');
@@ -103,7 +104,7 @@ const server = http.createServer(async(req,res)=>{
     const files={'/admin-appearance.css':['admin-appearance.css','text/css'], '/admin-appearance.js':['admin-appearance.js','text/javascript'],
       '/assets/landing/squadlive-logo.png':['assets/landing/squadlive-logo.png','image/png']};
     for (const product of products) files[`/assets/products/${product}.png`] = [`assets/products/${product}.png`, 'image/png'];
-    for (const file of ['admin-paywall.mjs','admin-insights.css','admin-insights.mjs','admin-insights-core.mjs','admin-subscriptions.mjs','admin-subscriptions.css','admin-marketing.mjs','admin-marketing.css','marketing-core.mjs']) files[`/${file}`] = [file, file.endsWith('.css') ? 'text/css' : 'text/javascript'];
+    for (const file of ['admin-paywall.mjs','admin-insights.css','admin-insights.mjs','admin-refresh.mjs','admin-insights-core.mjs','admin-subscriptions.mjs','admin-subscriptions.css','admin-marketing.mjs','admin-marketing.css','marketing-core.mjs']) files[`/${file}`] = [file, file.endsWith('.css') ? 'text/css' : 'text/javascript'];
     if(files[url.pathname]) {const [file,type]=files[url.pathname];res.writeHead(200,{'content-type':type});return res.end(await readFile(resolve(root,file)));}
     if(url.pathname.startsWith('/v1/admin/')) requests++;
     const match=/^\/v1\/admin\/products\/([a-z]+)\/operations$/.exec(url.pathname);
