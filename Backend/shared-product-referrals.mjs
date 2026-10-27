@@ -91,6 +91,37 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   return {binding:s.bindings[account.id]||null,pending_transactions:Object.values(s.receipts).filter(r=>r.customer_id===account.id&&r.status==='delivery_pending').length};
  }
 
+ async function playerContext(product,authorization){
+  if(product!=='sparkle')throw fail('Player artwork sharing is not enabled for this product',404);
+  const {account}=await verify(product,authorization),client=clientFor(product);
+  if(!client)throw fail('Referral service is not configured',503);
+  return {account,client};
+ }
+ async function shareLink(product,authorization){
+  const {account,client}=await playerContext(product,authorization);
+  await client.identify(account.id,Math.floor(Date.parse(account.createdAt)/1000));
+  const result=await client.createPlayerShare(account.id);
+  if(!/^PS[A-F0-9]{12}$/.test(result.code||'')||result.url!==`https://partner.cleann.top/r/${result.code}?product=sparkle`||result.commission_bps!==0)throw fail('Invalid player share link response',502);
+  return {code:result.code,url:result.url,reward:result.reward,reward_units:result.reward_units,reward_cap:result.reward_cap};
+ }
+ async function rewards(product,authorization){
+  const {account,client}=await playerContext(product,authorization);
+  const result=await client.pendingRewards(account.id);
+  if(!Array.isArray(result.rewards))throw fail('Invalid reward response',502);
+  return {rewards:result.rewards.map(r=>{
+   if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(r.id||'')||r.product!==product||!Number.isSafeInteger(r.units)||r.units<1||r.units>1000000||typeof r.kind!=='string'||r.kind.length>100)throw fail('Invalid reward grant',502);
+   return {id:r.id,kind:r.kind,units:r.units};
+  })};
+ }
+ async function acknowledgeReward(product,authorization,id){
+  const {account,client}=await playerContext(product,authorization);
+  if(typeof id!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id))throw fail('Invalid reward ID');
+  // Retry identity is server-owned. Caller cannot acknowledge another account's
+  // grant or replace a receipt using customer_id/receipt fields in the request.
+  const receipt='sparkle:'+hash(product+':'+account.id+':'+id);
+  return client.acknowledgeReward(id,receipt,account.id);
+ }
+
  async function preview(product,authorization,code){
   const client=clientFor(product);if(!client)throw fail('Referral service is not configured',503);
   const normalized=String(code||'').trim().toUpperCase();
@@ -163,7 +194,7 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   if(receipt.revoked&&receipt.singular_purchase?.status==='pending')receipt.singular_purchase.status='cancelled';
   if(receipt.revoked&&receipt.singular_purchase?.status==='sent'&&!receipt.singular_refund&&t.revocationType!=='FAMILY_REVOKE')receipt.singular_refund={status:'pending'};
   s.receipts[key]=receipt;await saveStore(root);await drain(product);await drainSingular(product);
-  return {attribution_status:receipt.status,commission_eligible:receipt.status==='sent',customer_id:receipt.customer_id};
+  return {attribution_status:receipt.status,commission_eligible:receipt.status==='sent'&&(s.bindings[receipt.customer_id]?.commission_bps||0)>0,customer_id:receipt.customer_id};
  }
 
  async function drainSingular(product){
@@ -221,5 +252,5 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   }
  }
 
- return {session,status,preview,bind,recordVerified,drain,drainSingular};
+ return {session,status,shareLink,rewards,acknowledgeReward,preview,bind,recordVerified,drain,drainSingular};
 }
