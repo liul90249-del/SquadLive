@@ -1377,6 +1377,14 @@ async function route(req, res) {
     if(!sharedPartnerClients[product])return jsonResponse(res,503,{error:'Referral service is not configured'});
     return jsonResponse(res,200,await sharedProductReferrals.session(product,await readJSON(req),req));
   }
+  const sparkleSharingRoute=/^\/v1\/partners\/sparkle\/(share-link|rewards)$/.exec(url.pathname);
+  if(sparkleSharingRoute){
+    const authorization=req.headers.authorization||'',action=sparkleSharingRoute[1];
+    if(action==='share-link'&&req.method==='POST')return jsonResponse(res,200,await sharedProductReferrals.shareLink('sparkle',authorization));
+    if(action==='rewards'&&req.method==='GET')return jsonResponse(res,200,await sharedProductReferrals.rewards('sparkle',authorization));
+    if(action==='rewards'&&req.method==='POST')return jsonResponse(res,200,await sharedProductReferrals.acknowledgeReward('sparkle',authorization,(await readJSON(req)).id));
+    return jsonResponse(res,405,{error:'Method not allowed'});
+  }
   const sharedAttributionRoute=/^\/v1\/partners\/([a-z]+)\/attribution$/.exec(url.pathname);
   if(sharedAttributionRoute){
     const product=sharedAttributionRoute[1],authorization=req.headers.authorization||'';

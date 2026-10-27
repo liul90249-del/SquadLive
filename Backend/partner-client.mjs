@@ -19,6 +19,7 @@ export class PartnerClient {
   confirmBenefit({customer_id,claim_id,transaction_id,sku,receipt}){return this.request('/api/benefits',{action:'confirm',customer_id,claim_id,transaction_id,sku,receipt,environment:'Production'});}
   reportBenefitFailure(customer_id,claim_id,reason){return this.request('/api/benefits',{action:'failure',customer_id,claim_id,reason});}
   revokeBenefit(customer_id,claim_id,transaction_id,reason){return this.request('/api/benefits',{action:'revoke',customer_id,claim_id,transaction_id,reason});}
-  pendingRewards(){return this.request('/api/rewards?product='+encodeURIComponent(this.product));}
-  acknowledgeReward(id,receipt){return this.request('/api/rewards',{id,receipt});}
+  createPlayerShare(customer_id){return this.request('/api/player-share',{customer_id});}
+  pendingRewards(customer_id){return this.request('/api/rewards?product='+encodeURIComponent(this.product)+(customer_id?'&customer_id='+encodeURIComponent(customer_id):''));}
+  acknowledgeReward(id,receipt,customer_id){return this.request('/api/rewards',{id,receipt,...(customer_id?{customer_id}:{})});}
 }
