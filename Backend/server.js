@@ -1,3 +1,4 @@
+import {createWebReturnAttribution,webReturnDataset,cleanerAssociationFile,webReturnFallbackHTML} from './web-return-attribution.mjs';
 import {createPolicyCatalogReader} from './cleaner-policy-catalog.mjs';
 import {policyState,editPolicy,publishPolicy,publicPolicy,restorePolicyDraft} from './cleaner-paywall-policy.mjs';
 import {marketingDataset} from './marketing-core.mjs';
@@ -1367,10 +1368,29 @@ async function callDeepSeek(body) {
   return { answer: localAIReply(body.text, body.inputLanguage), source: "fallback", reason: result.reason, providerStatus: result.providerStatus };
 }
 
+const webReturnAttribution=createWebReturnAttribution({getStore,saveStore});
+const webReturnLimits=new Map();
+function allowWebReturnRequest(req){
+ const now=Date.now(),key=clientIPAddress(req)||'unknown';
+ for(const [id,value] of webReturnLimits)if(value.until<now)webReturnLimits.delete(id);
+ if(webReturnLimits.size>10000&&!webReturnLimits.has(key))return false;
+ const entry=webReturnLimits.get(key)||{until:now+60000,count:0};entry.count++;webReturnLimits.set(key,entry);return entry.count<=30;
+}
 async function route(req, res) {
   if (req.method === "OPTIONS") return jsonResponse(res, 204, {});
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  if(req.method==='GET'&&['/.well-known/apple-app-site-association','/apple-app-site-association'].includes(url.pathname)){
+    res.writeHead(200,{'content-type':'application/json','cache-control':'public, max-age=300'});return res.end(JSON.stringify(cleanerAssociationFile));
+  }
+  if(req.method==='GET'&&url.pathname==='/open/cleaner'){
+    res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff'});return res.end(webReturnFallbackHTML);
+  }
+  if(req.method==='POST'&&['/v1/partners/cleaner/web-return/click','/v1/partners/cleaner/web-return/claim'].includes(url.pathname)){
+    if(!allowWebReturnRequest(req))return jsonResponse(res,429,{error:'Please try again later'});
+    const body=await readJSON(req);
+    return jsonResponse(res,200,url.pathname.endsWith('/click')?await webReturnAttribution.issue(body,req.headers.origin):await webReturnAttribution.claim(body,req.headers.authorization));
+  }
   const sharedSessionRoute=/^\/v1\/partners\/([a-z]+)\/session$/.exec(url.pathname);
   if(req.method==='POST'&&sharedSessionRoute){
     const product=sharedSessionRoute[1];
@@ -1452,7 +1472,7 @@ async function route(req, res) {
     return res.end(html);
   }
 
-  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-health.mjs", "/admin-preferences.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs"].includes(url.pathname)) {
+  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-health.mjs", "/admin-preferences.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs", "/web-return-report.mjs"].includes(url.pathname)) {
     const content = await readFile(join(__dirname, url.pathname.slice(1)), "utf8");
     res.writeHead(200, { "content-type": url.pathname.endsWith('.css')
       ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" });
@@ -2255,7 +2275,7 @@ async function route(req, res) {
       const operations=productOperations(store,product,Date.now(),verifiedReceipts,historyDays);
       const lifecycle=product==='cleaner'?await readSubscriptionLifecycle(dataDir,product):null;
       return jsonResponse(res, 200, { ...operations,
-        marketing:{...marketingDataset(store,product,operations),applovin:product==='cleaner'?await applovinSync.status():null},
+        marketing:{...marketingDataset(store,product,operations),webReturns:product==='cleaner'?webReturnDataset(store):null,applovin:product==='cleaner'?await applovinSync.status():null},
         subscriptions:lifecycle?subscriptionAnalytics(operations,lifecycle,store.sharedPartnerReferrals?.[product]?.accountTokens):null,
         connected: Boolean(inboxProducts[product]),
         paywallPolicy: product==='cleaner'?policyState(store):null,
