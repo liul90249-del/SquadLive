@@ -1,3 +1,5 @@
+import {createWebFunnel,webFunnelDataset} from './web-funnel.mjs';
+import {createMetaSync,metaReportDataset} from './meta-marketing.mjs';
 import {createWebReturnAttribution,webReturnDataset,cleanerAssociationFile,webReturnFallbackHTML} from './web-return-attribution.mjs';
 import {createPolicyCatalogReader} from './cleaner-policy-catalog.mjs';
 import {policyState,editPolicy,publishPolicy,publicPolicy,restorePolicyDraft} from './cleaner-paywall-policy.mjs';
@@ -1369,6 +1371,7 @@ async function callDeepSeek(body) {
 }
 
 const webReturnAttribution=createWebReturnAttribution({getStore,saveStore});
+const cleanerWebFunnel=createWebFunnel({getStore,saveStore});
 const webReturnLimits=new Map();
 function allowWebReturnRequest(req){
  const now=Date.now(),key=clientIPAddress(req)||'unknown';
@@ -1390,6 +1393,10 @@ async function route(req, res) {
     if(!allowWebReturnRequest(req))return jsonResponse(res,429,{error:'Please try again later'});
     const body=await readJSON(req);
     return jsonResponse(res,200,url.pathname.endsWith('/click')?await webReturnAttribution.issue(body,req.headers.origin):await webReturnAttribution.claim(body,req.headers.authorization));
+  }
+  if(req.method==='POST'&&url.pathname==='/v1/partners/cleaner/web-events'){
+    if(!allowWebReturnRequest(req))return jsonResponse(res,429,{error:'Please try again later'});
+    return jsonResponse(res,200,await cleanerWebFunnel.record(await readJSON(req),req.headers.origin));
   }
   const sharedSessionRoute=/^\/v1\/partners\/([a-z]+)\/session$/.exec(url.pathname);
   if(req.method==='POST'&&sharedSessionRoute){
@@ -1472,7 +1479,7 @@ async function route(req, res) {
     return res.end(html);
   }
 
-  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-health.mjs", "/admin-preferences.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs", "/web-return-report.mjs"].includes(url.pathname)) {
+  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-health.mjs", "/admin-preferences.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs", "/web-return-report.mjs", "/admin-marketing-paths.mjs", "/marketing-paths-report.mjs"].includes(url.pathname)) {
     const content = await readFile(join(__dirname, url.pathname.slice(1)), "utf8");
     res.writeHead(200, { "content-type": url.pathname.endsWith('.css')
       ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" });
@@ -2247,6 +2254,7 @@ async function route(req, res) {
   if (url.pathname.startsWith("/v1/admin/")) {
     if (!requireAdmin(req, res)) return;
 
+    if(req.method==='POST'&&url.pathname==='/v1/admin/products/cleaner/meta-sync'){return jsonResponse(res,200,await metaSync.run());}
     if(req.method==='POST'&&url.pathname==='/v1/admin/products/cleaner/applovin-sync'){
       return jsonResponse(res,200,await applovinSync.run());
     }
@@ -2275,7 +2283,7 @@ async function route(req, res) {
       const operations=productOperations(store,product,Date.now(),verifiedReceipts,historyDays);
       const lifecycle=product==='cleaner'?await readSubscriptionLifecycle(dataDir,product):null;
       return jsonResponse(res, 200, { ...operations,
-        marketing:{...marketingDataset(store,product,operations),webReturns:product==='cleaner'?webReturnDataset(store):null,applovin:product==='cleaner'?await applovinSync.status():null},
+        marketing:{...marketingDataset(store,product,operations),webReturns:product==='cleaner'?webReturnDataset(store):null,webFunnel:product==='cleaner'?webFunnelDataset(store):null,meta:product==='cleaner'?await metaSync.status():null,metaReports:product==='cleaner'?metaReportDataset(store):null,applovin:product==='cleaner'?await applovinSync.status():null},
         subscriptions:lifecycle?subscriptionAnalytics(operations,lifecycle,store.sharedPartnerReferrals?.[product]?.accountTokens):null,
         connected: Boolean(inboxProducts[product]),
         paywallPolicy: product==='cleaner'?policyState(store):null,
@@ -2416,6 +2424,10 @@ const checkSubscriptions=createDailySubscriptionCheck({read:()=>readSubscription
 const subscriptionCheckTimer=setInterval(()=>checkSubscriptions(),60000);
 subscriptionCheckTimer.unref();
 checkSubscriptions();
+const metaSync=createMetaSync({getStore,saveStore});
+const metaCheckTimer=setInterval(()=>metaSync.tick().catch(()=>console.error('Meta report check failed')),60000);
+metaCheckTimer.unref();
+metaSync.tick().catch(()=>console.error('Meta report check failed'));
 const applovinSync=createApplovinSync({getStore,saveStore});
 const applovinCheckTimer=setInterval(()=>applovinSync.tick().catch(()=>console.error('AppLovin status check failed')),60000);
 applovinCheckTimer.unref();
@@ -2428,6 +2440,7 @@ async function shutdown(signal) {
   clearInterval(singularRetryTimer);
   clearInterval(subscriptionCheckTimer);
   clearInterval(applovinCheckTimer);
+  clearInterval(metaCheckTimer);
   console.log(`Received ${signal}; flushing data before shutdown.`);
   if (metricsSaveTimer) {
     clearTimeout(metricsSaveTimer);

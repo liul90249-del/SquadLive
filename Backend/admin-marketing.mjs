@@ -1,3 +1,4 @@
+import {marketingPathsHTML,webFunnelHTML} from './admin-marketing-paths.mjs';
 import {buildWebReturnReport} from './web-return-report.mjs';
 import {readPreference,savePreference} from './admin-preferences.mjs';
 import {buildMarketingReport,buildGrowthReport,growthDrilldown,dateOf,DAY,RETURN_WINDOWS,GROWTH_DAYS,marketingSyncHealth} from './marketing-core.mjs';
@@ -5,7 +6,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const money=v=>v===null||v===undefined?'—':(v/1000).toLocaleString('zh-CN',{maximumFractionDigits:2,minimumFractionDigits:2});
 const pct=v=>v===null||v===undefined?'—':v.toFixed(1)+'%';
 const ratio=(n,d)=>d>0?n/d*100:null;
-const names={all:'全部来源',unknown:'归因未知',organic:'自然量',applovin:'AppLovin'};
+const names={all:'全部来源',unknown:'归因未知',organic:'自然量',applovin:'AppLovin',facebook:'Facebook',meta:'Meta'};
 const title=r=>[names[r.channel]||r.channel,r.campaignName||r.campaignId,r.adGroupName||r.adGroupId,r.creativeName||r.creativeId].filter(Boolean).join(' / ');
 const help={
   paywallViewers:'所选获客批次中，实际记录过该配置版本、价格档位、模板和展示位置的去重用户。一个用户看过多种方案会出现在多行，不能跨行相加。',
@@ -126,12 +127,12 @@ function changed(){
 export function marketingHTML(data) {
   if(!data)return '<div class="insight-empty">广告数据接口尚未接入当前后台版本。</div>';
   activeProduct=data.product;datasets.set(data.product,data);const s=state(data),r=buildMarketingReport(data,s);
-  const channels=[...new Set([...data.costs.map(c=>c.channel),...data.users.map(u=>u.attribution?.channel||'unknown')])].sort();
-  const currencies=[...new Set(['USD',...data.costs.map(c=>c.currency),...data.orders.map(o=>o.currency).filter(Boolean)])].sort();
+  const channels=[...new Set([...data.costs.map(c=>c.channel),...(data.product==='cleaner'?['facebook']:[]),...data.users.map(u=>u.attribution?.channel||'unknown')])].sort();
+  const currencies=[...new Set(['USD',...data.costs.map(c=>c.currency),...(data.metaReports?.rows||[]).map(c=>c.currency),...data.orders.map(o=>o.currency).filter(Boolean)])].sort();
   const stageNames={onboarding_complete:'完成引导',photo_permission_granted:'照片已授权（含部分）',paywall_open:'看到订阅页',purchase_attempt:'点击购买',cleanup_completed:'成功清理',purchase_cancelled:'取消购买弹窗',purchase_failed:'购买失败',products_load_failed:'商品加载异常'};
   const stages=r.events.filter(e=>['onboarding_complete','photo_permission_granted','paywall_open','purchase_attempt'].includes(e.key));
   const errors=r.events.filter(e=>['cleanup_completed','purchase_cancelled','purchase_failed','products_load_failed'].includes(e.key));
-  const webReturn=buildWebReturnReport(data.webReturns,data.orders,{start:s.start,end:s.end,currency:s.currency,now:data.now});
+  const webReturn=buildWebReturnReport(data.webReturns,data.orders,{...s,now:data.now});
   const preview=s.preview;
   const period=s.start===s.end?(s.start===dateOf(data.now)?'今天 · '+s.start:s.start):s.start+' 至 '+s.end;
   const scopeText=period+'（UTC） · '+(names[s.channel]||s.channel||'全部来源');
@@ -149,7 +150,8 @@ export function marketingHTML(data) {
   <form id="marketingFilters" class="insight-filters"><label>开始日期<input type="date" name="start" value="${s.start}" required></label><label>结束日期<input type="date" name="end" value="${s.end}" required></label><label>渠道<select name="channel">${options([['','全部渠道'],...channels.map(c=>[c,names[c]||c])],s.channel)}</select></label><label>查看层级<select name="level">${options([['channel','渠道'],['campaign','广告系列'],['adGroup','广告组'],['creative','广告素材']],s.level)}</select></label><label>收入与成本币种<select name="currency">${options(currencies.map(c=>[c,c]),s.currency)}</select></label><button type="submit" class="primary">查看</button><button type="button" data-market="reset">重置</button></form>
   ${s.campaignId?`<p class="market-breadcrumb">当前路径：${esc(s.channel)} / ${esc(s.campaignId)} ${esc(s.adGroupId)} ${esc(s.creativeId)} <button data-market="clear-path">返回全部层级</button></p>`:''}</section>
   ${data.product==='cleaner'?`<section class="insight-surface market-connection"><details ${s.connectionOpen?'open':''}><summary>AppLovin 数据连接<span class="status-badge" ${syncHealth.warning?'role="status"':''}>${esc(syncHealth.label)}</span></summary><div><p>广告花费 → 展示 → 点击 → 安装，由 AppLovin 广告主报表读取。每 15 分钟同步当天及之前 7 个 UTC 日，与 AppLovin Real time 报表口径一致；当天数据持续更新，可能有平台延迟，后续同步会补齐修订。失败会保留原数据并重试。</p><p class="scope-note">AppLovin 素材组显示在“广告组”层；单条素材成本未接入时不分摊。用户归因仍需 Singular 等来源与后台用户 ID 关联，广告安装数不会直接变成后台用户数。</p><p>${connection?.lastSuccess?'最近接口核对成功：'+esc(beijingTime(connection.lastSuccess))+'（北京时间）'+' · 返回 '+connection.rows+' 条成本记录 · 报表日期 '+esc(connection.start||'—')+' 至 '+esc(connection.end||'—')+'（UTC）':'尚未完成真实账户同步'}${connection?.currency?' · '+esc(connection.currency):''}</p>${connection?.error?`<p role="alert">${esc(connection.error)}</p>`:''}<button data-market="sync-applovin" ${!connection?.configured||document.body.dataset.demo?'disabled':''}>立即核对 AppLovin 成本</button><p role="status">${esc(s.syncMessage||'')}</p></div></details></section>`:''}
-  <section class="insight-surface market-ad-summary"><header><div><h2>广告平台表现</h2><p>${esc(scopeText)}</p></div></header>
+  ${marketingPathsHTML(data,s)}
+  <section class="insight-surface market-ad-summary"><header><div><h2>UTC 广告平台表现（已导入数据）</h2><p>${esc(scopeText)}</p></div></header>
   ${kpis([['广告花费','spend',r.totals.spend===null?'暂无成本记录':`${s.currency} ${money(r.totals.spend)}`],['广告展示','impressions',r.totals.impressions??'—'],['广告点击','clicks',r.totals.clicks??'—'],['广告归因安装','installs',r.totals.installs??'—']])}
   <p class="scope-note">以上四项均来自同一筛选范围的广告平台报表。${esc(costCoverage)}</p></section>
   <section class="insight-surface market-user-summary"><header><div><h2>后台新增用户与后续转化</h2><p>首次获客日期：${esc(scopeText)}</p></div></header>
@@ -161,7 +163,8 @@ export function marketingHTML(data) {
   <div class="market-path"><div><small>所选批次后台新增</small><strong>${r.totals.users}</strong><span>按安装 ID 去重</span></div>${stages.map(e=>`<div><small>${stageNames[e.key]}</small><strong>${e.count??'—'}</strong><span>${pct(e.rate)} · 已采集 ${e.denominator} 人</span></div>`).join('')}<div><small>已验证免费试用</small><strong>${r.trial.started}</strong><span>仅明确的试用订单</span></div><div><small>首次实际扣款</small><strong>${r.totals.paid}</strong><span>不含 0 元试用</span></div></div>
   <div class="market-secondary">${errors.map(e=>`<span>${stageNames[e.key]} <b>${e.count??'未采集'}</b></span>`).join('')}</div>
   <p class="scope-note">行为未采集 ${r.quality.funnelUnknown} 人 · 更新后才开始采集 ${r.quality.funnelPartial} 人。旁路行为不强制先后，首次发生记录不代表当天发生次数。</p></section>
-  ${data.product==='cleaner'?`<section class="insight-surface"><header><h2>网页返回关联</h2></header><p class="scope-note">仅统计用户同意衡量、下载后返回网页点击“打开 App”而完成的来源关联。按网页下载点击 UTC 日期和上方日期、币种筛选；不受 MMP 来源下钻筛选影响。活动名称来自网页链接，未经广告平台认证；不等同于 Singular 安装归因，不并入安装数或广告 ROAS。仅显示绑定之后的已验证正式扣款，包含续费并扣除已知退款。新账号表示后台账号在点击后创建，不代表已验证的新安装。</p>${table(['点击日 / 网页来源','下载点击','关联账号','新账号 / 已有账号','付费账号','扣款笔数','关联净扣款'],webReturn.rows.map(row=>`<tr><td>${esc(row.date)}<small>${esc([row.campaign.utm_source,row.campaign.utm_campaign||row.campaign.campaign_id,row.campaign.adset_name||row.campaign.adset_id,row.campaign.utm_content||row.campaign.ad_id].filter(Boolean).join(' / '))}</small></td><td>${row.downloadClicks}</td><td>${row.associatedAccounts}</td><td>${row.newAccounts} / ${row.existingAccounts}</td><td>${row.payers}</td><td>${row.paidOrders}</td><td>${esc(s.currency)} ${money(row.netMilliunits)}</td></tr>`))}</section>`:''}
+  ${webFunnelHTML(data,s)}
+  ${data.product==='cleaner'?`<section class="insight-surface"><header><h2>Web → App 来源关联 · 后台实测</h2></header><p class="scope-note">仅统计用户同意衡量、下载后返回网页点击“打开 App”而完成的来源关联。按网页下载点击 UTC 日期和上方日期、币种筛选；跟随上方渠道及广告层级筛选。活动名称来自网页链接，未经广告平台认证；不等同于 Singular 安装归因，不并入安装数或广告 ROAS。仅显示绑定之后的已验证正式扣款，包含续费并扣除已知退款。新账号表示后台账号在点击后创建，不代表已验证的新安装。</p>${table(['点击日 / 网页来源','下载点击','关联账号','新账号 / 已有账号','付费账号','扣款笔数','关联净扣款'],webReturn.rows.map(row=>`<tr><td>${esc(row.date)}<small>${esc([row.campaign.utm_source,row.campaign.utm_campaign||row.campaign.campaign_id,row.campaign.adset_name||row.campaign.adset_id,row.campaign.utm_content||row.campaign.ad_id].filter(Boolean).join(' / '))}</small></td><td>${row.downloadClicks}</td><td>${row.associatedAccounts}</td><td>${row.newAccounts} / ${row.existingAccounts}</td><td>${row.payers}</td><td>${row.paidOrders}</td><td>${esc(s.currency)} ${money(row.netMilliunits)}</td></tr>`))}</section>`:''}
   <section class="insight-surface"><header><h2>渠道与素材表现</h2><button data-market="export">导出当前获客表 CSV</button></header><p class="scope-note">点击来源继续下钻。只导入系列成本时，素材层不会分摊或编造花费。${h('归因范围','coverage')}</p>
   ${table(['来源',h('花费','spend'),'展示','点击',h('点击率','ctr'),'报表安装',h('安装成本','cpi'),h('新增用户（按安装 ID 去重）','users'),'试用',h('实际付费','paid'),h('首次付费成本','cpp'),h('已关联净扣款','net')],r.groups.map((g,i)=>`<tr><td><button class="market-link" data-market="drill" data-row="${i}">${esc(title(g))}</button></td><td>${g.costRows?money(g.spend):'未导入'}${g.missingCostCohorts?'<small>部分日期缺成本</small>':''}</td><td>${g.costRows?g.impressions:'—'}</td><td>${g.costRows?g.clicks:'—'}</td><td>${pct(g.costRows?ratio(g.clicks,g.impressions):null)}</td><td>${g.costRows?g.installs:'—'}</td><td>${money(g.costRows&&g.installs?g.spend/g.installs:null)}</td><td>${g.users}</td><td>${g.trial}</td><td>${g.paid}</td><td>${money(g.costRows&&!g.missingCostCohorts&&g.matchedPayers?g.spend/g.matchedPayers:null)}</td><td>${money(g.net)}</td></tr>`))}</section>
   ${growthHTML(data,s)}
@@ -217,6 +220,12 @@ document.addEventListener('click',async event=>{
     dialog.showModal();return;
   }
   if(action==='template'){const kind=scope.querySelector('[name="kind"]').value;download(`${product}-${kind}-template.csv`,headers[kind]+'\n');return;}
+  if(action==='sync-meta'){
+    if(document.body.dataset.demo||!data.meta?.configured)return;
+    b.disabled=true;s.metaSyncMessage='正在按账户时区同步 Meta 花费和转化…';
+    try{const result=await window.apiPost('/v1/admin/products/cleaner/meta-sync',{});s.metaSyncMessage=`已同步 ${result.rows} 条广告日记录；归因窗口内可能继续修订。`;if(activeProduct===product&&document.getElementById('productPicker').value===product)document.getElementById('refresh').click();}catch(e){s.metaSyncMessage=e.message;}
+    changed();return;
+  }
   if(action==='sync-applovin'){
     if(document.body.dataset.demo||!data.applovin?.configured)return;
     b.disabled=true;s.syncMessage='正在核对今天及之前 7 个 UTC 日…';
