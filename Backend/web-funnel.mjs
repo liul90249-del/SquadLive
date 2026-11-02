@@ -1,3 +1,4 @@
+import {reportingDate,CLEANER_REPORT_TIMEZONE} from './marketing-time.mjs';
 import {createHash} from 'node:crypto';
 import {WEB_RETURN_ORIGINS} from './web-return-attribution.mjs';
 const DAY=86400000,sha=v=>createHash('sha256').update(v).digest('hex');
@@ -25,9 +26,9 @@ export function createWebFunnel({getStore,saveStore,clock=Date.now}){
 export function webFunnelDataset(root){
  const groups=new Map(),s=root.cleanerWebFunnel;
  for(const e of Object.values(s?.events||{})){
-  const date=new Date(e.at).toISOString().slice(0,10),key=JSON.stringify([date,...keys.map(k=>e.campaign[k]||'')]);
+  const date=reportingDate(e.at),key=JSON.stringify([date,...keys.map(k=>e.campaign[k]||'')]);
   if(!groups.has(key))groups.set(key,{date,campaign:e.campaign,visits:new Set(),completions:new Set(),downloadVisits:new Set(),pageViews:0,downloadClicks:0});
   const r=groups.get(key);if(e.name==='PageView'){r.visits.add(e.visit);r.pageViews++;}if(e.name==='WebOnboardingComplete')r.completions.add(e.visit);if(e.name==='WebDownloadClick'){r.downloadVisits.add(e.visit);r.downloadClicks++;}
  }
- return {startedAt:s?.startedAt||null,retentionDays:90,rows:[...groups.values()].map(r=>({...r,visits:r.visits.size,completions:r.completions.size,downloadVisits:r.downloadVisits.size}))};
+ return {startedAt:s?.startedAt||null,timezone:CLEANER_REPORT_TIMEZONE,retentionDays:90,rows:[...groups.values()].map(r=>({...r,visits:r.visits.size,completions:r.completions.size,downloadVisits:r.downloadVisits.size}))};
 }
