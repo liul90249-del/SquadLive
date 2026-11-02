@@ -1,7 +1,8 @@
+import {reportingDate} from './marketing-time.mjs';
 const keys=['utm_source','utm_medium','utm_campaign','utm_content','campaign_id','adset_id','adset_name','ad_id'];
-export function buildWebReturnReport(data,orders,{start='',end='',currency='USD',channel='',campaignId='',adGroupId='',creativeId='',now=Date.now()}={}){
+export function buildWebReturnReport(data,orders,{start='',end='',currency='USD',channel='',campaignId='',adGroupId='',creativeId='',timezone='UTC',now=Date.now()}={}){
  const s=data||{clicks:[],bindings:[]},groups=new Map();
- const date=n=>new Date(n).toISOString().slice(0,10);
+ const date=n=>reportingDate(n,timezone);
  const inRange=n=>(!start||date(n)>=start)&&(!end||date(n)<=end);
  const matches=c=>(!channel||c.utm_source?.toLowerCase()===channel.toLowerCase()||['facebook','meta'].includes(channel.toLowerCase())&&['facebook','fb','instagram','ig'].includes(c.utm_source?.toLowerCase()))&&(!campaignId||c.campaign_id===campaignId)&&(!adGroupId||c.adset_id===adGroupId)&&(!creativeId||c.ad_id===creativeId);
  const bucket=(campaign,time)=>{

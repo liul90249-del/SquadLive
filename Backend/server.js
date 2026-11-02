@@ -1479,7 +1479,7 @@ async function route(req, res) {
     return res.end(html);
   }
 
-  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-health.mjs", "/admin-preferences.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs", "/web-return-report.mjs", "/admin-marketing-paths.mjs", "/marketing-paths-report.mjs"].includes(url.pathname)) {
+  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-health.mjs", "/admin-preferences.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs", "/web-return-report.mjs", "/admin-marketing-paths.mjs", "/marketing-paths-report.mjs", "/marketing-time.mjs"].includes(url.pathname)) {
     const content = await readFile(join(__dirname, url.pathname.slice(1)), "utf8");
     res.writeHead(200, { "content-type": url.pathname.endsWith('.css')
       ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" });

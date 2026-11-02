@@ -1,3 +1,4 @@
+import {platformDateFilters} from './marketing-time.mjs';
 import {marketingPathsHTML,webFunnelHTML} from './admin-marketing-paths.mjs';
 import {buildWebReturnReport} from './web-return-report.mjs';
 import {readPreference,savePreference} from './admin-preferences.mjs';
@@ -132,7 +133,7 @@ export function marketingHTML(data) {
   const stageNames={onboarding_complete:'完成引导',photo_permission_granted:'照片已授权（含部分）',paywall_open:'看到订阅页',purchase_attempt:'点击购买',cleanup_completed:'成功清理',purchase_cancelled:'取消购买弹窗',purchase_failed:'购买失败',products_load_failed:'商品加载异常'};
   const stages=r.events.filter(e=>['onboarding_complete','photo_permission_granted','paywall_open','purchase_attempt'].includes(e.key));
   const errors=r.events.filter(e=>['cleanup_completed','purchase_cancelled','purchase_failed','products_load_failed'].includes(e.key));
-  const webReturn=buildWebReturnReport(data.webReturns,data.orders,{...s,now:data.now});
+  const webReturn=buildWebReturnReport(data.webReturns,data.orders,{...platformDateFilters({...data,meta:{timezone:'Asia/Shanghai'}},s),now:data.now});
   const preview=s.preview;
   const period=s.start===s.end?(s.start===dateOf(data.now)?'今天 · '+s.start:s.start):s.start+' 至 '+s.end;
   const scopeText=period+'（UTC） · '+(names[s.channel]||s.channel||'全部来源');
@@ -164,7 +165,7 @@ export function marketingHTML(data) {
   <div class="market-secondary">${errors.map(e=>`<span>${stageNames[e.key]} <b>${e.count??'未采集'}</b></span>`).join('')}</div>
   <p class="scope-note">行为未采集 ${r.quality.funnelUnknown} 人 · 更新后才开始采集 ${r.quality.funnelPartial} 人。旁路行为不强制先后，首次发生记录不代表当天发生次数。</p></section>
   ${webFunnelHTML(data,s)}
-  ${data.product==='cleaner'?`<section class="insight-surface"><header><h2>Web → App 来源关联 · 后台实测</h2></header><p class="scope-note">仅统计用户同意衡量、下载后返回网页点击“打开 App”而完成的来源关联。按网页下载点击 UTC 日期和上方日期、币种筛选；跟随上方渠道及广告层级筛选。活动名称来自网页链接，未经广告平台认证；不等同于 Singular 安装归因，不并入安装数或广告 ROAS。仅显示绑定之后的已验证正式扣款，包含续费并扣除已知退款。新账号表示后台账号在点击后创建，不代表已验证的新安装。</p>${table(['点击日 / 网页来源','下载点击','关联账号','新账号 / 已有账号','付费账号','扣款笔数','关联净扣款'],webReturn.rows.map(row=>`<tr><td>${esc(row.date)}<small>${esc([row.campaign.utm_source,row.campaign.utm_campaign||row.campaign.campaign_id,row.campaign.adset_name||row.campaign.adset_id,row.campaign.utm_content||row.campaign.ad_id].filter(Boolean).join(' / '))}</small></td><td>${row.downloadClicks}</td><td>${row.associatedAccounts}</td><td>${row.newAccounts} / ${row.existingAccounts}</td><td>${row.payers}</td><td>${row.paidOrders}</td><td>${esc(s.currency)} ${money(row.netMilliunits)}</td></tr>`))}</section>`:''}
+  ${data.product==='cleaner'?`<section class="insight-surface"><header><h2>Web → App 来源关联 · 后台实测</h2></header><p class="scope-note">仅统计用户同意衡量、下载后返回网页点击“打开 App”而完成的来源关联。按网页下载点击的北京时间（UTC+8）日期和上方日期、币种筛选；“今天”在北京时间 00:00 换日；跟随上方渠道及广告层级筛选。活动名称来自网页链接，未经广告平台认证；不等同于 Singular 安装归因，不并入安装数或广告 ROAS。仅显示绑定之后的已验证正式扣款，包含续费并扣除已知退款。新账号表示后台账号在点击后创建，不代表已验证的新安装。</p>${table(['点击日 / 网页来源','下载点击','关联账号','新账号 / 已有账号','付费账号','扣款笔数','关联净扣款'],webReturn.rows.map(row=>`<tr><td>${esc(row.date)}<small>${esc([row.campaign.utm_source,row.campaign.utm_campaign||row.campaign.campaign_id,row.campaign.adset_name||row.campaign.adset_id,row.campaign.utm_content||row.campaign.ad_id].filter(Boolean).join(' / '))}</small></td><td>${row.downloadClicks}</td><td>${row.associatedAccounts}</td><td>${row.newAccounts} / ${row.existingAccounts}</td><td>${row.payers}</td><td>${row.paidOrders}</td><td>${esc(s.currency)} ${money(row.netMilliunits)}</td></tr>`))}</section>`:''}
   <section class="insight-surface"><header><h2>渠道与素材表现</h2><button data-market="export">导出当前获客表 CSV</button></header><p class="scope-note">点击来源继续下钻。只导入系列成本时，素材层不会分摊或编造花费。${h('归因范围','coverage')}</p>
   ${table(['来源',h('花费','spend'),'展示','点击',h('点击率','ctr'),'报表安装',h('安装成本','cpi'),h('新增用户（按安装 ID 去重）','users'),'试用',h('实际付费','paid'),h('首次付费成本','cpp'),h('已关联净扣款','net')],r.groups.map((g,i)=>`<tr><td><button class="market-link" data-market="drill" data-row="${i}">${esc(title(g))}</button></td><td>${g.costRows?money(g.spend):'未导入'}${g.missingCostCohorts?'<small>部分日期缺成本</small>':''}</td><td>${g.costRows?g.impressions:'—'}</td><td>${g.costRows?g.clicks:'—'}</td><td>${pct(g.costRows?ratio(g.clicks,g.impressions):null)}</td><td>${g.costRows?g.installs:'—'}</td><td>${money(g.costRows&&g.installs?g.spend/g.installs:null)}</td><td>${g.users}</td><td>${g.trial}</td><td>${g.paid}</td><td>${money(g.costRows&&!g.missingCostCohorts&&g.matchedPayers?g.spend/g.matchedPayers:null)}</td><td>${money(g.net)}</td></tr>`))}</section>
   ${growthHTML(data,s)}
