@@ -1018,8 +1018,8 @@
               <div class="panel-head"><h2>用户与 AI 对话</h2><span class="pill active">${data.aiConversations.length}</span></div>
               ${data.aiConversations.length ? `<div class="conversation-list">${data.aiConversations.map((item) => `
                 <div class="conversation">
-                  <div class="conversation-meta">${time(item.createdAt)} · ${escapeHTML(item.listenerName)} · ${escapeHTML(item.source)}</div>
-                  <div class="conversation-message user"><strong>用户：</strong>${escapeHTML(item.userText)}</div>
+                  <div class="conversation-meta">${time(item.createdAt)} · ${escapeHTML(item.listenerName)} · ${escapeHTML(item.source)}${item.model ? ` · ${escapeHTML(item.model)}` : ""}${item.latencyMs ? ` · ${Number(item.latencyMs)} ms` : ""} · ${item.interactionType === "system_opening" ? "系统自动触发" : "用户互动"}</div>
+                  <div class="conversation-message user"><strong>${item.interactionType === "system_opening" ? "系统指令：" : "用户："}</strong>${escapeHTML(item.userText)}</div>
                   <div class="conversation-message ai"><strong>AI：</strong>${escapeHTML(item.aiText)}</div>
                 </div>
               `).join("")}</div>` : '<div class="empty">暂无 AI 对话</div>'}

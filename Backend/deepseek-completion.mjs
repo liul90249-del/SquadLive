@@ -2,9 +2,9 @@ const transientStatuses = new Set([500, 502, 503, 504]);
 
 // Keep both attempts within the iOS client's request budget.
 export async function requestDeepSeekCompletion({ apiKey, payload, fetchImpl = fetch,
-  timeoutMs = 8000, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+  timeoutMs = 8000, maxAttempts = 2, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   if (!apiKey?.trim()) return { reason: 'missing_key', providerStatus: null };
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const response = await fetchImpl('https://api.deepseek.com/chat/completions', {
         method: 'POST',
@@ -14,7 +14,7 @@ export async function requestDeepSeekCompletion({ apiKey, payload, fetchImpl = f
       });
       if (!response.ok) {
         await response.text();
-        if (attempt === 0 && transientStatuses.has(response.status)) {
+        if (attempt + 1 < maxAttempts && transientStatuses.has(response.status)) {
           await wait(250);
           continue;
         }
@@ -26,7 +26,7 @@ export async function requestDeepSeekCompletion({ apiKey, payload, fetchImpl = f
       return { content, reason: null, providerStatus: response.status };
     } catch (error) {
       const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
-      if (attempt === 0) {
+      if (attempt + 1 < maxAttempts) {
         await wait(250);
         continue;
       }

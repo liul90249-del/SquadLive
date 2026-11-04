@@ -6,7 +6,7 @@ import {policyState,editPolicy,publishPolicy,publicPolicy,restorePolicyDraft} fr
 import {marketingDataset} from './marketing-core.mjs';
 import {prepareMarketingImport,applyMarketingImport} from './marketing-import.mjs';
 import {createApplovinSync} from './applovin-marketing.mjs';
-import { requestDeepSeekCompletion } from "./deepseek-completion.mjs";
+import { requestLiveCompletion, liveConversationRules } from "./live-ai-completion.mjs";
 import http from "node:http";
 import {createTransactionInbox} from "./shared-transaction-inbox.mjs";
 import {readSubscriptionLifecycle,createSubscriptionLifecycle,subscriptionAnalytics,createDailySubscriptionCheck} from './subscription-lifecycle.mjs';
@@ -656,6 +656,9 @@ function recordCoinTransaction(store, input) {
     amountCents: Number(input.amountCents || 0),
     currency: String(input.currency || "").trim().toUpperCase(),
     source: input.source || "unknown",
+    model: String(input.model || "").slice(0, 100),
+    latencyMs: Number(input.latencyMs || 0),
+    providerAttempts: Array.isArray(input.providerAttempts) ? input.providerAttempts.slice(0, 2) : [],
     note: input.note || "",
     platformTransactionId: input.platformTransactionId || "",
     productId: input.productId || "",
@@ -864,6 +867,9 @@ function recordAIConversation(store, input) {
     aiText: String(input.aiText || "").trim().slice(0, 1200),
     listenerName: String(input.listenerName || "AI Friend").slice(0, 80),
     source: input.source || "unknown",
+    model: String(input.model || "").slice(0, 100),
+    latencyMs: Number(input.latencyMs || 0),
+    providerAttempts: Array.isArray(input.providerAttempts) ? input.providerAttempts.slice(0, 2) : [],
     interactionType: input.interactionType || "user",
     createdAt: new Date().toISOString()
   };
@@ -1265,7 +1271,7 @@ Act like an attentive, emotionally intelligent member of the live audience. Stay
 Companion gender: ${listenerGender}.
 Reply style: ${replyStyle}.
 Role mode: ${roleMode}.
-Current visual context: ${sceneContext || "The latest frame is still being analyzed. Do not claim that you cannot see the stream; ask the streamer to hold an item closer if visual detail matters."}
+Current visual context (uncertain observation only): ${sceneContext || "No reliable visual observation is available. Do not describe a scene."}
 Required response language code: ${inputLanguage}. Reply entirely in this language. Do not switch languages because of device settings, previous messages, names, or visual labels.
 Reply directly to the streamer based on what they just said.
 Tone topics: ${tones}.
@@ -1279,7 +1285,7 @@ Answer the actual question or intent first. If the speech transcript is incomple
 Unless Haters vibe is active, include a compliment only when it is relevant to what the streamer just said or to reliable visual context. Do not force a compliment into every reply.
 Do not sound scripted. Do not repeat the same compliment style. Usually use 1-2 short sentences, but do not force an unnatural cutoff. When the topic genuinely benefits from detail, a deeper reply may use 3-4 concise sentences. Avoid long, repetitive paragraphs.
 Do not merely repeat or paraphrase the user's words. React to their meaning and move the conversation forward.
-Use visual context only when it directly helps with the streamer's latest message. Treat visual labels as uncertain, say "it looks like" when needed, never invent details, and never infer sensitive traits, health, identity, or private information. Never say that you cannot see the stream.
+Use visual context only when it directly helps with the streamer's latest message. Treat visual labels as uncertain, say "it looks like" when needed, never invent details, and never infer sensitive traits, health, identity, or private information. Do not claim visual certainty; briefly explain when a detail cannot be verified.
 If the user says it is nice to meet you, warmly say it is nice to meet them too and ask one natural follow-up question.
 `.trim();
 }
@@ -1350,24 +1356,17 @@ function conciseReply(answer, userText, replyDepth = 0.62) {
 }
 
 async function callDeepSeek(body) {
-  const result = await requestDeepSeekCompletion({
-    apiKey: process.env.DEEPSEEK_API_KEY,
-    payload: {
-      model: deepSeekModel,
-      thinking: { type: "disabled" },
-      messages: [
-        { role: "system", content: deepSeekSystemPrompt(body) },
-        ...conversationHistory(body),
-        { role: "user", content: String(body.text || "") }
-      ],
-      temperature: 0.74,
-      max_tokens: body.replyDepth > 0.72 ? 140 : 96
-    }
+  const result = await requestLiveCompletion({
+    messages: [
+      { role: "system", content: deepSeekSystemPrompt(body) + "\n\n" + liveConversationRules },
+      ...conversationHistory(body),
+      { role: "user", content: String(body.text || "").slice(0, 4000) }
+    ],
+    maxTokens: body.replyDepth > 0.72 ? 220 : 160
   });
-  if (result.content) {
-    return { answer: conciseReply(result.content, body.text, body.replyDepth), source: "deepseek", reason: null, providerStatus: result.providerStatus };
-  }
-  return { answer: localAIReply(body.text, body.inputLanguage), source: "fallback", reason: result.reason, providerStatus: result.providerStatus };
+  return { ...result, answer: result.content
+    ? conciseReply(result.content, body.text, body.replyDepth)
+    : localAIReply(body.text, body.inputLanguage), content: undefined };
 }
 
 const webReturnAttribution=createWebReturnAttribution({getStore,saveStore});
@@ -1663,7 +1662,7 @@ async function route(req, res) {
     usage.aiLatencyTotalMs += latencyMs;
     usage.aiLatencyMaxMs = Math.max(Number(usage.aiLatencyMaxMs || 0), latencyMs);
     usage.peakAIConcurrency = Math.max(Number(usage.peakAIConcurrency || 0), runtimeMetrics.maxActiveAIRequests);
-    if (result.source === "deepseek") {
+    if (result.source === "deepseek" || result.source === "openai") {
       usage.aiSuccesses += 1;
     } else {
       usage.aiFallbacks += 1;
@@ -1682,6 +1681,9 @@ async function route(req, res) {
         aiText: result.answer,
         listenerName: body.listener?.name,
         source: result.source,
+        model: result.model,
+        latencyMs,
+        providerAttempts: result.attempts,
         interactionType: body.interactionType === "system_opening" ? "system_opening" : "user"
       });
       await saveStore(store);

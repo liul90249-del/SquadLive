@@ -17,6 +17,10 @@ services:
         value: /var/data
       - key: DEEPSEEK_API_KEY
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.4-mini
       - key: ADMIN_TOKEN
         sync: false
       - key: APPLE_BUNDLE_ID
