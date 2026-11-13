@@ -1,4 +1,5 @@
 import {createWebFunnel,webFunnelDataset} from './web-funnel.mjs';
+import {createSandBusAnalytics,SANDBUS_REPORT_DAYS} from './sandbus-analytics.mjs';
 import {createMetaSync,metaReportDataset} from './meta-marketing.mjs';
 import {createWebReturnAttribution,webReturnDataset,cleanerAssociationFile,webReturnFallbackHTML} from './web-return-attribution.mjs';
 import {createPolicyCatalogReader} from './cleaner-policy-catalog.mjs';
@@ -33,6 +34,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 8787);
 const dataDir = process.env.DATA_DIR || join(__dirname, "data");
 const storePath = join(dataDir, "store.json");
+const sandBusAnalytics = createSandBusAnalytics({
+  propertyId: process.env.SANDBUS_GA_PROPERTY_ID,
+  credentialsJson: process.env.SANDBUS_GA_CREDENTIALS,
+});
 let sharedProductReferrals;
 let paywallWriteQueue=Promise.resolve();
 const sharedInbox=createTransactionInbox({directory:process.env.DATA_DIR,certDirectory:join(__dirname,"certs"),
@@ -43,6 +48,7 @@ const supportPagePath = join(__dirname, "support.html");
 const privacyPagePath = join(__dirname, "privacy.html");
 const termsPagePath = join(__dirname, "terms.html");
 const landingAssets = new Map([
+  ["/assets/products/sandbus.png", { path: join(__dirname, "assets", "products", "sandbus.png"), contentType: "image/png" }],
   ["/assets/products/cleaner.png", { path: join(__dirname, "assets", "products", "cleaner.png"), contentType: "image/png" }],
   ["/assets/products/dailyme.png", { path: join(__dirname, "assets", "products", "dailyme.png"), contentType: "image/png" }],
   ["/assets/products/nutriscan.png", { path: join(__dirname, "assets", "products", "nutriscan.png"), contentType: "image/png" }],
@@ -2255,6 +2261,18 @@ async function route(req, res) {
 
   if (url.pathname.startsWith("/v1/admin/")) {
     if (!requireAdmin(req, res)) return;
+
+    if (req.method === 'GET' && url.pathname === '/v1/admin/products/sandbus/analytics') {
+      const days = Number(url.searchParams.get('days') || 7);
+      if (!SANDBUS_REPORT_DAYS.includes(days)) {
+        return jsonResponse(res, 400, { error: '请选择最近 7、30 或 90 天' });
+      }
+      try {
+        return jsonResponse(res, 200, await sandBusAnalytics(days));
+      } catch {
+        return jsonResponse(res, 503, { error: '暂时无法读取 Sand Bus 的 Firebase 报表，请稍后刷新。' });
+      }
+    }
 
     if(req.method==='POST'&&url.pathname==='/v1/admin/products/cleaner/meta-sync'){return jsonResponse(res,200,await metaSync.run());}
     if(req.method==='POST'&&url.pathname==='/v1/admin/products/cleaner/applovin-sync'){

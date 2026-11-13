@@ -442,6 +442,7 @@
         <option value="subguard">SubGuard</option>
         <option value="sparkle">Sparkle Color</option>
         <option value="catswipe">CatSwipe</option>
+        <option value="sandbus">Sand Bus</option>
       </select>
       <div class="nav" id="squadNav">
         <button class="active" data-section="overview"><i>📊</i>数据概览</button>
@@ -563,6 +564,23 @@
           </div>
         </div>
       </section>
+      <section class="section" id="section-sandbus">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>玩家与关卡</h2>
+            <label for="sandbusDays">统计范围
+              <select id="sandbusDays">
+                <option value="7">最近 7 天</option>
+                <option value="30">最近 30 天</option>
+                <option value="90">最近 90 天</option>
+              </select>
+            </label>
+          </div>
+          <p id="sandbusStatus" class="sub" role="status"></p>
+          <div id="sandbusPlayers" class="cards"></div>
+          <div id="sandbusLevels" class="table-scroll" tabindex="0" role="region" aria-label="按平台、版本与关卡查看玩法数据"></div>
+        </div>
+      </section>
       <section class="section" id="section-product">
         <div class="panel"><div class="panel-head"><h2 id="productHeading">产品数据</h2><span class="sub" id="productNotice"></span></div><div class="cards" id="productCards"></div></div>
         <div id="productPaywallPolicy" class="panel"></div>
@@ -579,7 +597,8 @@
   <script>
     const state = {
       token: localStorage.getItem("squadlive.adminToken") || "",
-      product: localStorage.getItem("squadlive.adminProduct") || "squadlive",
+      product: new URLSearchParams(location.search).get('product') === 'sandbus'
+        ? 'sandbus' : localStorage.getItem("squadlive.adminProduct") || "squadlive",
       users: []
     };
 
@@ -603,9 +622,12 @@
       document.getElementById("squadNav").style.display = state.product === "squadlive" ? "" : "none";
       if (state.product === "squadlive") switchSection("overview");
       else {
-        document.querySelectorAll(".section").forEach(section => section.classList.toggle("active", section.id === "section-product"));
+        const isSandBus = state.product === 'sandbus';
+        const sectionId = isSandBus ? 'section-sandbus' : 'section-product';
+        document.querySelectorAll(".section").forEach(section => section.classList.toggle("active", section.id === sectionId));
         document.getElementById("pageTitle").textContent = productPicker.selectedOptions[0].textContent;
-        document.getElementById("pageSub").textContent = "真实注册、活跃、已验证订单与退款";
+        document.getElementById("pageSub").textContent = isSandBus
+          ? 'Firebase Analytics' : '真实注册、活跃、已验证订单与退款';
       }
       loadAll();
     };
@@ -619,6 +641,7 @@
       loadAll();
     };
     document.getElementById("refresh").onclick = () => loadAll();
+    document.getElementById('sandbusDays').onchange = () => loadSandBus();
     document.getElementById("searchUsers").onclick = () => loadUsers(true);
     document.getElementById("userQuery").addEventListener("keydown", (event) => {
       if (event.key === "Enter") loadUsers(true);
@@ -1129,7 +1152,58 @@
       );
     }
 
+    let sandBusLoadVersion = 0;
+    async function loadSandBus() {
+      const version = ++sandBusLoadVersion;
+      const status = document.getElementById('sandbusStatus');
+      const players = document.getElementById('sandbusPlayers');
+      const levels = document.getElementById('sandbusLevels');
+      const days = document.getElementById('sandbusDays').value;
+      status.textContent = '正在读取 Firebase 数据…';
+      players.replaceChildren();
+      levels.replaceChildren();
+      try {
+        const report = await api(`/v1/admin/products/sandbus/analytics?days=${days}`);
+        if (state.product !== 'sandbus' || version !== sandBusLoadVersion) return;
+        if (report.status === 'not_configured') {
+          status.textContent = 'Firebase 报表读取尚待配置。';
+          return;
+        }
+        status.textContent = [
+          report.timeZone && `统计时区 ${report.timeZone}`,
+          report.limited && '部分数据受 Analytics 报表限制',
+          '关卡列为事件次数',
+        ].filter(Boolean).join(' · ');
+        players.innerHTML = [
+          metricCard('活跃玩家', report.players.active, '—', '所选日期内活跃玩家', '区间', ''),
+          metricCard('新增玩家', report.players.new, '—', '所选日期内新增玩家', '区间', ''),
+        ].join('');
+        const counters = {
+          sb_level_start: '开局',
+          sb_first_transfer: '首次接沙',
+          sb_level_complete: '通关',
+          sb_level_timeout: '超时',
+          sb_restart: '重开',
+          sb_shaker_offered: '松沙提示',
+          sb_shaker_used: '使用松沙',
+          sb_shaker_settled: '松沙结束',
+        };
+        levels.innerHTML = table(
+          ['关卡', '平台', '版本', ...Object.values(counters), '平均装载提升'],
+          report.rows.map(({ level, platform, build, events, meanShakerGain }) => {
+            const gain = meanShakerGain === null ? '—' : `${meanShakerGain.toFixed(1)} 个百分点`;
+            const cells = [level, platform, build, ...Object.keys(counters).map(key => events[key] ?? 0), gain];
+            return `<tr>${cells.map(cell => `<td>${escapeHTML(cell)}</td>`).join('')}</tr>`;
+          }),
+          '所选时段暂无关卡事件。',
+        );
+      } catch (error) {
+        if (state.product === 'sandbus' && version === sandBusLoadVersion) status.textContent = error.message;
+      }
+    }
+
     async function loadAll() {
+      if (state.product === 'sandbus') return loadSandBus();
       if (state.product !== "squadlive") return loadProduct();
       try {
         const overview = await api("/v1/admin/overview");
@@ -1145,7 +1219,9 @@
 
     if (state.product !== "squadlive") productPicker.onchange();
     else loadAll();
-    setInterval(loadAll, 30000);
+    setInterval(() => {
+      if (state.product !== 'sandbus') loadAll();
+    }, 30000);
   </script>
 </body>
 </html>

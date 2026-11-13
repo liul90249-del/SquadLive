@@ -60,6 +60,7 @@
     subguard: '/assets/products/subguard.png',
     sparkle: '/assets/products/sparkle.png',
     catswipe: '/assets/products/catswipe.png',
+    sandbus: '/assets/products/sandbus.png',
   };
   const brandLogo = side.querySelector('.brand img');
   const favicon = document.querySelector('link[rel="icon"]');
@@ -70,7 +71,7 @@
     brandLogo.alt = `${productName} 图标`;
     favicon.href = logo;
     document.title = `${productName} · 管理后台`;
-    nav.hidden = picker.value === 'squadlive';
+    nav.hidden = ['squadlive', 'sandbus'].includes(picker.value);
     nav.querySelectorAll('a').forEach((link, index) => {
       if (index === 0) link.setAttribute('aria-current', 'location');
       else link.removeAttribute('aria-current');
