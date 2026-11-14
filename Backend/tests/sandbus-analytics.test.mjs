@@ -13,6 +13,7 @@ const credentialsJson = JSON.stringify({
 test('unconfigured deployment and invalid range never contact Google', async () => {
   const report = createSandBusAnalytics({ fetcher: () => assert.fail('unexpected request') });
   assert.deepEqual(await report(7), { status: 'not_configured', days: 7 });
+  assert.deepEqual(await report.realtime(), { status: 'not_configured', minutes: 30 });
   await assert.rejects(report(8), RangeError);
 });
 
@@ -71,4 +72,37 @@ test('Google errors are errors and do not become an empty report', async () => {
     fetcher: async () => new Response('', { status: 403 }),
   });
   await assert.rejects(report(7), /authentication failed/);
+});
+
+test('realtime reports request recent gameplay events and keep both mobile platforms', async () => {
+  const row = (platform, event, count) => ({
+    dimensionValues: [{ value: platform }, { value: event }],
+    metricValues: [{ value: String(count) }],
+  });
+  const report = createSandBusAnalytics({
+    propertyId: '563966794', credentialsJson,
+    async fetcher(url, options) {
+      if (url === 'https://oauth2.googleapis.com/token') {
+        return Response.json({ access_token: 'test-token', expires_in: 3600 });
+      }
+      assert.equal(url, 'https://analyticsdata.googleapis.com/v1beta/properties/563966794:runRealtimeReport');
+      assert.equal(options.headers.authorization, 'Bearer test-token');
+      const request = JSON.parse(options.body);
+      assert.deepEqual(request.dimensions, [{ name: 'platform' }, { name: 'eventName' }]);
+      assert.deepEqual(request.metrics, [{ name: 'eventCount' }]);
+      assert.ok(request.dimensionFilter.filter.inListFilter.values.includes('sb_first_transfer'));
+      return Response.json({ rows: [
+        row('iOS', 'sb_first_transfer', 2),
+        row('Android', 'sb_first_transfer', 3),
+        row('Web', 'sb_first_transfer', 6),
+        row('Android', 'session_start', 7),
+      ] });
+    },
+  });
+  assert.deepEqual(await report.realtime(), {
+    status: 'ready', minutes: 30, rows: [
+      { platform: 'iOS', event: 'sb_first_transfer', count: 2 },
+      { platform: 'Android', event: 'sb_first_transfer', count: 3 },
+    ],
+  });
 });

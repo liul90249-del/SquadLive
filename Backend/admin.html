@@ -567,6 +567,14 @@
       <section class="section" id="section-sandbus">
         <div class="panel">
           <div class="panel-head">
+            <h2>最近 30 分钟</h2>
+            <button id="sandbusRealtimeRefresh" type="button">刷新实时事件</button>
+          </div>
+          <p id="sandbusRealtimeStatus" class="sub" role="status"></p>
+          <div id="sandbusRealtimeRows" class="table-scroll" tabindex="0" role="region" aria-label="按平台查看实时事件"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
             <h2>玩家与关卡</h2>
             <label for="sandbusDays">统计范围
               <select id="sandbusDays">
@@ -642,6 +650,7 @@
     };
     document.getElementById("refresh").onclick = () => loadAll();
     document.getElementById('sandbusDays').onchange = () => loadSandBus();
+    document.getElementById('sandbusRealtimeRefresh').onclick = () => loadSandBusRealtime();
     document.getElementById("searchUsers").onclick = () => loadUsers(true);
     document.getElementById("userQuery").addEventListener("keydown", (event) => {
       if (event.key === "Enter") loadUsers(true);
@@ -1152,6 +1161,45 @@
       );
     }
 
+    const sandBusEventLabels = {
+      sb_level_start: '开局',
+      sb_first_transfer: '首次接沙',
+      sb_level_complete: '通关',
+      sb_level_timeout: '超时',
+      sb_restart: '重开',
+      sb_shaker_offered: '松沙提示',
+      sb_shaker_used: '使用松沙',
+      sb_shaker_settled: '松沙结束',
+    };
+
+    let sandBusRealtimeVersion = 0;
+    async function loadSandBusRealtime() {
+      const version = ++sandBusRealtimeVersion;
+      const status = document.getElementById('sandbusRealtimeStatus');
+      const rows = document.getElementById('sandbusRealtimeRows');
+      status.textContent = '正在读取实时事件…';
+      rows.replaceChildren();
+      try {
+        const report = await api('/v1/admin/products/sandbus/analytics/realtime');
+        if (state.product !== 'sandbus' || version !== sandBusRealtimeVersion) return;
+        if (report.status === 'not_configured') {
+          status.textContent = 'Firebase 报表读取尚待配置。';
+          return;
+        }
+        status.textContent = `已刷新 ${new Date().toLocaleTimeString()}`;
+        rows.innerHTML = table(
+          ['平台', '事件', '次数'],
+          report.rows.map(({ platform, event, count }) => {
+            const cells = [platform, sandBusEventLabels[event] ?? event, count];
+            return `<tr>${cells.map(cell => `<td>${escapeHTML(cell)}</td>`).join('')}</tr>`;
+          }),
+          '最近 30 分钟暂无玩法事件。',
+        );
+      } catch (error) {
+        if (state.product === 'sandbus' && version === sandBusRealtimeVersion) status.textContent = error.message;
+      }
+    }
+
     let sandBusLoadVersion = 0;
     async function loadSandBus() {
       const version = ++sandBusLoadVersion;
@@ -1178,21 +1226,11 @@
           metricCard('活跃玩家', report.players.active, '—', '所选日期内活跃玩家', '区间', ''),
           metricCard('新增玩家', report.players.new, '—', '所选日期内新增玩家', '区间', ''),
         ].join('');
-        const counters = {
-          sb_level_start: '开局',
-          sb_first_transfer: '首次接沙',
-          sb_level_complete: '通关',
-          sb_level_timeout: '超时',
-          sb_restart: '重开',
-          sb_shaker_offered: '松沙提示',
-          sb_shaker_used: '使用松沙',
-          sb_shaker_settled: '松沙结束',
-        };
         levels.innerHTML = table(
-          ['关卡', '平台', '版本', ...Object.values(counters), '平均装载提升'],
+          ['关卡', '平台', '版本', ...Object.values(sandBusEventLabels), '平均装载提升'],
           report.rows.map(({ level, platform, build, events, meanShakerGain }) => {
             const gain = meanShakerGain === null ? '—' : `${meanShakerGain.toFixed(1)} 个百分点`;
-            const cells = [level, platform, build, ...Object.keys(counters).map(key => events[key] ?? 0), gain];
+            const cells = [level, platform, build, ...Object.keys(sandBusEventLabels).map(key => events[key] ?? 0), gain];
             return `<tr>${cells.map(cell => `<td>${escapeHTML(cell)}</td>`).join('')}</tr>`;
           }),
           '所选时段暂无关卡事件。',
@@ -1203,7 +1241,7 @@
     }
 
     async function loadAll() {
-      if (state.product === 'sandbus') return loadSandBus();
+      if (state.product === 'sandbus') return Promise.all([loadSandBusRealtime(), loadSandBus()]);
       if (state.product !== "squadlive") return loadProduct();
       try {
         const overview = await api("/v1/admin/overview");

@@ -106,16 +106,26 @@ export function createSandBusAnalytics({
     return inFlightToken;
   }
 
-  return async function report(days) {
-    if (!SANDBUS_REPORT_DAYS.includes(days)) throw new RangeError('Invalid date range');
-    if (!configured) return { status: 'not_configured', days };
-    const dateRanges = [{ startDate: `${days - 1}daysAgo`, endDate: 'today' }];
+  async function query(method, body) {
     const bearer = await token();
-    const response = await fetcher(`https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:batchRunReports`, {
+    const response = await fetcher(`https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:${method}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
       signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({ requests: [
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      if (response.status === 401) cachedToken = undefined;
+      throw new Error('Analytics report unavailable');
+    }
+    return response.json();
+  }
+
+  async function report(days) {
+    if (!SANDBUS_REPORT_DAYS.includes(days)) throw new RangeError('Invalid date range');
+    if (!configured) return { status: 'not_configured', days };
+    const dateRanges = [{ startDate: `${days - 1}daysAgo`, endDate: 'today' }];
+    const { reports } = await query('batchRunReports', { requests: [
         { dateRanges, metrics: [{ name: 'activeUsers' }, { name: 'newUsers' }] },
         {
           dateRanges,
@@ -130,13 +140,28 @@ export function createSandBusAnalytics({
           },
           limit: String(MAX_ROWS),
         },
-      ] }),
-    });
-    if (!response.ok) {
-      if (response.status === 401) cachedToken = undefined;
-      throw new Error('Analytics report unavailable');
-    }
-    const { reports } = await response.json();
+    ] });
     return { status: 'ready', days, ...normalizeReports(reports) };
+  }
+
+  report.realtime = async function realtime() {
+    const minutes = 30;
+    if (!configured) return { status: 'not_configured', minutes };
+    const data = await query('runRealtimeReport', {
+      dimensions: [{ name: 'platform' }, { name: 'eventName' }],
+      metrics: [{ name: 'eventCount' }],
+      dimensionFilter: {
+        filter: { fieldName: 'eventName', inListFilter: { values: EVENTS } },
+      },
+    });
+    const rows = [];
+    for (const entry of data.rows ?? []) {
+      const [platform, event] = entry.dimensionValues.map(item => item.value);
+      if (!['iOS', 'Android'].includes(platform) || !EVENTS.includes(event)) continue;
+      rows.push({ platform, event, count: count(entry.metricValues[0]?.value) });
+    }
+    return { status: 'ready', minutes, rows };
   };
+
+  return report;
 }

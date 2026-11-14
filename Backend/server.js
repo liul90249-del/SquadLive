@@ -2262,6 +2262,14 @@ async function route(req, res) {
   if (url.pathname.startsWith("/v1/admin/")) {
     if (!requireAdmin(req, res)) return;
 
+    if (req.method === 'GET' && url.pathname === '/v1/admin/products/sandbus/analytics/realtime') {
+      try {
+        return jsonResponse(res, 200, await sandBusAnalytics.realtime());
+      } catch {
+        return jsonResponse(res, 503, { error: '暂时无法读取 Sand Bus 实时事件，请稍后刷新。' });
+      }
+    }
+
     if (req.method === 'GET' && url.pathname === '/v1/admin/products/sandbus/analytics') {
       const days = Number(url.searchParams.get('days') || 7);
       if (!SANDBUS_REPORT_DAYS.includes(days)) {
