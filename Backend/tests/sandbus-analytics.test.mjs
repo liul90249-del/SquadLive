@@ -20,9 +20,9 @@ test('unconfigured deployment and invalid range never contact Google', async () 
 test('requests a read-only token and reports real event counts and average gain by level, build and platform', async () => {
   let tokenRequests = 0;
   let reportRequests = 0;
-  const row = (platform, build, level, name, count, average = 0, samples = 0) => ({
+  const row = (platform, build, level, name, count) => ({
     dimensionValues: [platform, build, level, name].map(value => ({ value })),
-    metricValues: [count, average, samples].map(value => ({ value: String(value) })),
+    metricValues: [{ value: String(count) }],
   });
   const report = createSandBusAnalytics({
     propertyId: '563966794', credentialsJson,
@@ -40,18 +40,24 @@ test('requests a read-only token and reports real event counts and average gain 
       const { requests } = JSON.parse(options.body);
       assert.deepEqual(requests[0].dateRanges, [{ startDate: '6daysAgo', endDate: 'today' }]);
       assert.ok(requests[1].dimensions.some(({ name }) => name === 'customEvent:sb_level'));
+      assert.deepEqual(requests[1].metrics, [{ name: 'eventCount' }]);
+      assert.equal(requests[2].dimensionFilter.filter.stringFilter.value, 'sb_shaker_settled');
       return Response.json({ reports: [
         { rows: [{ metricValues: [{ value: '4' }, { value: '2' }] }] },
         {
           metadata: { timeZone: 'Asia/Shanghai' },
           rows: [
             row('iOS', '1.0', '30', 'sb_shaker_used', 3),
-            row('iOS', '1.0', '30', 'sb_shaker_settled', 2, 13.5, 2),
+            row('iOS', '1.0', '30', 'sb_shaker_settled', 2),
             row('iOS', '1.0', '30', 'sb_level_timeout', 1),
             row('Android', '1.0', '3', 'sb_level_complete', 2),
             row('Web', '1.0', '3', 'sb_level_complete', 1),
           ],
         },
+        { rows: [{
+          dimensionValues: ['iOS', '1.0', '30'].map(value => ({ value })),
+          metricValues: [{ value: '13.5' }, { value: '2' }],
+        }] },
       ] });
     },
   });

@@ -1230,7 +1230,8 @@
           ['关卡', '平台', '版本', ...Object.values(sandBusEventLabels), '平均装载提升'],
           report.rows.map(({ level, platform, build, events, meanShakerGain }) => {
             const gain = meanShakerGain === null ? '—' : `${meanShakerGain.toFixed(1)} 个百分点`;
-            const cells = [level, platform, build, ...Object.keys(sandBusEventLabels).map(key => events[key] ?? 0), gain];
+            const levelLabel = level && level !== '(not set)' ? level : '未记录关卡';
+            const cells = [levelLabel, platform, build, ...Object.keys(sandBusEventLabels).map(key => events[key] ?? 0), gain];
             return `<tr>${cells.map(cell => `<td>${escapeHTML(cell)}</td>`).join('')}</tr>`;
           }),
           '所选时段暂无关卡事件。',
