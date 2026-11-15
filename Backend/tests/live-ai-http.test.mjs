@@ -16,7 +16,14 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     if (url !== 'https://api.openai.com/v1/chat/completions') throw Error('Unexpected outbound request');
     const body = JSON.parse(init.body);
     if (!body.messages[0].content.includes('Never insult')) throw Error('Missing conversation rules');
-    return new Response(JSON.stringify({model: 'test-openai', choices:[{message:{content:'Hello, welcome back!'}}]}));
+    if (!body.messages[0].content.includes('[null,"Ava (AI)"]')) throw Error('Missing speaker metadata');
+    const history = [
+      { role: 'user', content: 'Ivy: I am practicing a line.' },
+      { role: 'assistant', content: 'Good start.' },
+      { role: 'assistant', content: 'Keep going.' }
+    ];
+    if (JSON.stringify(body.messages.slice(1, -1)) !== JSON.stringify(history)) throw Error('Unexpected conversation history');
+    return new Response(JSON.stringify({model: 'test-openai', choices:[{message:{content:'**Ivy:** ivy： Ivy: Hello, welcome back!'}}]}));
   };`);
   const child = spawn(process.execPath, ['--import', preload, 'server.js'], {
     cwd: new URL('../', import.meta.url), env: { PATH: process.env.PATH, PORT: String(port), DATA_DIR: directory,
@@ -28,12 +35,20 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     assert.match(logs, /backend listening/);
     const response = await fetch(`http://127.0.0.1:${port}/v1/ai/deepseek`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: 'Hello everyone', deviceId: 'local-ai-test', listener: { name: 'Ivy' }, inputLanguage: 'en' })
+      body: JSON.stringify({
+        text: 'Hello everyone', deviceId: 'local-ai-test', listener: { name: 'Ivy' }, inputLanguage: 'en',
+        history: [
+          { role: 'user', content: 'Ivy: I am practicing a line.' },
+          { role: 'assistant', content: 'Ivy: Ivy: Good start.' },
+          { role: 'assistant', content: 'Ava (AI): Keep going.', speaker: 'Ava (AI)' }
+        ]
+      })
     });
     assert.equal(response.status, 200);
     const result = await response.json(); assert.equal(result.source, 'openai'); assert.equal(result.answer, 'Hello, welcome back!');
     const disk = JSON.parse(await readFile(join(directory, 'store.json'), 'utf8'));
     const conversation = Object.values(disk.aiConversations)[0];
+    assert.equal(conversation.aiText, 'Hello, welcome back!');
     assert.equal(conversation.source, 'openai'); assert.equal(conversation.model, 'test-openai');
     assert.equal(conversation.interactionType, 'user'); assert.ok(conversation.latencyMs >= 0);
     assert.ok(!JSON.stringify(disk).includes('fake-key-for-local-test'));

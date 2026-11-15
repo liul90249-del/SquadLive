@@ -1280,6 +1280,7 @@ Role mode: ${roleMode}.
 Current visual context (uncertain observation only): ${sceneContext || "No reliable visual observation is available. Do not describe a scene."}
 Required response language code: ${inputLanguage}. Reply entirely in this language. Do not switch languages because of device settings, previous messages, names, or visual labels.
 Reply directly to the streamer based on what they just said.
+Return only the spoken reply. Do not start with a character name, speaker label, or transcript marker, even if older messages use that format.
 Tone topics: ${tones}.
 Vibe: ${vibes}.
 Vibe behavior: ${vibeBehavior}
@@ -1333,13 +1334,32 @@ function vibeBehaviorGuide(vibes) {
   return selectedGuidance.length > 0 ? selectedGuidance.join(" ") : "Stay warm and conversational.";
 }
 
+function stripSpeakerPrefix(text, speaker) {
+  const name = typeof speaker === "string" ? speaker.trim() : "";
+  if (!name || name.length > 80) return text.trim();
+
+  const escapedName = name.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\$&");
+  const label = new RegExp("^(?:\\*\\*" + escapedName + "\\s*[:：]\\*\\*|\\*\\*" +
+    escapedName + "\\*\\*\\s*[:：]|" + escapedName + "\\s*[:：])\\s*", "iu");
+  let reply = text.trim();
+  while (label.test(reply)) reply = reply.replace(label, "");
+  return reply;
+}
+
 function conversationHistory(body) {
   if (!Array.isArray(body.history)) return [];
 
   return body.history
     .filter((item) => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
     .slice(-8)
-    .map((item) => ({ role: item.role, content: item.content.trim().slice(0, 800) }))
+    .map((item) => {
+      const speaker = item.role === "assistant" && typeof item.speaker === "string"
+        ? item.speaker.trim().slice(0, 80) : "";
+      const content = item.role === "assistant"
+        ? stripSpeakerPrefix(item.content, speaker || body.listener?.name || "Sarah")
+        : item.content.trim();
+      return { role: item.role, content: content.slice(0, 800), speaker };
+    })
     .filter((item) => item.content.length > 0);
 }
 
@@ -1362,16 +1382,26 @@ function conciseReply(answer, userText, replyDepth = 0.62) {
 }
 
 async function callDeepSeek(body) {
+  const history = conversationHistory(body);
+  const speakerNames = history.filter((item) => item.role === "assistant").map((item) => item.speaker || null);
+  const speakerContext = speakerNames.some(Boolean)
+    ? "\n\nSpeakers of past assistant turns, in order (null means unspecified): " + JSON.stringify(speakerNames)
+    : "";
   const result = await requestLiveCompletion({
     messages: [
-      { role: "system", content: deepSeekSystemPrompt(body) + "\n\n" + liveConversationRules },
-      ...conversationHistory(body),
+      { role: "system", content: deepSeekSystemPrompt(body) + "\n\n" + liveConversationRules + speakerContext },
+      ...history.map(({ role, content }) => ({ role, content })),
       { role: "user", content: String(body.text || "").slice(0, 4000) }
     ],
     maxTokens: body.replyDepth > 0.72 ? 220 : 160
   });
-  return { ...result, answer: result.content
-    ? conciseReply(result.content, body.text, body.replyDepth)
+  const reply = stripSpeakerPrefix(result.content || "", body.listener?.name || "Sarah");
+  if (!reply && result.content) {
+    result.source = "fallback";
+    result.reason = "empty_response";
+  }
+  return { ...result, answer: reply
+    ? conciseReply(reply, body.text, body.replyDepth)
     : localAIReply(body.text, body.inputLanguage), content: undefined };
 }
 
