@@ -26,12 +26,12 @@ test('explicit historical range keeps 39 users separate from zero platform insta
 });
 
 test('Cleaner shows Meta account-day totals even when the UTC import has zero spend', async () => {
- setup({scopeVersion:2,rangeDays:1});
+ setup({scopeVersion:2,rangeDays:1,level:'creative'});
  const {marketingHTML}=await import('../admin-marketing.mjs?scope-meta');
  const now=Date.parse('2026-11-17T23:00:00Z');
  const timezone='Asia/Shanghai';
  const rows=[{date:'2026-11-18',timezone,currency:'USD',route:'unknown',campaignId:'123456',
-  adGroupId:'234567',adId:'345678',spendMilliunits:37490,impressions:474,clicks:90,conversionsUnavailable:true}];
+  campaignName:'clean-01',adGroupId:'234567',adGroupName:'US',adId:'345678',adName:'clean-01-ad',spendMilliunits:37490,impressions:474,clicks:90,conversionsUnavailable:true}];
  const html=marketingHTML({...data,now,meta:{timezone},metaReports:{rows},
   costs:[{date:'2026-11-17',channel:'applovin',currency:'USD',spendMilliunits:0,impressions:0,clicks:0,installs:0}]});
  const meta=section(html,'market-meta-summary'), imported=section(html,'market-ad-summary');
@@ -43,4 +43,5 @@ test('Cleaner shows Meta account-day totals even when the UTC import has zero sp
  assert.match(imported,/2026-11-17（UTC）/);
  assert.match(imported,/<strong>USD 0\.00<\/strong>/);
  assert.doesNotMatch(imported,/37\.49/);
+ assert.match(html,/Meta \/ clean-01 \/ US \/ clean-01-ad<\/td><td>USD 37\.49<\/td><td>474<\/td><td>90/);
 });

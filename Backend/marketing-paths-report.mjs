@@ -1,7 +1,7 @@
 // Advertising-platform outcomes remain separate from first-party associations
 // and Apple-verified orders. Never add overlapping Meta action aliases.
 export const ROUTE_NAMES={web:'Web · 网页内转化',web_to_app:'Web → App · 网页引导下载',app_direct:'App · 直接投放',unknown:'目的地待核对'};
-export function buildMarketingPathsReport(data,{start='',end='',currency='USD',channel='',campaignId='',adGroupId='',creativeId=''}={}){
+export function buildMarketingPathsReport(data,{start='',end='',currency='USD',channel='',campaignId='',adGroupId='',creativeId='',level='campaign'}={}){
  const conversionFields=['landingPageViews','webCheckouts','webPurchases','webPurchaseMilliunits','appInstalls','appPurchases','appPurchaseMilliunits'];
  const groups=new Map();
  for(const r of data?.rows||[]){
@@ -22,5 +22,19 @@ export function buildMarketingPathsReport(data,{start='',end='',currency='USD',c
    : null
  ]));
  for(const route of routes)Object.assign(route,summarize(route.rows));
- return {rows,routes,totals:summarize(rows),currency,timezones:[...new Set(rows.map(r=>r.timezone))],source:'Meta Ads Insights',actionReportTime:'impression',appleRevenueIncluded:false};
+ const depth={channel:0,campaign:1,adGroup:2,creative:3}[level]??1;
+ const platformGroups=new Map();
+ for(const row of rows){
+  const ids=[row.campaignId,row.adGroupId,row.adId].slice(0,depth);
+  const names=[row.campaignName,row.adGroupName,row.adName].slice(0,depth);
+  const key=JSON.stringify(ids);
+  if(!platformGroups.has(key))platformGroups.set(key,{ids,names,rows:[]});
+  platformGroups.get(key).rows.push(row);
+ }
+ const breakdown=[...platformGroups.values()].map(group=>({
+  label:['Meta',...group.ids.map((id,i)=>group.names[i]||id)].join(' / '),
+  ...summarize(group.rows)
+ })).sort((a,b)=>b.spendMilliunits-a.spendMilliunits||a.label.localeCompare(b.label));
+
+ return {rows,routes,breakdown,totals:summarize(rows),currency,timezones:[...new Set(rows.map(r=>r.timezone))],source:'Meta Ads Insights',actionReportTime:'impression',appleRevenueIncluded:false};
 }
