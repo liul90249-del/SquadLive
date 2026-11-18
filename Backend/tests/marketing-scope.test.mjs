@@ -24,3 +24,23 @@ test('explicit historical range keeps 39 users separate from zero platform insta
  assert.match(ads,/2026-09-28 至 2026-10-27/);assert.match(ads,/共 1 个统计日/);assert.doesNotMatch(ads,/<strong>39<\/strong>/);
  assert.match(users,/<strong>39<\/strong>/);assert.match(users,/自然量 19 人 · 来源未知 20 人/);
 });
+
+test('Cleaner shows Meta account-day totals even when the UTC import has zero spend', async () => {
+ setup({scopeVersion:2,rangeDays:1});
+ const {marketingHTML}=await import('../admin-marketing.mjs?scope-meta');
+ const now=Date.parse('2026-11-17T23:00:00Z');
+ const timezone='Asia/Shanghai';
+ const rows=[{date:'2026-11-18',timezone,currency:'USD',route:'unknown',campaignId:'123456',
+  adGroupId:'234567',adId:'345678',spendMilliunits:37490,impressions:474,clicks:90,conversionsUnavailable:true}];
+ const html=marketingHTML({...data,now,meta:{timezone},metaReports:{rows},
+  costs:[{date:'2026-11-17',channel:'applovin',currency:'USD',spendMilliunits:0,impressions:0,clicks:0,installs:0}]});
+ const meta=section(html,'market-meta-summary'), imported=section(html,'market-ad-summary');
+ assert.match(meta,/2026-11-18（Asia\/Shanghai）/);
+ assert.match(meta,/<strong>USD 37\.49<\/strong>/);
+ assert.match(meta,/<strong>474<\/strong>/);
+ assert.match(meta,/<strong>90<\/strong>/);
+ assert.match(meta,/<strong>—<\/strong>/);
+ assert.match(imported,/2026-11-17（UTC）/);
+ assert.match(imported,/<strong>USD 0\.00<\/strong>/);
+ assert.doesNotMatch(imported,/37\.49/);
+});

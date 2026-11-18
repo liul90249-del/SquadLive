@@ -1,4 +1,5 @@
 import {platformDateFilters} from './marketing-time.mjs';
+import {buildMarketingPathsReport} from './marketing-paths-report.mjs';
 import {marketingPathsHTML,webFunnelHTML} from './admin-marketing-paths.mjs';
 import {buildWebReturnReport} from './web-return-report.mjs';
 import {readPreference,savePreference} from './admin-preferences.mjs';
@@ -15,6 +16,8 @@ const help={
   paywallPaid:'仅苹果验证的首次观察订阅。关联到购买前 24 小时内同商品的最近一次有效点击。免费试用的首次扣款按同一苹果订阅链回补原方案；之后续费不重复计入。扣款转化率 = 首次扣款人数 ÷ 看到页面人数。跨币种去重。',
   paywallNet:'已关联方案用户的第一笔实际扣款减该订单已知退款，仅所选币种。包括免费试用结束后的第一笔扣款，不含其后的续费。未扣苹果佣金和税费。',
   installs:'广告平台在所选 UTC 日期及来源下报告的归因安装数。不是后台新增用户，不包含无法归因给广告的自然量和来源未知用户。',
+  'meta-spend':'Meta Ads Insights 返回的广告花费，按广告账号统计日和所选币种计算。',
+  'meta-installs':'Meta Ads Insights 返回的 App 安装，按广告账号统计日及广告组归因窗口计算。',
   impressions:'广告平台在所选日期及来源下报告的展示次数。',
   clicks:'广告平台在所选日期及来源下报告的点击次数。点击不等于安装或首次打开。',
   spend:'已导入的广告花费；按 UTC 日期、所选币种与来源筛选。缺少成本记录显示 —，不视为免费获客。重复导入同一日期、广告层级和币种会更新原记录，不累加。',
@@ -142,19 +145,26 @@ export function marketingHTML(data) {
   const sourceUsers=channel=>r.groups.filter(g=>g.channel===channel).reduce((n,g)=>n+g.users,0);
   const organicUsers=sourceUsers('organic'),unknownUsers=sourceUsers('unknown'),adUsers=r.totals.users-organicUsers-unknownUsers;
   const kpis=items=>`<div class="market-kpis">${items.map(([label,key,value])=>`<section>${h(label,key)}<strong>${value}</strong></section>`).join('')}</div>`;
+  const metaFilters=platformDateFilters(data,s);
+  const showMeta=data.product==='cleaner'&&(!s.channel||['facebook','meta','facebook ads'].includes(s.channel.toLowerCase()));
+  const metaReport=showMeta?buildMarketingPathsReport(data.metaReports,metaFilters):null;
+  const metaTotals=metaReport?.totals;
   const connection=data.applovin, syncHealth=marketingSyncHealth(connection,data.now);
   const beijingTime=value=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
   return `<div class="marketing-workspace" data-market-product="${esc(data.product)}">
-  <section class="insight-surface market-intro"><header><div><h2>广告投放</h2><p>从获客到真实扣款，查看每一批用户的回本进度</p></div><span class="status-badge">${data.costs.length?'已有成本记录':connection?.lastSuccess?'同步成功 · 返回 0 条成本记录':connection?.configured?'已连接 · 等待同步':'成本未接入'}</span></header>
+  <section class="insight-surface market-intro"><header><div><h2>广告投放</h2><p>从获客到真实扣款，查看每一批用户的回本进度</p></div><span class="status-badge">${data.costs.length||data.metaReports?.rows?.length?'已有成本记录':connection?.lastSuccess?'同步成功 · 返回 0 条成本记录':connection?.configured?'已连接 · 等待同步':'成本未接入'}</span></header>
   <p class="scope-note">${data.product==='cleaner'?'Facebook、网页行为及 Web → App 关联按北京时间（UTC+8）统计，具体日期见各区；AppLovin 与原有用户日报按 UTC 统计。快捷日期按各区时区计算，上方日历显示 UTC 范围；自选日期按各区当地日期解释，不跨时区合计。':'全部日期为 UTC · 北京时间 08:00 结束上一统计日 · '}金额按原币种分开 · 当前渠道收益仅覆盖已关联用户，非全量平台归因估算。</p>
   <div class="growth-controls"><span>统计日期（广告发生日 / 用户首次获客日）</span>${[1,7,30,90,180,365,730].map(n=>`<button type="button" data-market="date-range" data-days="${n}" aria-pressed="${s.rangeDays===n}">${n===1?'今天':'近 '+n+' 天'}</button>`).join('')}</div>
   <form id="marketingFilters" class="insight-filters"><label>开始日期<input type="date" name="start" value="${s.start}" required></label><label>结束日期<input type="date" name="end" value="${s.end}" required></label><label>渠道<select name="channel">${options([['','全部渠道'],...channels.map(c=>[c,names[c]||c])],s.channel)}</select></label><label>查看层级<select name="level">${options([['channel','渠道'],['campaign','广告系列'],['adGroup','广告组'],['creative','广告素材']],s.level)}</select></label><label>收入与成本币种<select name="currency">${options(currencies.map(c=>[c,c]),s.currency)}</select></label><button type="submit" class="primary">查看</button><button type="button" data-market="reset">重置</button></form>
   ${s.campaignId?`<p class="market-breadcrumb">当前路径：${esc(s.channel)} / ${esc(s.campaignId)} ${esc(s.adGroupId)} ${esc(s.creativeId)} <button data-market="clear-path">返回全部层级</button></p>`:''}</section>
   ${data.product==='cleaner'?`<section class="insight-surface market-connection"><details ${s.connectionOpen?'open':''}><summary>AppLovin 数据连接<span class="status-badge" ${syncHealth.warning?'role="status"':''}>${esc(syncHealth.label)}</span></summary><div><p>广告花费 → 展示 → 点击 → 安装，由 AppLovin 广告主报表读取。每 15 分钟同步当天及之前 7 个 UTC 日，与 AppLovin Real time 报表口径一致；当天数据持续更新，可能有平台延迟，后续同步会补齐修订。失败会保留原数据并重试。</p><p class="scope-note">AppLovin 素材组显示在“广告组”层；单条素材成本未接入时不分摊。用户归因仍需 Singular 等来源与后台用户 ID 关联，广告安装数不会直接变成后台用户数。</p><p>${connection?.lastSuccess?'最近接口核对成功：'+esc(beijingTime(connection.lastSuccess))+'（北京时间）'+' · 返回 '+connection.rows+' 条成本记录 · 报表日期 '+esc(connection.start||'—')+' 至 '+esc(connection.end||'—')+'（UTC）':'尚未完成真实账户同步'}${connection?.currency?' · '+esc(connection.currency):''}</p>${connection?.error?`<p role="alert">${esc(connection.error)}</p>`:''}<button data-market="sync-applovin" ${!connection?.configured||document.body.dataset.demo?'disabled':''}>立即核对 AppLovin 成本</button><p role="status">${esc(s.syncMessage||'')}</p></div></details></section>`:''}
-  ${marketingPathsHTML(data,s)}
+  ${showMeta?`<section class="insight-surface market-meta-summary"><header><div><h2>Meta 广告平台表现</h2><p>${esc(metaFilters.start)}${metaFilters.start!==metaFilters.end?' 至 '+esc(metaFilters.end):''}（${esc(data.meta?.timezone||'Asia/Shanghai')}） · Facebook / Instagram</p></div></header>
+  ${kpis([['广告花费','meta-spend',metaTotals.spendMilliunits===null?'—':`${esc(s.currency)} ${money(metaTotals.spendMilliunits)}`],['广告展示','impressions',metaTotals.impressions??'—'],['广告点击','clicks',metaTotals.clicks??'—'],['广告归因安装','meta-installs',metaTotals.appInstalls??'—']])}
+  <p class="scope-note">${metaReport.rows.length?`Meta Ads Insights 返回了 ${metaReport.rows.length} 条广告日记录，包含目的地待核对的广告。`:'当前筛选范围暂无 Meta 报表记录。'}${data.meta?.error||data.meta?.conversionError?' 同步状态见下方 Facebook 投放明细。':''}</p></section>`:''}
+  ${marketingPathsHTML(data,s,metaReport)}
   <section class="insight-surface market-ad-summary"><header><div><h2>UTC 广告平台表现（已导入数据）</h2><p>${esc(scopeText)}</p></div></header>
   ${kpis([['广告花费','spend',r.totals.spend===null?'暂无成本记录':`${s.currency} ${money(r.totals.spend)}`],['广告展示','impressions',r.totals.impressions??'—'],['广告点击','clicks',r.totals.clicks??'—'],['广告归因安装','installs',r.totals.installs??'—']])}
-  <p class="scope-note">以上四项均来自同一筛选范围的广告平台报表。${esc(costCoverage)}</p></section>
+  <p class="scope-note">以上四项均来自同一筛选范围的广告平台报表。${esc(costCoverage)}${showMeta?' Meta 同步数据按广告账号统计日显示在上方。':''}</p></section>
   <section class="insight-surface market-user-summary"><header><div><h2>后台新增用户与后续转化</h2><p>首次获客日期：${esc(scopeText)}</p></div></header>
   <p class="scope-note">此处按首次获客日期筛选后台用户；${s.channel?'仅当前来源':'包含广告、自然量和来源未知用户'}。订阅与扣款持续追踪至今，不是所选日期当天发生的扣款，也不是上方广告花费带来的安装量。</p>
   ${kpis([['后台新增用户','users',r.totals.users],['已验证免费试用人数','trial',r.trial.started],['累计首次扣款人数','paid',r.totals.paid],['累计已关联净扣款','net',`${s.currency} ${money(r.totals.net)}`]])}

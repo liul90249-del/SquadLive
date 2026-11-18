@@ -3,10 +3,10 @@ import {buildMarketingPathsReport,ROUTE_NAMES} from './marketing-paths-report.mj
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>n===null||n===undefined?'—':(n/1000).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const num=n=>n===null||n===undefined?'—':n.toLocaleString('zh-CN');
-export function marketingPathsHTML(data,filters){
+export function marketingPathsHTML(data,filters,report){
  if(data.product!=='cleaner')return '';
  filters=platformDateFilters(data,filters);
- const c=data.meta||{},r=buildMarketingPathsReport(data.metaReports,filters);
+ const c=data.meta||{},r=report||buildMarketingPathsReport(data.metaReports,filters);
  const status=!c.configured?'待连接只读报表权限':c.error?'同步失败 · 旧数据保留':c.conversionError?'花费已更新 · 转化待同步':!c.lastSuccess?'等待首次同步':!c.enabled?'已连接 · 自动同步未启用':data.now-c.lastSuccess>30*60000?'等待更新 · 数据可能延迟':'自动同步中';
  const time=n=>new Date(n).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
  return `<section class="insight-surface market-connection"><header><h2>Facebook · Web / App 投放效果</h2><span class="status-badge">${esc(status)}</span></header>

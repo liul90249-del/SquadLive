@@ -15,6 +15,12 @@ export function buildMarketingPathsReport(data,{start='',end='',currency='USD',c
  }
  const rows=[...groups.values()].sort((a,b)=>b.date.localeCompare(a.date)||a.route.localeCompare(b.route));
  const routes=Object.keys(ROUTE_NAMES).map(route=>({route,label:ROUTE_NAMES[route],rows:rows.filter(r=>r.route===route)}));
- for(const r of routes){r.spendMilliunits=r.rows.length?r.rows.reduce((n,v)=>n+v.spendMilliunits,0):null;for(const k of ['impressions','clicks',...conversionFields])r[k]=r.rows.length&&r.rows.every(row=>row[k]!==null)?r.rows.reduce((n,v)=>n+v[k],0):null;}
- return {rows,routes,currency,timezones:[...new Set(rows.map(r=>r.timezone))],source:'Meta Ads Insights',actionReportTime:'impression',appleRevenueIncluded:false};
+ const fields=['spendMilliunits','impressions','clicks',...conversionFields];
+ const summarize=records=>Object.fromEntries(fields.map(field=>[field,
+  records.length&&records.every(row=>row[field]!==null)
+   ? records.reduce((total,row)=>total+row[field],0)
+   : null
+ ]));
+ for(const route of routes)Object.assign(route,summarize(route.rows));
+ return {rows,routes,totals:summarize(rows),currency,timezones:[...new Set(rows.map(r=>r.timezone))],source:'Meta Ads Insights',actionReportTime:'impression',appleRevenueIncluded:false};
 }
