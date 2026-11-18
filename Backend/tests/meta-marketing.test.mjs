@@ -66,3 +66,28 @@ test('confirmed Beijing account changes reporting day at UTC16:00, not UTC midni
  }
 });
 test('admin renders distinct evidence sources and escapes campaign data, never a report token',()=>{const r=rows();r[0].campaignName='<script>alert(1)</script>';const html=marketingPathsHTML({product:'cleaner',now:Date.now(),meta:metaStatus(config),metaReports:{rows:r}},{currency:'USD'});assert.ok(html.includes('Web → App'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(!html.includes('<script>'));assert.ok(!html.includes(config.token));assert.ok(html.includes('北京时间 UTC+8'));assert.ok(webFunnelHTML({product:'cleaner'},{currency:'USD'}).includes('不能补造'));});
+
+test('batch metadata error 100 still synchronizes verified Cleaner spend via individual objects', async () => {
+ const root = {};
+ const api = createMetaSync({
+  getStore: async () => root, saveStore: async () => {}, config,
+  clock: () => Date.parse('2026-11-02T06:00:00Z'),
+  fetchImpl: async url => {
+   if (url.searchParams.has('ids')) {
+    return Response.json({error: {code: 100}}, {status: 500});
+   }
+   const object = url.pathname.split('/').at(-1);
+   const values = {
+    insights: {data: [raw]},
+    '123456': {adset_id: '234567', creative: {id: '987654'}},
+    '234567': webAd.adset,
+    '987654': {asset_feed_spec: {link_urls: [{website_url: 'https://www.cleann.top/acquisition/install-test.html'}]}}
+   };
+   return Response.json(values[object] || account);
+  }
+ });
+ const result = await api.run();
+ assert.equal(result.rows, 1);
+ assert.equal(root.cleanerMetaReports.rows[0].route, 'web_to_app');
+ assert.equal(root.cleanerMetaReports.rows[0].spendMilliunits, 50250);
+});

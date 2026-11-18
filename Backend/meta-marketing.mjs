@@ -10,7 +10,7 @@ export function metaConfig(env=process.env){return {token:env.CLEANER_META_REPOR
 export function cleanerLanding(value){try{const u=new URL(value);return u.protocol==='https:'&&['www.cleann.top','cleann.top','smart-cleaner-acquisition.liufeng19970513.chatgpt.site'].includes(u.hostname)&&(u.hostname.endsWith('.chatgpt.site')||u.pathname.startsWith('/acquisition/'));}catch{return false;}}
 export function classifyMetaAd(ad,config){
  const set=ad.adset||{},p=set.promoted_object||{},c=ad.creative||{};
- const links=[c.object_url,c.object_story_spec?.link_data?.link,c.object_story_spec?.video_data?.call_to_action?.value?.link,c.link_url];
+ const links=[c.object_url,c.object_story_spec?.link_data?.link,c.object_story_spec?.video_data?.call_to_action?.value?.link,c.link_url, ...(Array.isArray(c.asset_feed_spec?.link_urls) ? c.asset_feed_spec.link_urls.map(link => link.website_url) : [])];
  const landing=links.some(cleanerLanding),app=String(p.application_id||'')===config.appId,pixel=String(p.pixel_id||'')===config.pixelId;
  if(!landing&&!app&&!pixel)return {included:false,route:'unknown'};
  if(set.destination_type==='APP'&&app)return {included:true,route:'app_direct'};
@@ -45,7 +45,7 @@ export function createMetaSync({getStore,saveStore,config=metaConfig(),fetchImpl
   if(!r.ok||b.error){
    const code=Number(b.error?.code);
    const hint=r.status===401||r.status===403||code===190?'，请核对广告账号、ads_read 权限及口令有效期':'';
-   throw Object.assign(fail(`Meta ${stage}读取失败（HTTP ${r.status}${Number.isInteger(code)?`，错误码 ${code}`:''}）${hint}`),{retryable:r.status>=500});
+   throw Object.assign(fail(`Meta ${stage}读取失败（HTTP ${r.status}${Number.isInteger(code)?`，错误码 ${code}`:''}）${hint}`),{retryable:r.status>=500,graphCode:code});
   }
   return b;
  }
@@ -69,7 +69,34 @@ export function createMetaSync({getStore,saveStore,config=metaConfig(),fetchImpl
     rows=await pages(insights,{...params,fields:spendFields},'基础花费报表');
    }
    const ads={};const ids=[...new Set(rows.map(r=>r.ad_id))];
-   for(let i=0;i<ids.length;i+=25){const group=ids.slice(i,i+25);if(!group.every(safeId))throw fail('Meta 广告 ID 无效');const b=await request('',{ids:group.join(','),fields:'id,adset{destination_type,promoted_object},creative{object_url,object_story_spec,link_url}'});for(const id of group)if(b[id]&&!b[id].error)ads[id]=b[id];}
+   for (let i = 0; i < ids.length; i += 25) {
+    const group = ids.slice(i, i + 25);
+    if (!group.every(safeId)) throw fail('Meta 广告 ID 无效');
+    let batch = {};
+    try {
+     batch = await request('', {
+      ids: group.join(','),
+      fields: 'id,adset{destination_type,promoted_object},creative{object_url,object_story_spec,link_url}'
+     });
+    } catch (error) {
+     if (!error.retryable && error.graphCode !== 100) throw error;
+    }
+    for (const id of group) {
+     if (batch[id] && !batch[id].error) {
+      ads[id] = batch[id];
+      continue;
+     }
+     const ad = await request(id, {fields: 'adset_id,creative{id}'}, '单条广告资料');
+     if (!safeId(ad.adset_id) || !safeId(ad.creative?.id)) {
+      throw fail('Meta 广告组或素材 ID 缺失，原数据保留');
+     }
+     const [adset, creative] = await Promise.all([
+      request(ad.adset_id, {fields: 'destination_type,promoted_object'}, '广告组资料'),
+      request(ad.creative.id, {fields: 'object_url,object_story_spec,asset_feed_spec'}, '广告素材资料')
+     ]);
+     ads[id] = {adset, creative};
+    }
+   }
    const normalized=normalizeMetaRows(rows,ads,account,config,start,end);
    const old=previous?.accountId===config.accountId?previous.rows||[]:[];
    const oldByKey=new Map(old.map(row=>[row.key,row]));
