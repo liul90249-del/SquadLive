@@ -34,6 +34,26 @@ function fixture(){const root={marketing:{cleaner:{costs:{keep:{spendMilliunits:
  return {root,calls,break:()=>broken=true,saves:()=>saves,api:createMetaSync({getStore:async()=>root,saveStore:async()=>{saves++;},config,fetchImpl,clock:()=>Date.parse('2026-11-02T06:00:00Z')})};}
 test('sync runs read-only, uses account-local date and never rewrites other cost or attribution stores',async()=>{const f=fixture();await f.api.run();assert.equal(f.root.cleanerMetaReports.status.end,'2026-11-01');assert.equal(f.root.cleanerMetaReports.rows.length,1);assert.equal(f.root.marketing.cleaner.costs.keep.spendMilliunits,123);assert.deepEqual(f.root.marketing.cleaner.attributions,{});assert.equal(f.calls.find(u=>u.pathname.endsWith('/insights')).searchParams.get('action_report_time'),'impression');});
 test('failed API preserves prior rows and redacts service-supplied secrets from errors and status',async()=>{const f=fixture();f.break();await assert.rejects(f.api.run(),/ads_read/);assert.equal(f.root.cleanerMetaReports.rows[0].old,true);assert.equal(JSON.stringify(f.root).includes(config.token),false);assert.equal(JSON.stringify(await f.api.status()).includes(config.token),false);});
+test('conversion HTTP 500 falls back to spend and leaves unavailable conversions blank',async()=>{
+ const root={};
+ const api=createMetaSync({
+  getStore:async()=>root,saveStore:async()=>{},config,clock:()=>Date.parse('2026-11-02T06:00:00Z'),
+  fetchImpl:async url=>{
+   if(url.pathname.endsWith('/insights')){
+    if(url.searchParams.has('action_report_time'))return new Response(JSON.stringify({error:{code:1,message:config.token}}),{status:500});
+    return new Response(JSON.stringify({data:[raw]}));
+   }
+   return new Response(JSON.stringify(url.searchParams.has('ids')?{'123456':webAd}:account));
+  }
+ });
+ const result=await api.run();
+ assert.match(result.conversionError,/HTTP 500，错误码 1/);
+ assert.equal(result.conversionError.includes(config.token),false);
+ const report=buildMarketingPathsReport({rows:root.cleanerMetaReports.rows});
+ assert.equal(report.rows[0].spendMilliunits,50250);
+ assert.equal(report.rows[0].appInstalls,null);
+ assert.equal(report.routes.find(route=>route.route==='web_to_app').appPurchases,null);
+});
 test('report configuration cannot trigger API calls without all explicit credentials and version',async()=>{assert.equal(metaConfig({}).accountId,'1807440220375930');assert.equal(metaStatus(metaConfig({})).configured,false);const f=createMetaSync({getStore:async()=>({}),saveStore:async()=>{},config:{...config,token:''},fetchImpl:()=>{throw Error('must not fetch');}});await assert.rejects(f.run(),/尚未配置/);});
 test('confirmed Beijing account changes reporting day at UTC16:00, not UTC midnight',async()=>{
  for(const [instant,expectedDay] of [['2026-11-01T15:59:59Z','2026-11-01'],['2026-11-01T16:00:00Z','2026-11-02'],['2026-11-02T00:00:00Z','2026-11-02']]){
