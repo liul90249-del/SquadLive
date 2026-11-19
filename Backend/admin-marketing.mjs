@@ -1,4 +1,4 @@
-import {platformDateFilters} from './marketing-time.mjs';
+import {MARKETING_DATE_RANGES,platformDateFilters} from './marketing-time.mjs';
 import {buildMarketingPathsReport} from './marketing-paths-report.mjs';
 import {marketingPathsHTML,webFunnelHTML} from './admin-marketing-paths.mjs';
 import {buildWebReturnReport} from './web-return-report.mjs';
@@ -116,12 +116,15 @@ function state(data) {
     const saved=readPreference(data.product,'marketing');
     for(const k of ['start','end','channel','currency','level','growthDimension','growthGroup'])if(typeof saved[k]==='string'&&saved[k].length<=160)s[k]=saved[k];
     if(Array.isArray(saved.growthColumns))s.growthColumns=saved.growthColumns.filter(k=>growthColumns.some(c=>c[0]===k));
-    if(saved.rangeDays===null||[1,7,30,90,180,365,730].includes(saved.rangeDays))s.rangeDays=saved.rangeDays;
+    if(saved.rangeDays===null||MARKETING_DATE_RANGES.includes(saved.rangeDays))s.rangeDays=saved.rangeDays;
     // Old defaults combined a 30-day user cohort with today's first cost record.
     if(saved.scopeVersion!==2){s.rangeDays=1;s.start=s.end=dateOf(data.now);}
     s.preferencesLoaded=true;
   }
-  if(s.rangeDays){s.start=dateOf(data.now-(s.rangeDays-1)*DAY);s.end=dateOf(data.now);}
+  if(s.rangeDays){
+    const range=platformDateFilters({now:data.now,meta:{timezone:'UTC'}},s);
+    s.start=range.start;s.end=range.end;
+  }
   return s;
 }
 function changed(){
@@ -138,7 +141,7 @@ export function marketingHTML(data) {
   const errors=r.events.filter(e=>['cleanup_completed','purchase_cancelled','purchase_failed','products_load_failed'].includes(e.key));
   const webReturn=buildWebReturnReport(data.webReturns,data.orders,{...platformDateFilters({...data,meta:{timezone:'Asia/Shanghai'}},s),now:data.now});
   const preview=s.preview;
-  const period=s.start===s.end?(s.start===dateOf(data.now)?'今天 · '+s.start:s.start):s.start+' 至 '+s.end;
+  const period=s.start===s.end?(s.rangeDays==='yesterday'?'昨天 · '+s.start:s.start===dateOf(data.now)?'今天 · '+s.start:s.start):s.start+' 至 '+s.end;
   const scopeText=period+'（UTC） · '+(names[s.channel]||s.channel||'全部来源');
   const costDates=[...new Set(r.cohorts.filter(c=>c.cost).map(c=>c.date))].sort();
   const costCoverage=costDates.length?'已返回花费记录：'+costDates[0]+(costDates.length>1?' 至 '+costDates.at(-1):'')+'，共 '+costDates.length+' 个统计日。未返回记录的日期不代表花费为 0。':'当前范围尚无广告成本记录。';
@@ -154,7 +157,7 @@ export function marketingHTML(data) {
   return `<div class="marketing-workspace" data-market-product="${esc(data.product)}">
   <section class="insight-surface market-intro"><header><div><h2>广告投放</h2><p>从获客到真实扣款，查看每一批用户的回本进度</p></div><span class="status-badge">${data.costs.length||data.metaReports?.rows?.length?'已有成本记录':connection?.lastSuccess?'同步成功 · 返回 0 条成本记录':connection?.configured?'已连接 · 等待同步':'成本未接入'}</span></header>
   <p class="scope-note">${data.product==='cleaner'?'Facebook、网页行为及 Web → App 关联按北京时间（UTC+8）统计，具体日期见各区；AppLovin 与原有用户日报按 UTC 统计。快捷日期按各区时区计算，上方日历显示 UTC 范围；自选日期按各区当地日期解释，不跨时区合计。':'全部日期为 UTC · 北京时间 08:00 结束上一统计日 · '}金额按原币种分开 · 当前渠道收益仅覆盖已关联用户，非全量平台归因估算。</p>
-  <div class="growth-controls"><span>统计日期（广告发生日 / 用户首次获客日）</span>${[1,7,30,90,180,365,730].map(n=>`<button type="button" data-market="date-range" data-days="${n}" aria-pressed="${s.rangeDays===n}">${n===1?'今天':'近 '+n+' 天'}</button>`).join('')}</div>
+  <div class="growth-controls"><span>统计日期（广告发生日 / 用户首次获客日）</span>${MARKETING_DATE_RANGES.map(n=>`<button type="button" data-market="date-range" data-days="${n}" aria-pressed="${s.rangeDays===n}">${n==='yesterday'?'昨天':n===1?'今天':'近 '+n+' 天'}</button>`).join('')}</div>
   <form id="marketingFilters" class="insight-filters"><label>开始日期<input type="date" name="start" value="${s.start}" required></label><label>结束日期<input type="date" name="end" value="${s.end}" required></label><label>渠道<select name="channel">${options([['','全部渠道'],...channels.map(c=>[c,names[c]||c])],s.channel)}</select></label><label>查看层级<select name="level">${options([['channel','渠道'],['campaign','广告系列'],['adGroup','广告组'],['creative','广告素材']],s.level)}</select></label><label>收入与成本币种<select name="currency">${options(currencies.map(c=>[c,c]),s.currency)}</select></label><button type="submit" class="primary">查看</button><button type="button" data-market="reset">重置</button></form>
   ${s.campaignId?`<p class="market-breadcrumb">当前路径：${esc(s.channel)} / ${esc(s.campaignId)} ${esc(s.adGroupId)} ${esc(s.creativeId)} <button data-market="clear-path">返回全部层级</button></p>`:''}</section>
   ${data.product==='cleaner'?`<section class="insight-surface market-connection"><details ${s.connectionOpen?'open':''}><summary>AppLovin 数据连接<span class="status-badge" ${syncHealth.warning?'role="status"':''}>${esc(syncHealth.label)}</span></summary><div><p>广告花费 → 展示 → 点击 → 安装，由 AppLovin 广告主报表读取。每 15 分钟同步当天及之前 7 个 UTC 日，与 AppLovin Real time 报表口径一致；当天数据持续更新，可能有平台延迟，后续同步会补齐修订。失败会保留原数据并重试。</p><p class="scope-note">AppLovin 素材组显示在“广告组”层；单条素材成本未接入时不分摊。用户归因仍需 Singular 等来源与后台用户 ID 关联，广告安装数不会直接变成后台用户数。</p><p>${connection?.lastSuccess?'最近接口核对成功：'+esc(beijingTime(connection.lastSuccess))+'（北京时间）'+' · 返回 '+connection.rows+' 条成本记录 · 报表日期 '+esc(connection.start||'—')+' 至 '+esc(connection.end||'—')+'（UTC）':'尚未完成真实账户同步'}${connection?.currency?' · '+esc(connection.currency):''}</p>${connection?.error?`<p role="alert">${esc(connection.error)}</p>`:''}<button data-market="sync-applovin" ${!connection?.configured||document.body.dataset.demo?'disabled':''}>立即核对 AppLovin 成本</button><p role="status">${esc(s.syncMessage||'')}</p></div></details></section>`:''}
@@ -249,7 +252,7 @@ document.addEventListener('click',async event=>{
     }catch(e){s.syncMessage=e.message;}
     changed();return;
   }
-  if(action==='date-range'){const days=Number(b.dataset.days);if([1,7,30,90,180,365,730].includes(days)){s.rangeDays=days;s.start=dateOf(data.now-(days-1)*DAY);s.end=dateOf(data.now);s.limit=30;}}
+  if(action==='date-range'){const range=b.dataset.days==='yesterday'?'yesterday':Number(b.dataset.days);if(MARKETING_DATE_RANGES.includes(range)){s.rangeDays=range;s.limit=30;}}
   if(action==='more')s.limit+=30;
   if(action==='clear-path'){s.channel='';s.campaignId='';s.adGroupId='';s.creativeId='';}
   if(action==='reset'){savePreference(product,'marketing',{});states.delete(product);}

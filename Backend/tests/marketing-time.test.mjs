@@ -17,3 +17,10 @@ test('website funnel and web-to-app association use the same Beijing day without
  const f=webFunnelDataset(root);assert.deepEqual(f.rows.map(r=>r.date),['2026-11-01','2026-11-02']);assert.equal(root.cleanerWebFunnel.events.b.at,b);
  const r=buildWebReturnReport({clicks:[{createdAt:a,campaign},{createdAt:b,campaign}],bindings:[]},[],{timezone:'Asia/Shanghai',start:'2026-11-02',end:'2026-11-02',now:b+1000});assert.equal(r.rows.length,1);assert.equal(r.rows[0].downloadClicks,1);assert.equal(r.rows[0].date,'2026-11-02');
 });
+test('yesterday selects one complete local day for each report',()=>{
+ const now=Date.parse('2026-11-18T17:00:00Z');
+ const beijing=platformDateFilters({now},{rangeDays:'yesterday'});
+ const utc=platformDateFilters({now,meta:{timezone:'UTC'}},{rangeDays:'yesterday'});
+ assert.deepEqual([beijing.start,beijing.end],['2026-11-18','2026-11-18']);
+ assert.deepEqual([utc.start,utc.end],['2026-11-17','2026-11-17']);
+});
