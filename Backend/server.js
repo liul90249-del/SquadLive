@@ -1,3 +1,4 @@
+import { createSandBusPlayers, sandBusPlayersReport } from './sandbus-players.mjs';
 import { createCatSwipeAnalytics, CATSWIPE_REPORT_DAYS } from './catswipe-analytics.mjs';
 import {createWebFunnel,webFunnelDataset} from './web-funnel.mjs';
 import {createSandBusAnalytics,SANDBUS_REPORT_DAYS} from './sandbus-analytics.mjs';
@@ -1439,9 +1440,10 @@ async function callDeepSeek(body) {
 
 const webReturnAttribution=createWebReturnAttribution({getStore,saveStore});
 const cleanerWebFunnel=createWebFunnel({getStore,saveStore});
+const sandBusPlayers = createSandBusPlayers({getStore,saveStore,onSession:recordUserNetwork});
 const webReturnLimits=new Map();
-function allowWebReturnRequest(req){
- const now=Date.now(),key=clientIPAddress(req)||'unknown';
+function allowWebReturnRequest(req, namespace = ''){
+ const now=Date.now(),key=namespace+':'+(clientIPAddress(req)||'unknown');
  for(const [id,value] of webReturnLimits)if(value.until<now)webReturnLimits.delete(id);
  if(webReturnLimits.size>10000&&!webReturnLimits.has(key))return false;
  const entry=webReturnLimits.get(key)||{until:now+60000,count:0};entry.count++;webReturnLimits.set(key,entry);return entry.count<=30;
@@ -1464,6 +1466,10 @@ async function route(req, res) {
   if(req.method==='POST'&&url.pathname==='/v1/partners/cleaner/web-events'){
     if(!allowWebReturnRequest(req))return jsonResponse(res,429,{error:'Please try again later'});
     return jsonResponse(res,200,await cleanerWebFunnel.record(await readJSON(req),req.headers.origin));
+  }
+  if (req.method === 'POST' && url.pathname === '/v1/sandbus/events') {
+    if (!allowWebReturnRequest(req,'sandbus')) return jsonResponse(res,429,{error:'Please try again later'});
+    return jsonResponse(res,200,await sandBusPlayers.collect(await readJSON(req),req));
   }
   const sharedSessionRoute=/^\/v1\/partners\/([a-z]+)\/session$/.exec(url.pathname);
   if(req.method==='POST'&&sharedSessionRoute){
@@ -2349,6 +2355,12 @@ async function route(req, res) {
   if (url.pathname.startsWith("/v1/admin/")) {
     if (!requireAdmin(req, res)) return;
 
+    if (req.method === 'GET' && url.pathname === '/v1/admin/products/sandbus/players') {
+      return jsonResponse(res,200,sandBusPlayersReport(store,{
+        days:Number(url.searchParams.get('days') || 30),search:url.searchParams.get('search') || '',
+        user:url.searchParams.get('user') || '',
+      }));
+    }
     if (req.method === 'GET' && url.pathname === '/v1/admin/products/catswipe/analytics') {
       const days = Number(url.searchParams.get('days') || 7);
       if (!CATSWIPE_REPORT_DAYS.includes(days)) {
@@ -2402,7 +2414,7 @@ async function route(req, res) {
     const networkRoute = /^\/v1\/admin\/products\/([a-z]+)\/users\/([^/]+)\/network$/.exec(url.pathname);
     if (req.method === 'POST' && networkRoute) {
       const [, product, id] = networkRoute;
-      const user = product === 'squadlive' ? store.users[id] : store.sharedPartnerReferrals?.[product]?.accounts?.[id];
+      const user = product === 'squadlive' ? store.users[id] : product === 'sandbus' ? store.sandBusPlayers?.accounts?.[id] : store.sharedPartnerReferrals?.[product]?.accounts?.[id];
       if (!user) return jsonResponse(res,404,{error:'用户不存在'});
       if (!user.lastIPAddress) return jsonResponse(res,409,{error:'该用户尚未记录 IP，需要客户端再次连接'});
       if (!ipGeolocationEnabled) return jsonResponse(res,503,{error:'IP 地区解析未启用'});
@@ -2414,7 +2426,7 @@ async function route(req, res) {
         applyNetworkDetails(user,address,details);
         await saveStore(store);
         return jsonResponse(res,200,{updated:user.lastIPAddress===address,
-          user:product==='squadlive'?adminUserPublic(user):productOperations(store,product).users.find(item=>item.id===id)});
+          user:product==='squadlive'?adminUserPublic(user):product==='sandbus'?sandBusPlayersReport(store,{user:id}).detail:productOperations(store,product).users.find(item=>item.id===id)});
       } catch (error) {
         if (user.lastIPAddress === address) {
           user.networkLookupStatus='failed'; user.networkLookupError=String(error.message).slice(0,160);
