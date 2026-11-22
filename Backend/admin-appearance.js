@@ -71,7 +71,7 @@
     brandLogo.alt = `${productName} 图标`;
     favicon.href = logo;
     document.title = `${productName} · 管理后台`;
-    nav.hidden = ['squadlive', 'sandbus'].includes(picker.value);
+    nav.hidden = ['squadlive', 'sandbus', 'catswipe'].includes(picker.value);
     nav.querySelectorAll('a').forEach((link, index) => {
       if (index === 0) link.setAttribute('aria-current', 'location');
       else link.removeAttribute('aria-current');

@@ -1,3 +1,4 @@
+import { createCatSwipeAnalytics, CATSWIPE_REPORT_DAYS } from './catswipe-analytics.mjs';
 import {createWebFunnel,webFunnelDataset} from './web-funnel.mjs';
 import {createSandBusAnalytics,SANDBUS_REPORT_DAYS} from './sandbus-analytics.mjs';
 import {createMetaSync,metaReportDataset} from './meta-marketing.mjs';
@@ -37,6 +38,10 @@ const storePath = join(dataDir, "store.json");
 const sandBusAnalytics = createSandBusAnalytics({
   propertyId: process.env.SANDBUS_GA_PROPERTY_ID,
   credentialsJson: process.env.SANDBUS_GA_CREDENTIALS,
+});
+const catSwipeAnalytics = createCatSwipeAnalytics({
+  propertyId: process.env.CATSWIPE_GA_PROPERTY_ID,
+  credentialsJson: process.env.CATSWIPE_GA_CREDENTIALS || process.env.SANDBUS_GA_CREDENTIALS,
 });
 let sharedProductReferrals;
 let paywallWriteQueue=Promise.resolve();
@@ -2343,6 +2348,18 @@ async function route(req, res) {
 
   if (url.pathname.startsWith("/v1/admin/")) {
     if (!requireAdmin(req, res)) return;
+
+    if (req.method === 'GET' && url.pathname === '/v1/admin/products/catswipe/analytics') {
+      const days = Number(url.searchParams.get('days') || 7);
+      if (!CATSWIPE_REPORT_DAYS.includes(days)) {
+        return jsonResponse(res, 400, { error: '请选择最近 7、30 或 90 天' });
+      }
+      try {
+        return jsonResponse(res, 200, await catSwipeAnalytics(days));
+      } catch {
+        return jsonResponse(res, 503, { error: '暂时无法读取 CatSwipe 的 Firebase 报表，请稍后刷新。' });
+      }
+    }
 
     if (req.method === 'GET' && url.pathname === '/v1/admin/products/sandbus/analytics/realtime') {
       try {
