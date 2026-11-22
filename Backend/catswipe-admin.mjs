@@ -55,9 +55,9 @@ export function renderCatSwipeDetails({ root, report, operations, apiPost, refre
     const matching = users.filter(user => [user.id, user.deviceId, user.lastIPAddress, user.country,
       user.countryCode, user.networkCity, user.networkOrganization].some(value => String(value || '').toLowerCase().includes(query)));
     root.querySelector('#catswipeUserRows').innerHTML = `<p class="sub">匹配 ${matching.length} 个安装身份${matching.length > 500 ? '，显示前 500 个' : ''} · 时间为北京时间</p>` + table(
-      ['安装身份', '首次登记', '最后活跃', '版本 / 设备', 'IP', '地区 / 网络', '详情'],
+      ['安装身份', '环境', '首次登记', '最后活跃', '版本 / 设备', 'IP', '地区 / 网络', '详情'],
       matching.slice(0, 500).map(user => `<tr>
-        <td>${esc(user.id)}</td><td>${esc(time(user.createdAt))}</td><td>${esc(time(user.lastSeenAt))}</td>
+        <td>${esc(user.id)}</td><td>${esc(user.clientInfo?.environment === 'simulator' ? '模拟器测试' : user.clientInfo?.environment === 'device' ? '设备' : '未记录')}</td><td>${esc(time(user.createdAt))}</td><td>${esc(time(user.lastSeenAt))}</td>
         <td>${esc([user.clientInfo?.appVersion, user.clientInfo?.build, user.clientInfo?.deviceModel].filter(Boolean).join(' / '))}</td>
         <td>${esc(user.lastIPAddress)}</td><td>${esc([user.country, user.networkCity, user.networkOrganization || user.networkISP].filter(Boolean).join(' / '))}</td>
         <td><button data-cat-user="${esc(user.id)}">查看资料</button></td></tr>`),
