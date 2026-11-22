@@ -449,6 +449,7 @@
     #sandbusUsers td:last-child { min-width: 180px; }
   </style>
   <link rel="stylesheet" href="/admin-appearance.css">
+  <style>#section-sandbus [hidden] { display: none; }</style>
   <script src="/admin-appearance.js" defer></script>
   <style>
     #rewardDialog { width:min(850px,94vw); max-height:90vh; box-sizing:border-box; overflow:auto; border:1px solid var(--line); border-radius:20px; padding:24px; color:var(--text); background:var(--panel); }
@@ -606,9 +607,8 @@
         </div>
       </section>
       <section class="section" id="section-sandbus">
-        <div class="panel">
+        <div class="panel" id="sandbusRangePanel">
           <div class="panel-head">
-            <h2>玩家与关卡</h2>
             <label for="sandbusDays">统计范围
               <select id="sandbusDays">
                 <option value="1">今天</option>
@@ -620,30 +620,44 @@
             </label>
           </div>
           <p id="sandbusStatus" class="sub" role="status"></p>
+        </div>
+        <div class="panel" id="sandbusOverviewPanel" data-sandbus-view>
+          <div class="panel-head"><h2 tabindex="-1">玩家概览</h2></div>
           <div id="sandbusPlayers" class="sb-metrics"></div>
           <p class="sub">仅统计开启游戏分析的玩家。新增玩家按 Firebase 首次打开记录，游戏无需注册。历史报表通常需要 24–48 小时完成处理。</p>
           <h3>每日新增与活跃</h3>
           <div id="sandbusTrend"></div>
           <details><summary>查看每日数据</summary><div id="sandbusDaily" class="table-scroll" tabindex="0" role="region" aria-label="每日玩家数据"></div></details>
-          <h3>事件触发统计</h3><div id="sandbusEventTotals" class="table-scroll"></div>
+        </div>
+        <div class="panel" id="sandbusGameplayPanel" data-sandbus-view hidden>
+          <div class="panel-head"><h2 tabindex="-1">关卡与事件</h2></div>
+          <h3>Firebase 事件统计</h3><div id="sandbusEventTotals" class="table-scroll"></div>
           <h3>关卡表现</h3>
           <p class="sub">柱形表示事件次数，同一玩家重开会产生多次开局。关卡详情按平台和版本列在下方。</p>
           <div id="sandbusProgress"></div>
           <details><summary>查看平台与版本明细</summary>
           <div id="sandbusLevels" class="table-scroll" tabindex="0" role="region" aria-label="按平台、版本与关卡查看玩法数据"></div></details>
+          <h3>新版客户端事件统计</h3>
+          <p id="sandbusPlayerEventsStatus" class="sub" role="status"></p>
+          <div id="sandbusPlayerEventTotals" class="table-scroll"></div>
         </div>
-        <div class="panel">
-          <div class="panel-head"><h2>用户列表与 IP 分析</h2><button id="sandbusPlayersRefresh" type="button">刷新用户</button></div>
-          <p class="sub">新版开启 Gameplay Analytics 后记录独立安装用户、事件和请求 IP。旧版 Firebase 汇总中的玩家无法回填为用户明细。用户记录与 Firebase 统计单独显示。</p>
+        <div class="panel" id="sandbusUsersPanel" data-sandbus-view hidden>
+          <div class="panel-head"><h2 tabindex="-1">用户列表</h2><button id="sandbusPlayersRefresh" type="button">刷新用户</button></div>
+          <p class="sub">显示新版开启游戏分析后上报的安装用户。点击用户可查看该安装的事件与 IP 历史。</p>
           <label for="sandbusUserSearch">搜索用户<input id="sandbusUserSearch" type="search" placeholder="用户 ID、IP、国家、城市或平台"></label>
-          <p id="sandbusUserStatus" class="sub" role="status"></p><h3>新版客户端事件统计</h3><div id="sandbusPlayerEventTotals" class="table-scroll"></div>
-          <div id="sandbusCountries" class="table-scroll"></div>
+          <p id="sandbusUserStatus" class="sub" role="status"></p>
           <div id="sandbusUsers" class="table-scroll" tabindex="0" role="region" aria-label="Sand Bus 用户列表"></div>
           <div id="sandbusUserDetail"></div>
         </div>
-        <div class="panel">
+        <div class="panel" id="sandbusIPPanel" data-sandbus-view hidden>
+          <div class="panel-head"><h2 tabindex="-1">IP 与地区</h2></div>
+          <p class="sub">按所选范围内有连接记录的安装用户汇总。国家与地区由连接 IP 解析。</p>
+          <p id="sandbusIPStatus" class="sub" role="status"></p>
+          <div id="sandbusCountries" class="table-scroll"></div>
+        </div>
+        <div class="panel" id="sandbusRealtimePanel" data-sandbus-view hidden>
           <div class="panel-head">
-            <h2>最近 30 分钟</h2>
+            <h2 tabindex="-1">实时事件 · 最近 30 分钟</h2>
             <button id="sandbusRealtimeRefresh" type="button">刷新实时事件</button>
           </div>
           <p id="sandbusRealtimeStatus" class="sub" role="status"></p>
@@ -1372,11 +1386,17 @@
       sandBusSelectedUser = user;
       const status = document.getElementById('sandbusUserStatus');
       status.textContent = '正在读取用户明细…';
+      const eventsStatus = document.getElementById('sandbusPlayerEventsStatus');
+      const ipStatus = document.getElementById('sandbusIPStatus');
+      eventsStatus.textContent = '正在读取客户端事件…';
+      ipStatus.textContent = '正在读取地区记录…';
       const params = new URLSearchParams({days:document.getElementById('sandbusDays').value,
         search:document.getElementById('sandbusUserSearch').value,user});
       try {
         const report = await api('/v1/admin/products/sandbus/players?' + params);
         if (state.product !== 'sandbus' || version !== sandBusUsersVersion) return;
+        eventsStatus.textContent = '';
+        ipStatus.textContent = '';
         status.textContent = `已记录 ${report.total} 个安装用户 · 匹配 ${report.matched} 个 · 最多显示 500 个 · 事件展示最近 90 天`;
         document.getElementById('sandbusPlayerEventTotals').innerHTML = table(['事件', '所选时段触发次数'],
           report.events.map(item => `<tr><td>${escapeHTML(sandBusEventLabels[item.name] || item.name)}</td><td>${item.count}</td></tr>`), '暂无新版事件。');
@@ -1392,14 +1412,16 @@
             <td>${escapeHTML([player.organization,player.asn].filter(Boolean).join(' · ') || player.networkStatus)}</td>
             <td>${player.sharedIPUsers}</td><td>${player.eventCount} / ${player.highestLevel || '—'}</td>
             <td><button data-sb-user="${escapeHTML(player.id)}">查看事件</button><button data-sb-network="${escapeHTML(player.id)}">刷新 IP 解析</button></td></tr>`),
-          '尚未收到新版客户端的用户明细。已有 Firebase 玩家统计仍显示在上方。');
+          '尚未收到新版客户端的用户明细。');
         const detail = report.detail;
         document.getElementById('sandbusUserDetail').innerHTML = detail ? `<h3>${escapeHTML(detail.id)} 的事件记录</h3><button data-sb-close>关闭详情</button>
           <p class="sub">按发生时间展示最近 200 条事件。安装用户不等同于自然人，IP 解析为网络线索。</p>
           ${table(['发生时间', '事件', '关卡', '装载提升'],detail.events.map(event => `<tr><td>${escapeHTML(new Date(event.at).toLocaleString())}</td><td>${escapeHTML(sandBusEventLabels[event.name] || event.name)}</td><td>${event.level || '—'}</td><td>${event.gain === undefined ? '—' : event.gain + ' 个百分点'}</td></tr>`),'所选时段无事件。')}
           <h3>IP 变化记录</h3>${table(['IP', '首次发现', '最后发现'],detail.ipHistory.map(item => `<tr><td>${escapeHTML(item.ip)}</td><td>${escapeHTML(item.firstSeenAt)}</td><td>${escapeHTML(item.lastSeenAt)}</td></tr>`),'尚无 IP 记录。')}` : '';
       } catch (error) {
-        if (state.product === 'sandbus' && version === sandBusUsersVersion) status.textContent = error.message;
+        if (state.product === 'sandbus' && version === sandBusUsersVersion) {
+          status.textContent = eventsStatus.textContent = ipStatus.textContent = error.message;
+        }
       }
     }
     document.getElementById('sandbusUsers').onclick = async event => {

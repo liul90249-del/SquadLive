@@ -62,8 +62,29 @@
     catswipe: '/assets/products/catswipe.png',
     sandbus: '/assets/products/sandbus.png',
   };
-  const sandBusUsersPanel = document.getElementById('sandbusUsers')?.closest('.panel');
-  if (sandBusUsersPanel) sandBusUsersPanel.id ||= 'sandbusUsersPanel';
+  const sandBusNavigation = [
+    ['sandbusOverviewPanel', '玩家概览', '◫'],
+    ['sandbusGameplayPanel', '关卡与事件', '↗'],
+    ['sandbusUsersPanel', '用户列表', '◎'],
+    ['sandbusIPPanel', 'IP 与地区', '◇'],
+    ['sandbusRealtimePanel', '实时事件', '◈'],
+  ];
+  const sandBusPanels = [...document.querySelectorAll('[data-sandbus-view]')];
+  function showSandBusView(hash, moveFocus = false) {
+    const panel = sandBusPanels.find(item => '#' + item.id === hash) || sandBusPanels[0];
+    if (!panel) return;
+    for (const item of sandBusPanels) item.hidden = item !== panel;
+    document.getElementById('sandbusRangePanel').hidden = panel.id === 'sandbusRealtimePanel';
+    document.getElementById('sandbusStatus').hidden = !['sandbusOverviewPanel', 'sandbusGameplayPanel'].includes(panel.id);
+    nav.querySelectorAll('a').forEach(link => {
+      if (link.hash === '#' + panel.id) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    });
+    if (moveFocus) {
+      document.getElementById('section-sandbus').scrollIntoView({block:'start'});
+      panel.querySelector('h2')?.focus({preventScroll:true});
+    }
+  }
   const brandLogo = side.querySelector('.brand img');
   const favicon = document.querySelector('link[rel="icon"]');
   const updateNavigation = () => {
@@ -74,18 +95,19 @@
     favicon.href = logo;
     document.title = `${productName} · 管理后台`;
     const isSandBus = picker.value === 'sandbus';
-    nav.hidden = picker.value === 'squadlive' || (isSandBus && !sandBusUsersPanel);
+    nav.hidden = picker.value === 'squadlive' || (isSandBus && !sandBusPanels.length);
     const navigation = picker.value === 'catswipe'
       ? [['catswipeCards', '核心数据', '◫'], ['catswipeEventsPanel', '事件统计', '↗'],
          ['catswipeUsersPanel', '用户列表', '◎'], ['catswipeRegionsPanel', '地区与设备', '◇'],
          ['catswipeIPPanel', 'IP 分析', '◈']]
       : isSandBus
-        ? (sandBusUsersPanel ? [[sandBusUsersPanel.id, '用户列表', '◎']] : [])
+        ? sandBusNavigation
         : sections.map(([id, label, icon]) => [`${id}Panel`, label, icon]);
     nav.innerHTML = navigation.map(([id, label, icon]) =>
       `<a href="#${id}"><span aria-hidden="true">${icon}</span>${label}</a>`).join('');
+    if (isSandBus) { showSandBusView(location.hash); return; }
     nav.querySelectorAll('a').forEach((link, index) => {
-      if (isSandBus ? link.hash === location.hash : index === 0) link.setAttribute('aria-current', 'location');
+      if (index === 0) link.setAttribute('aria-current', 'location');
       else link.removeAttribute('aria-current');
     });
   };
@@ -94,7 +116,13 @@
     if (!link) return;
     nav.querySelectorAll('a').forEach(item => item.removeAttribute('aria-current'));
     link.setAttribute('aria-current', 'location');
-    if (['catswipe', 'sandbus'].includes(picker.value)) {
+    if (picker.value === 'sandbus') {
+      event.preventDefault();
+      if (location.hash !== link.hash) history.pushState(null, '', link.hash);
+      showSandBusView(link.hash, true);
+      return;
+    }
+    if (picker.value === 'catswipe') {
       event.preventDefault();
       const target = document.getElementById(link.hash.slice(1));
       if (target) target.scrollIntoView({block:'start', behavior:'auto'});
@@ -119,6 +147,9 @@
     updateNavigation();
   });
   updateNavigation();
+  window.addEventListener('hashchange', () => {
+    if (picker.value === 'sandbus') showSandBusView(location.hash);
+  });
 
   // Keyboard users can reach and scroll the same wide tables in either style.
   const tableIds = ['productDaily', 'productUsers', 'productOrders', 'productPrices',
