@@ -53,7 +53,7 @@ export function renderCatSwipeDetails({ root, report, operations, apiPost, refre
   function showUsers() {
     const query = root.querySelector('#catswipeUserSearch').value.trim().toLowerCase();
     const matching = users.filter(user => [user.id, user.deviceId, user.lastIPAddress, user.country,
-      user.countryCode, user.networkCity, user.networkOrganization].some(value => String(value || '').toLowerCase().includes(query)));
+      user.countryCode, user.networkCity, user.networkOrganization, user.clientInfo?.deviceModel, user.clientInfo?.appVersion].some(value => String(value || '').toLowerCase().includes(query)));
     root.querySelector('#catswipeUserRows').innerHTML = `<p class="sub">匹配 ${matching.length} 个安装身份${matching.length > 500 ? '，显示前 500 个' : ''} · 时间为北京时间</p>` + table(
       ['安装身份', '环境', '首次登记', '最后活跃', '版本 / 设备', 'IP', '地区 / 网络', '详情'],
       matching.slice(0, 500).map(user => `<tr>
@@ -70,6 +70,7 @@ export function renderCatSwipeDetails({ root, report, operations, apiPost, refre
     if (!user.lastIPAddress) continue;
     const group = byIP.get(user.lastIPAddress) || { count: 0, user };
     group.count += 1;
+    if (Date.parse(user.lastSeenAt) > Date.parse(group.user.lastSeenAt)) group.user = user;
     byIP.set(user.lastIPAddress, group);
   }
   root.querySelector('#catswipeIPRows').innerHTML = table(
