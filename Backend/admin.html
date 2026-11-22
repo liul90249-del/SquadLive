@@ -1379,8 +1379,9 @@
 
     function sandBusTrend(daily) {
       if (!daily.length) return '<p class="sub">尚无每日玩家记录。</p>';
-      const peak = Math.max(1, ...daily.flatMap(day => [day.new ?? 0, day.active ?? 0]));
-      return `<div class="sb-legend"><span class="sb-new">新增玩家</span><span class="sb-active">活跃玩家</span><span>每日最高 ${peak} 人</span></div>
+      const highest = Math.max(0, ...daily.flatMap(day => [day.new ?? 0, day.active ?? 0]));
+      const peak = Math.max(1, highest);
+      return `<div class="sb-legend"><span class="sb-new">新增玩家</span><span class="sb-active">活跃玩家</span><span>每日最高 ${highest} 人</span></div>
         <div class="sb-trend" role="img" aria-label="每日新增与活跃玩家柱形图，具体数字可展开查看每日数据">
           ${daily.map(({ date, new: added, active }) => `<div class="sb-day" title="${escapeHTML(date)} · 新增 ${added ?? '受限'} · 活跃 ${active ?? '受限'}">
             <div class="sb-day-bars"><i class="sb-new-bar" style="height:${100 * (added ?? 0) / peak}%"></i><i class="sb-active-bar" style="height:${100 * (active ?? 0) / peak}%"></i></div>
@@ -1435,6 +1436,8 @@
           `已刷新 ${new Date().toLocaleTimeString()}`,
           'Firebase 查询成功',
         ].filter(Boolean).join(' · ');
+        const latestDay = [...report.daily].reverse().find(day => (day.active ?? 0) > 0 || (day.new ?? 0) > 0);
+        if (latestDay) status.textContent += ` · 最近有玩家记录的日期 ${latestDay.date}`;
         const totals = report.eventTotals;
         players.innerHTML = [
           sandBusMetric('新增玩家', report.players.new, '所选时段首次打开'),
