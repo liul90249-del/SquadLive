@@ -701,6 +701,18 @@
   </div>
 
   <script>
+    window.appleReviewIPLabel = (record, ip = record?.lastIPAddress) => {
+      if (!ip) return '未采集 IP';
+      if (!record) return '无法判断 · IP 未完成解析';
+      if (ip !== record.lastIPAddress && record?.ip !== ip) {
+        return window.appleReviewIPLabel(record?.ipHistory?.find(item => item.ip === ip), ip || null);
+      }
+      if (record?.possibleAppleNetwork) return '疑似 Apple 审核网络';
+      if (record?.networkLookupStatus === 'complete' || record?.networkStatus === 'complete'
+        || (record?.ip === ip && typeof record.possibleAppleNetwork === 'boolean')) return '未发现 Apple 网络标识';
+      return '无法判断 · IP 未完成解析';
+    };
+
     const state = {
       token: localStorage.getItem("squadlive.adminToken") || "",
       product: new URLSearchParams(location.search).get('product')
@@ -807,7 +819,7 @@
         matches.slice(0,500).map(user => `<tr><td>${escapeHTML(user.id)}</td><td>${escapeHTML(user.deviceId || '未记录')}</td>
           ${cleaner?`<td>${user.hasCompletedCleanup===true?'是':user.hasCompletedCleanup===false?'尚无成功记录':'未采集'}</td>`:''}
           <td>${time(user.createdAt)}</td><td>${time(user.lastSeenAt)}</td>
-          <td>${escapeHTML(user.lastIPAddress || '尚未采集')}<br>${escapeHTML(user.networkOrganization || user.networkISP || networkLabel(user))}</td>
+          <td>${escapeHTML(user.lastIPAddress || '尚未采集')}<br><small>${window.appleReviewIPLabel(user)}</small><br>${escapeHTML(user.networkOrganization || user.networkISP || networkLabel(user))}</td>
           <td>${escapeHTML([user.country || user.countryCode,user.networkCity].filter(Boolean).join(' · ') || networkLabel(user))}</td><td>${user.paidOrders}</td>
           <td><button class="ghost" data-product-user="${escapeHTML(user.id)}">查看资料</button></td></tr>`));
     }
@@ -1075,7 +1087,7 @@
             <td>
               ${user.lastIPAddress ? `<code title="${escapeHTML(user.lastIPAddress)}">${escapeHTML(user.lastIPAddress)}</code><br>` : "-<br>"}
               ${escapeHTML([user.networkCountryCode, user.networkCity].filter(Boolean).join(" · ") || networkLabel(user))}
-              ${user.possibleAppleNetwork ? '<br><span class="pill vip">疑似 Apple 网络</span>' : ""}
+              <br><small>${window.appleReviewIPLabel(user)}</small>
             </td>
             <td>${user.coins}</td>
             <td>${user.isPremium ? '<span class="pill vip">VIP</span>' : '<span class="pill">普通</span>'}</td>
@@ -1117,7 +1129,7 @@
               <div>国家 / 地区：<strong>${escapeHTML([data.user.networkCountry, data.user.networkRegion, data.user.networkCity].filter(Boolean).join(" · ") || data.user.networkCountryCode || networkLabel(data.user))}</strong></div>
               <div>网络组织：<strong>${escapeHTML(data.user.networkOrganization || data.user.networkISP || "待解析")}</strong></div>
               <div>ASN：<strong>${escapeHTML(data.user.networkASN || "-")}</strong></div>
-              <div>Apple 网络判断：${data.user.possibleAppleNetwork ? '<span class="pill vip">网络组织疑似 Apple</span>' : '<span class="pill">未发现 Apple 标识</span>'}</div>
+              <div>Apple 审核网络线索：${window.appleReviewIPLabel(data.user)}</div>
               <div>IP 更新时间：<strong>${time(data.user.lastIPSeenAt)}</strong></div>
               <div>金币数量：<strong>${data.user.coins}</strong></div>
               <div>已开始直播：<strong>${data.user.liveSessionsStarted || 0} 场</strong></div>
@@ -1135,7 +1147,7 @@
               <div class="panel-head"><h2>最近 IP 历史</h2><span class="pill active">最多 10 条</span></div>
               ${table(["IP", "国家/城市", "网络组织", "首次出现", "最后出现"], (data.user.ipHistory || []).map((item) => `
                 <tr>
-                  <td><code>${escapeHTML(item.ip || "-")}</code>${item.possibleAppleNetwork ? '<br><span class="pill vip">疑似 Apple</span>' : ""}</td>
+                  <td><code>${escapeHTML(item.ip || "-")}</code><br><small>${window.appleReviewIPLabel(item, item.ip)}</small></td>
                   <td>${escapeHTML([item.countryCode || item.country, item.city].filter(Boolean).join(" · ") || "待解析")}</td>
                   <td>${escapeHTML(item.organization || item.isp || item.asn || "-")}</td>
                   <td>${time(item.firstSeenAt)}</td>
@@ -1407,7 +1419,7 @@
           report.users.map(player => `<tr>
             <td>${escapeHTML(player.id)}</td><td>${escapeHTML(player.platform)}<br>${escapeHTML(player.version)}</td>
             <td>${escapeHTML(new Date(player.createdAt).toLocaleString())}</td><td>${escapeHTML(new Date(player.lastSeenAt).toLocaleString())}</td>
-            <td>${escapeHTML(player.lastIPAddress || '尚未采集')}</td>
+            <td>${escapeHTML(player.lastIPAddress || '尚未采集')}<br><small>${window.appleReviewIPLabel(player)}</small></td>
             <td>${escapeHTML([player.country,player.city].filter(Boolean).join(' · ') || '待解析')}</td>
             <td>${escapeHTML([player.organization,player.asn].filter(Boolean).join(' · ') || player.networkStatus)}</td>
             <td>${player.sharedIPUsers}</td><td>${player.eventCount} / ${player.highestLevel || '—'}</td>
@@ -1417,7 +1429,7 @@
         document.getElementById('sandbusUserDetail').innerHTML = detail ? `<h3>${escapeHTML(detail.id)} 的事件记录</h3><button data-sb-close>关闭详情</button>
           <p class="sub">按发生时间展示最近 200 条事件。安装用户不等同于自然人，IP 解析为网络线索。</p>
           ${table(['发生时间', '事件', '关卡', '装载提升'],detail.events.map(event => `<tr><td>${escapeHTML(new Date(event.at).toLocaleString())}</td><td>${escapeHTML(sandBusEventLabels[event.name] || event.name)}</td><td>${event.level || '—'}</td><td>${event.gain === undefined ? '—' : event.gain + ' 个百分点'}</td></tr>`),'所选时段无事件。')}
-          <h3>IP 变化记录</h3>${table(['IP', '首次发现', '最后发现'],detail.ipHistory.map(item => `<tr><td>${escapeHTML(item.ip)}</td><td>${escapeHTML(item.firstSeenAt)}</td><td>${escapeHTML(item.lastSeenAt)}</td></tr>`),'尚无 IP 记录。')}` : '';
+          <h3>IP 变化记录</h3>${table(['IP', '首次发现', '最后发现'],detail.ipHistory.map(item => `<tr><td>${escapeHTML(item.ip)}<br><small>${window.appleReviewIPLabel(item, item.ip)}</small></td><td>${escapeHTML(item.firstSeenAt)}</td><td>${escapeHTML(item.lastSeenAt)}</td></tr>`),'尚无 IP 记录。')}` : '';
       } catch (error) {
         if (state.product === 'sandbus' && version === sandBusUsersVersion) {
           status.textContent = eventsStatus.textContent = ipStatus.textContent = error.message;

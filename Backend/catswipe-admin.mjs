@@ -59,7 +59,7 @@ export function renderCatSwipeDetails({ root, report, operations, apiPost, refre
       matching.slice(0, 500).map(user => `<tr>
         <td>${esc(user.id)}</td><td>${esc(user.clientInfo?.environment === 'simulator' ? '模拟器测试' : user.clientInfo?.environment === 'device' ? '设备' : '未记录')}</td><td>${esc(time(user.createdAt))}</td><td>${esc(time(user.lastSeenAt))}</td>
         <td>${esc([user.clientInfo?.appVersion, user.clientInfo?.build, user.clientInfo?.deviceModel].filter(Boolean).join(' / '))}</td>
-        <td>${esc(user.lastIPAddress)}</td><td>${esc([user.country, user.networkCity, user.networkOrganization || user.networkISP].filter(Boolean).join(' / '))}</td>
+        <td>${esc(user.lastIPAddress)}<br><small>${window.appleReviewIPLabel(user)}</small></td><td>${esc([user.country, user.networkCity, user.networkOrganization || user.networkISP].filter(Boolean).join(' / '))}</td>
         <td><button data-cat-user="${esc(user.id)}">查看资料</button></td></tr>`),
       '尚无安装身份记录。安装接入上报的新版本并打开游戏后，将显示用户、IP 和事件明细。');
   }
@@ -74,8 +74,8 @@ export function renderCatSwipeDetails({ root, report, operations, apiPost, refre
     byIP.set(user.lastIPAddress, group);
   }
   root.querySelector('#catswipeIPRows').innerHTML = table(
-    ['出口 IP', '安装身份数', '国家 / 城市', 'ASN / 网络', '最近活跃'],
-    [...byIP].map(([ip, { count, user }]) => cells([ip, count,
+    ['出口 IP', 'Apple 审核网络线索', '安装身份数', '国家 / 城市', 'ASN / 网络', '最近活跃'],
+    [...byIP].map(([ip, { count, user }]) => cells([ip, window.appleReviewIPLabel(user), count,
       [user.country, user.networkCity].filter(Boolean).join(' / '),
       [user.networkASN, user.networkOrganization || user.networkISP].filter(Boolean).join(' / '), time(user.lastSeenAt)])),
     '新版本尚未上报连接 IP。');
@@ -98,13 +98,13 @@ export function renderCatSwipeDetails({ root, report, operations, apiPost, refre
         ['运行环境', user.clientInfo?.environment === 'simulator' ? '模拟器测试' : user.clientInfo?.environment === 'device' ? '设备' : '未记录'],
         ['App 版本', user.clientInfo?.appVersion], ['构建号', user.clientInfo?.build],
         ['设备 / 系统', [user.clientInfo?.deviceModel, user.clientInfo?.osVersion].filter(Boolean).join(' / ')],
-        ['语言', user.clientInfo?.language], ['首次 IP', user.firstIPAddress], ['最近 IP', user.lastIPAddress],
+        ['语言', user.clientInfo?.language], ['首次 IP', user.firstIPAddress], ['最近 IP', user.lastIPAddress], ['Apple 审核网络线索', window.appleReviewIPLabel(user)],
         ['国家 / 城市', [user.country, user.networkRegion, user.networkCity].filter(Boolean).join(' / ')],
         ['ASN / 运营商', [user.networkASN, user.networkOrganization, user.networkISP].filter(Boolean).join(' / ')],
         ['同出口 IP 安装数', user.sameIPUserCount], ['IP 解析状态', user.networkLookupStatus],
       ].map(cells))}<h3>IP 历史</h3>
-      ${table(['IP', '国家 / 城市', '首次出现', '最后出现'], (user.ipHistory || []).map(row =>
-        cells([row.ip, [row.country, row.city].filter(Boolean).join(' / '), time(row.firstSeenAt), time(row.lastSeenAt)])))}
+      ${table(['IP', 'Apple 审核网络线索', '国家 / 城市', '首次出现', '最后出现'], (user.ipHistory || []).map(row =>
+        cells([row.ip, window.appleReviewIPLabel(row, row.ip), [row.country, row.city].filter(Boolean).join(' / '), time(row.firstSeenAt), time(row.lastSeenAt)])))}
       <button data-network>重新解析 IP</button><p role="status"></p>`;
     dialog.addEventListener('close', () => dialog.remove(), { once: true });
     dialog.querySelector('[data-network]').insertAdjacentHTML('beforebegin', `<h3>已保存事件次数（最近 90 天）</h3>${table(['事件', '次数'], Object.entries(user.gameplayCounts || {}).map(([name, count]) => cells([labels[name] || name, count])))}`);
