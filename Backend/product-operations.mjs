@@ -187,7 +187,7 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
       networkUpdatedAt: account.networkUpdatedAt || null,
       ipHistory: account.ipHistory || [],
       sameIPUserCount: account.lastIPAddress ? ipCounts.get(account.lastIPAddress) || 0 : 0,
-      activityTrackedFrom: iso(account.activityTrackedFrom),
+      activityTrackedFrom: account.activityTrackedFrom || null,
       networkOrganization: account.networkOrganization || null,
       possibleAppleNetwork: Boolean(account.possibleAppleNetwork),
       paidOrders: paidOrderCounts.get(account.id) || 0,

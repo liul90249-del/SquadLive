@@ -19,7 +19,7 @@ test('review evidence, final decisions, exactly-once bonuses and product IP deta
   const seed={users:{user_test:user},rewardSubmissions:{},sharedPartnerReferrals:{}};
   for(const id of ['approve','reject','zero','invalid'])seed.rewardSubmissions[id]={id,userId:user.id,status:'pending',platform:'TikTok',proofLink:'https://example.com/post',screenshotBase64:screenshot,baseRewardCoins:100,createdAt:new Date().toISOString()};
   for(const product of ['cleaner','dailyme','nutriscan','subguard','sparkle','catswipe']){
-    seed.sharedPartnerReferrals[product]={accounts:{account:{id:'account',deviceId:'10000000-0000-4000-8000-000000000001',createdAt:new Date().toISOString(),lastIPAddress:'8.8.8.8',networkCountryCode:'US',networkCountry:'United States',networkLookupStatus:'complete',networkUpdatedAt:new Date().toISOString(),ipHistory:[{ip:'8.8.8.8'}]}},credentials:{[createHash('sha256').update(credential).digest('hex')]:'account'},devices:{},accountTokens:{},receipts:{}};
+    seed.sharedPartnerReferrals[product]={accounts:{account:{id:'account',deviceId:'10000000-0000-4000-8000-000000000001',createdAt:new Date().toISOString(),activityTrackedFrom:'2026-11-01T00:00:00.000Z',lastIPAddress:'8.8.8.8',networkCountryCode:'US',networkCountry:'United States',networkLookupStatus:'complete',networkUpdatedAt:new Date().toISOString(),ipHistory:[{ip:'8.8.8.8'}]}},credentials:{[createHash('sha256').update(credential).digest('hex')]:'account'},devices:{},accountTokens:{},receipts:{}};
   }
   await writeFile(join(directory,'store.json'),JSON.stringify(seed));
   const preload=join(directory,'lookup.mjs');
@@ -51,7 +51,7 @@ test('review evidence, final decisions, exactly-once bonuses and product IP deta
     for(const product of ['cleaner','dailyme','nutriscan','subguard','sparkle','catswipe']){
       const report=await call(`/v1/admin/products/${product}/operations`);
       assert.equal(report.status,200);const account=report.body.users[0];
-      assert.equal(account.lastIPAddress,'8.8.8.8');assert.equal(account.countryCode,'US');assert.equal(account.sameIPUserCount,1);assert.equal(account.ipHistory.length,1);
+      assert.equal(account.activityTrackedFrom,'2026-11-01T00:00:00.000Z');assert.equal(account.lastIPAddress,'8.8.8.8');assert.equal(account.countryCode,'US');assert.equal(account.sameIPUserCount,1);assert.equal(account.ipHistory.length,1);
     }
     const session=await call('/v1/partners/dailyme/session',{credential});assert.equal(session.status,200);
     let report=await call('/v1/admin/products/dailyme/operations');
