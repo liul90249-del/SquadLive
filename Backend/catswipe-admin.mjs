@@ -19,10 +19,6 @@ const table = (headers, rows, empty = '所选时间内暂无记录') => rows.len
 
 export function renderCatSwipeDetails({ root, report, operations, apiPost, refresh }) {
   root.innerHTML = `
-    <nav class="tools" aria-label="CatSwipe 数据导航">
-      <a href="#catswipeEventsPanel">事件统计</a><a href="#catswipeUsersPanel">用户列表</a>
-      <a href="#catswipeRegionsPanel">地区与设备</a><a href="#catswipeIPPanel">IP 分析</a>
-    </nav>
     <div class="panel" id="catswipeEventsPanel"><div class="panel-head"><h2>事件触发统计</h2></div>
       <p class="sub">Firebase Analytics · 跟随上方统计范围；触发用户按事件分别去重。</p>
       ${table(['事件', '事件名', '触发次数', '触发用户'], (report.eventRows || []).map(event =>

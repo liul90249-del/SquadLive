@@ -71,7 +71,14 @@
     brandLogo.alt = `${productName} 图标`;
     favicon.href = logo;
     document.title = `${productName} · 管理后台`;
-    nav.hidden = ['squadlive', 'sandbus', 'catswipe'].includes(picker.value);
+    nav.hidden = ['squadlive', 'sandbus'].includes(picker.value);
+    const navigation = picker.value === 'catswipe'
+      ? [['catswipeCards', '核心数据', '◫'], ['catswipeEventsPanel', '事件统计', '↗'],
+         ['catswipeUsersPanel', '用户列表', '◎'], ['catswipeRegionsPanel', '地区与设备', '◇'],
+         ['catswipeIPPanel', 'IP 分析', '◈']]
+      : sections.map(([id, label, icon]) => [`${id}Panel`, label, icon]);
+    nav.innerHTML = navigation.map(([id, label, icon]) =>
+      `<a href="#${id}"><span aria-hidden="true">${icon}</span>${label}</a>`).join('');
     nav.querySelectorAll('a').forEach((link, index) => {
       if (index === 0) link.setAttribute('aria-current', 'location');
       else link.removeAttribute('aria-current');
@@ -82,6 +89,15 @@
     if (!link) return;
     nav.querySelectorAll('a').forEach(item => item.removeAttribute('aria-current'));
     link.setAttribute('aria-current', 'location');
+    if (picker.value === 'catswipe') {
+      event.preventDefault();
+      const target = document.getElementById(link.hash.slice(1));
+      if (target) target.scrollIntoView({block:'start', behavior:'auto'});
+      const url = new URL(location.href);
+      url.hash = link.hash;
+      history.replaceState(null, '', url);
+      return;
+    }
     if (root.dataset.adminStyle === 'pearl') {
       event.preventDefault();
       window.dispatchEvent(new CustomEvent('admin-insight-view', {detail: ['overview','trends','users','orders','prices','marketing'][[...nav.children].indexOf(link)]}));
