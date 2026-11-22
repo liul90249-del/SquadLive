@@ -1547,9 +1547,13 @@
       status.textContent = '正在读取 Firebase 数据…';
       cards.replaceChildren();
       daily.replaceChildren();
-      details.replaceChildren();
+      let report = {};
+      const detailsResult = Promise.allSettled([
+        api(`/v1/admin/products/catswipe/operations?days=90&gameplayDays=${days}`),
+        import('/catswipe-admin.mjs'),
+      ]);
       try {
-        const report = await api(`/v1/admin/products/catswipe/analytics?days=${days}`);
+        report = await api(`/v1/admin/products/catswipe/analytics?days=${days}`);
         if (state.product !== 'catswipe' || version !== catSwipeLoadVersion) return;
         if (report.status === 'not_configured') {
           status.textContent = 'Firebase 报表读取尚待配置。';
@@ -1576,14 +1580,15 @@
             `<tr>${[date, activeUsers, newUsers].map(value => `<td>${escapeHTML(value)}</td>`).join('')}</tr>`),
           '所选时段暂无玩家数据。',
         );
-        const [operationsResult, view] = await Promise.all([
-          api(`/v1/admin/products/catswipe/operations?days=90&gameplayDays=${days}`).catch(() => null),
-          import('/catswipe-admin.mjs'),
-        ]);
-        if (state.product !== 'catswipe' || version !== catSwipeLoadVersion) return;
-        view.renderCatSwipeDetails({root: details, report, operations: operationsResult, apiPost, refresh: loadCatSwipe});
       } catch (error) {
         if (state.product === 'catswipe' && version === catSwipeLoadVersion) status.textContent = error.message;
+      } finally {
+        const [operations, view] = await detailsResult;
+        if (state.product === 'catswipe' && version === catSwipeLoadVersion && view.status === 'fulfilled') {
+          view.value.renderCatSwipeDetails({root: details, report,
+            operations: operations.status === 'fulfilled' ? operations.value : null,
+            apiPost, refresh: loadCatSwipe});
+        }
       }
     }
 
