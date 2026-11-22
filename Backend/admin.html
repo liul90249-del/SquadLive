@@ -673,7 +673,7 @@
         <div class="panel"><div class="panel-head"><h2 id="productHeading">产品数据</h2><span class="sub" id="productNotice"></span></div><div class="cards" id="productCards"></div></div>
         <div id="productPaywallPolicy" class="panel"></div>
         <div class="panel" id="productSubscriptionCatalogPanel" style="display:none"><div class="panel-head"><h2>Smart Cleaner 美国区周订阅</h2><span class="sub">目标：US$9.99/周，7 天免费试用</span></div><div id="productSubscriptionCatalog" class="sub"></div></div>
-        <div class="panel"><div class="panel-head"><h2>每日注册、活跃与付费</h2></div><div id="productDaily"></div></div>
+        <div class="panel"><div class="panel-head"><h2>每日注册、活跃与付费</h2><label>统计范围 <select id="classicDailyRange"><option value="all">全部已加载日期</option><option value="1">今天</option><option value="-1">昨天</option></select></label></div><div id="productDaily"></div></div>
         <div class="panel"><div class="panel-head"><h2>用户列表</h2><span class="sub">IP 与网络信息只作线索，不能确认苹果审核员身份</span></div><label>查找反馈用户 <input id="productUserLookup" type="search" placeholder="用户 ID、设备 ID、国家或 IP"></label><div id="productUsers"></div></div>
         <div class="panel"><div class="panel-head"><h2>订单与退款</h2></div><div id="productOrders"></div></div>
         <div class="panel" id="productMarketingPanel"><div id="productMarketing"></div></div>
@@ -847,9 +847,16 @@
           ["次日留存", totals.day1Retention.rate === null ? "样本不足" : `${totals.day1Retention.rate}%`, `${totals.day1Retention.returned}/${totals.day1Retention.eligible}`, "只含从注册当日开始有完整会话记录且已满一天的用户", "留存率", "返回/样本"],
           ["7 日留存", totals.day7Retention.rate === null ? "样本不足" : `${totals.day7Retention.rate}%`, `${totals.day7Retention.returned}/${totals.day7Retention.eligible}`, "只含从注册当日开始有完整会话记录且已满七天的用户", "留存率", "返回/样本"]
         ].map(item => metricCard(...item)).join("");
-        document.getElementById("productDaily").innerHTML = table(
+        const classicRange = document.getElementById("classicDailyRange");
+        const renderDaily = () => {
+          const offset = classicRange.value === "-1" ? 86400000 : 0;
+          const date = new Date(data.generatedAt - offset).toISOString().slice(0, 10);
+          document.getElementById("productDaily").innerHTML = table(
           ["日期 UTC", "注册", "活跃", "付费用户", "实付订单", "退款", "扣款金额", "退款金额"],
-          data.daily.slice().reverse().map(row => `<tr><td>${escapeHTML(row.date)}</td><td>${row.registrations}</td><td>${row.activeUsers}</td><td>${row.payingUsers}</td><td>${row.paidOrders}</td><td>${row.refunds}</td><td>${currencyTotals(row.grossMilliunitsByCurrency)}</td><td>${currencyTotals(row.refundedMilliunitsByCurrency)}</td></tr>`));
+          data.daily.filter(row => classicRange.value === "all" || row.date === date).reverse().map(row => `<tr><td>${escapeHTML(row.date)}</td><td>${row.registrations}</td><td>${row.activeUsers}</td><td>${row.payingUsers}</td><td>${row.paidOrders}</td><td>${row.refunds}</td><td>${currencyTotals(row.grossMilliunitsByCurrency)}</td><td>${currencyTotals(row.refundedMilliunitsByCurrency)}</td></tr>`));
+        };
+        classicRange.onchange = renderDaily;
+        renderDaily();
         renderProductUsers(data.users);
         document.getElementById("productOrders").innerHTML = table(
           ["交易", "用户", "商品", "金额", "状态", "Singular 扣款", "Singular 退款", "购买时间", "退款时间"],
