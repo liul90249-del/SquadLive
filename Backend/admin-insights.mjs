@@ -185,7 +185,7 @@ function showDetail(kind,id) {
       ['活跃采集开始 UTC',u.activityTrackedFrom?time(u.activityTrackedFrom):'历史版本未记录'],
       ['国家 / 地区',countryName(u)],['省份 / 城市',[u.networkRegion,u.networkCity].filter(Boolean).join(' / ')||'未解析'],
       ['首次 IP',u.firstIPAddress||'未采集'],['最近 IP',u.lastIPAddress||'未采集'],
-      ['同出口 IP 用户数',u.sameIPUserCount||0],['IP 解析状态',networkStatus(u)],
+      ['同出口 IP 用户数',u.sameIPUserCount||0],['IP 解析状态',networkStatus(u)],['解析失败原因',u.networkLookupStatus==='failed'?(u.networkLookupError||'未记录错误详情'):'无'],
       ['IP 更新时间 UTC',u.networkUpdatedAt?time(u.networkUpdatedAt):'未解析'],
       ['网络组织',u.networkOrganization||'未解析'],['运营商',u.networkISP||'未解析'],['ASN',u.networkASN||'未解析'],
       ['时区',u.networkTimezone||'未解析'],['净实付订单数',u.paidOrders],['邀请码',u.bindingCode||'无']
@@ -219,7 +219,9 @@ async function refreshUserNetwork(button) {
     const response = await fetch(`/v1/admin/products/${encodeURIComponent(product)}/users/${encodeURIComponent(id)}/network`, {
       method:'POST', headers:{authorization:`Bearer ${localStorage.getItem('squadlive.adminToken') || ''}`}
     });
-    const result = await response.json();
+    let result;
+    try { result = await response.json(); }
+    catch { throw new Error(`服务暂时不可用（HTTP ${response.status}），请稍后重试`); }
     if (!response.ok) throw new Error(result.error || '解析失败');
     if (picker.value !== product || !dialog.open) return;
     Object.assign(data.users.find(user=>user.id===id), result.user);

@@ -892,7 +892,7 @@
         headers: { authorization: `Bearer ${state.token}` }
       });
       if (!response.ok) {
-        let message = response.statusText;
+        let message = response.statusText || `请求失败（HTTP ${response.status}），请稍后重试`;
         try { message = (await response.json()).error || message; } catch {}
         throw new Error(message);
       }
@@ -909,7 +909,7 @@
         body: JSON.stringify(body)
       });
       if (!response.ok) {
-        let message = response.statusText;
+        let message = response.statusText || `请求失败（HTTP ${response.status}），请稍后重试`;
         try { message = (await response.json()).error || message; } catch {}
         throw new Error(message);
       }
