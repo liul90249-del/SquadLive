@@ -63,7 +63,7 @@ function todaySnapshot(){
   return `<section class="insight-surface"><header><div><h2>今日经营 · ${today.date} UTC</h2><p>按今天发生的行为与扣款统计，包含新老用户；下面的增长日报按首次获客批次统计。</p></div><button data-action="today-overview">查看今日明细</button></header><div class="today-business">${[['今日新增',today.registrations,'registrations'],['今日活跃',today.activeUsers,'activeUsers'],['今日实付订单',today.paidOrders,'paidOrders'],['今日退款',today.refunds,'refunds']].map(([label,value,key])=>`<button data-action="today-metric" data-key="${key}"><span>${label}</span><strong>${num(value)}</strong></button>`).join('')}</div></section>`;
 }
 function periodControl() {
-  return `<form id="insightPeriod" class="insight-filters"><div class="range-presets">${btn('今日 · 实时','today',`aria-pressed="${liveToday}"`)}${[7,14,30,90].filter(n=>n<=(data.historyDays||30)).map(n=>btn(`近 ${n} 天`,'range',`data-days="${n}" aria-pressed="${!liveToday&&start===shiftDay(end,1-n)}"`)).join('')}</div><label>开始日期<input name="start" type="date" value="${start}" min="${data.daily[0]?.date || ''}" max="${end}" required></label><label>结束日期<input name="end" type="date" value="${end}" min="${start}" max="${data.daily.at(-1)?.date || ''}" required></label><button type="submit" class="primary">应用日期</button><label>历史查询范围<select id="historyRange">${[30,90,180,365,730].map(n=>option(String(n),`最近 ${n} 天`,String(data.historyDays||30))).join('')}</select></label><span>${liveToday?`当天累计 · 每 30 秒自动刷新<br>更新于 ${receivedAt?new Date(receivedAt).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—'}（北京时间）<br>统计日 UTC · 北京时间 08:00 换日；上报可能延迟`:'UTC · 最后一天可能尚未结束'}<br>已保存记录始于 ${esc(data.availableFrom||'未知')}；接入前数据不补造</span></form>`;
+  return `<form id="insightPeriod" class="insight-filters"><div class="range-presets">${btn('今日 · 实时','today',`aria-pressed="${liveToday}"`)}${btn('昨天','range',`data-days="-1" aria-pressed="${!liveToday&&rangeDays===-1}"`)}${[7,14,30,90].filter(n=>n<=(data.historyDays||30)).map(n=>btn(`近 ${n} 天`,'range',`data-days="${n}" aria-pressed="${!liveToday&&start===shiftDay(end,1-n)}"`)).join('')}</div><label>开始日期<input name="start" type="date" value="${start}" min="${data.daily[0]?.date || ''}" max="${end}" required></label><label>结束日期<input name="end" type="date" value="${end}" min="${start}" max="${data.daily.at(-1)?.date || ''}" required></label><button type="submit" class="primary">应用日期</button><label>历史查询范围<select id="historyRange">${[30,90,180,365,730].map(n=>option(String(n),`最近 ${n} 天`,String(data.historyDays||30))).join('')}</select></label><span>${liveToday?`当天累计 · 每 30 秒自动刷新<br>更新于 ${receivedAt?new Date(receivedAt).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—'}（北京时间）<br>统计日 UTC · 北京时间 08:00 换日；上报可能延迟`:'UTC · 最后一天可能尚未结束'}<br>已保存记录始于 ${esc(data.availableFrom||'未知')}；接入前数据不补造</span></form>`;
 }
 function chart(rows,key) {
   if(!rows.length) return '<div class="insight-empty">此区间无趋势记录</div>';
@@ -148,7 +148,7 @@ function receive(next) {
   if(lastProduct!==next.product) {data=null;view=viewFromHash();lastProduct=next.product;exactAccount='';exactSku='';query='';status='all';page=1;listStart='';listEnd='';orderCurrency='';selectedDay='';start='';end='';liveToday=false;receivedAt=null;rangeDays=7;
     const prefs=readPreference(next.product,'view');
     for(const [key,setter] of Object.entries({metric:v=>metric=v,currency:v=>currency=v,sort:v=>sort=v,status:v=>status=v,listStart:v=>listStart=v,listEnd:v=>listEnd=v,orderCurrency:v=>orderCurrency=v,dateField:v=>dateField=v,userMode:v=>userMode=v}))if(typeof prefs[key]==='string'&&prefs[key].length<=40)setter(prefs[key]);
-    if(prefs.rangeDays===null||[7,14,30,90,180,365,730].includes(prefs.rangeDays))rangeDays=prefs.rangeDays;
+    if(prefs.rangeDays===null||[-1,7,14,30,90,180,365,730].includes(prefs.rangeDays))rangeDays=prefs.rangeDays;
     if(!Object.keys(metrics).includes(metric))metric='registrations';
     if(!['newest','active','orders'].includes(sort))sort='newest';
     if(!['all','paid','unpaid','charged','refund','review'].includes(status))status='all';
@@ -162,7 +162,7 @@ function receive(next) {
   if(next.status==='ready') {
     data=next.data;receivedAt=Date.now();
     const latest=data.daily.at(-1)?.date;
-    if(liveToday) {start=latest;end=latest;}else if(rangeDays){end=latest;start=shiftDay(latest,1-Math.min(rangeDays,data.daily.length));}
+    if(liveToday) {start=latest;end=latest;}else if(rangeDays===-1){start=end=shiftDay(latest,-1);}else if(rangeDays){end=latest;start=shiftDay(latest,1-Math.min(rangeDays,data.daily.length));}
     if(!start || end>latest || start<data.daily[0]?.date) {end=latest;start=shiftDay(end,1-Math.min(7,data.daily.length));}
     if(!currencies().includes(currency)) currency=currencies()[0]||'';
   }
@@ -239,7 +239,7 @@ function action(event) {
   if(a==='today-metric'){liveToday=true;start=end=data.daily.at(-1).date;b.dataset.action='metric';return action(event);}
   if(a==='subscription-status'){setView('orders');return;}
   if(a==='today') {liveToday=true;start=end=data.daily.at(-1).date;selectedDay='';render();$('refresh').click();return;}
-  if(a==='range') {liveToday=false;rangeDays=Number(b.dataset.days);end=data.daily.at(-1).date;start=shiftDay(end,1-Number(b.dataset.days));selectedDay='';}
+  if(a==='range') {liveToday=false;rangeDays=Number(b.dataset.days);end=data.daily.at(-1).date;if(rangeDays===-1)start=end=shiftDay(end,-1);else start=shiftDay(end,1-rangeDays);selectedDay='';}
   if(a==='day'){selectDay(b.dataset.date);return;}
   if(a==='metric') {
     const key=b.dataset.key;

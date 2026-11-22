@@ -6,7 +6,7 @@ const EVENTS = [
   'sb_restart', 'sb_shaker_offered', 'sb_shaker_used', 'sb_shaker_settled',
 ];
 
-export const SANDBUS_REPORT_DAYS = [7, 30, 90];
+export const SANDBUS_REPORT_DAYS = [-1, 1, 7, 30, 90];
 
 function count(value) {
   const number = Number(value);
@@ -82,7 +82,9 @@ export function createSandBusAnalytics(options) {
     if (!SANDBUS_REPORT_DAYS.includes(days)) throw new RangeError('Invalid date range');
     if (!configured) return { status: 'not_configured', days };
     const requestedAt = now();
-    const dateRanges = [{ startDate: `${days - 1}daysAgo`, endDate: 'today' }];
+    const dateRanges = days === -1
+      ? [{ startDate: 'yesterday', endDate: 'yesterday' }]
+      : [{ startDate: days === 1 ? 'today' : `${days - 1}daysAgo`, endDate: 'today' }];
     const groups = ['platform', 'appVersion', 'customEvent:sb_level'].map(name => ({ name }));
     const { reports } = await query('batchRunReports', { requests: [
         { dateRanges, metrics: [{ name: 'activeUsers' }, { name: 'newUsers' }] },

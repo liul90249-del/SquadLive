@@ -49,17 +49,17 @@ export function mergeCatSwipeEvents(account, events, now) {
 }
 
 export function catSwipeActivity(accounts, days, now) {
-  const start = new Date(now).toISOString().slice(0, 10);
-  const firstDay = new Date(Date.parse(start) - (days - 1) * DAY).toISOString().slice(0, 10);
+  const start = new Date(now - (days === -1 ? DAY : 0)).toISOString().slice(0, 10);
+  const firstDay = new Date(Date.parse(start) - (Math.max(days, 1) - 1) * DAY).toISOString().slice(0, 10);
   const counts = {};
   const recent = [];
   for (const account of accounts) {
     for (const [date, events] of Object.entries(account.gameplayDaily || {})) {
-      if (date < firstDay) continue;
+      if (date < firstDay || date > start) continue;
       for (const [name, count] of Object.entries(events)) counts[name] = (counts[name] || 0) + count;
     }
     for (const event of account.gameplayRecent || []) {
-      if (event.occurredAt >= Date.parse(firstDay)) recent.push({ ...event, userId: account.id });
+      if (event.occurredAt >= Date.parse(firstDay) && event.occurredAt < Date.parse(start) + DAY) recent.push({ ...event, userId: account.id });
     }
   }
   return { counts, recent: recent.sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 200) };

@@ -2370,7 +2370,7 @@ async function route(req, res) {
     if (req.method === 'GET' && url.pathname === '/v1/admin/products/catswipe/analytics') {
       const days = Number(url.searchParams.get('days') || 7);
       if (!CATSWIPE_REPORT_DAYS.includes(days)) {
-        return jsonResponse(res, 400, { error: '请选择最近 7、30 或 90 天' });
+        return jsonResponse(res, 400, { error: '请选择今天、昨天、最近 7、30 或 90 天' });
       }
       try {
         return jsonResponse(res, 200, await catSwipeAnalytics(days));
@@ -2390,7 +2390,7 @@ async function route(req, res) {
     if (req.method === 'GET' && url.pathname === '/v1/admin/products/sandbus/analytics') {
       const days = Number(url.searchParams.get('days') || 7);
       if (!SANDBUS_REPORT_DAYS.includes(days)) {
-        return jsonResponse(res, 400, { error: '请选择最近 7、30 或 90 天' });
+        return jsonResponse(res, 400, { error: '请选择今天、昨天、最近 7、30 或 90 天' });
       }
       try {
         return jsonResponse(res, 200, await sandBusAnalytics(days));
@@ -2454,7 +2454,7 @@ async function route(req, res) {
       const operations=productOperations(store,product,Date.now(),verifiedReceipts,historyDays);
       const lifecycle=product==='cleaner'?await readSubscriptionLifecycle(dataDir,product):null;
       return jsonResponse(res, 200, { ...operations,
-        gameplay:product==='catswipe'?catSwipeActivity(Object.values(store.sharedPartnerReferrals?.catswipe?.accounts||{}),([7,30,90].includes(Number(url.searchParams.get('gameplayDays')))?Number(url.searchParams.get('gameplayDays')):90),Date.now()):null,
+        gameplay:product==='catswipe'?catSwipeActivity(Object.values(store.sharedPartnerReferrals?.catswipe?.accounts||{}),(CATSWIPE_REPORT_DAYS.includes(Number(url.searchParams.get('gameplayDays')))?Number(url.searchParams.get('gameplayDays')):90),Date.now()):null,
         marketing:{...marketingDataset(store,product,operations),webReturns:product==='cleaner'?webReturnDataset(store):null,webFunnel:product==='cleaner'?webFunnelDataset(store):null,meta:product==='cleaner'?await metaSync.status():null,metaReports:product==='cleaner'?metaReportDataset(store):null,applovin:product==='cleaner'?await applovinSync.status():null},
         subscriptions:lifecycle?subscriptionAnalytics(operations,lifecycle,store.sharedPartnerReferrals?.[product]?.accountTokens):null,
         connected: Boolean(inboxProducts[product]),

@@ -32,7 +32,7 @@ test('invalid events, missing consent, and write failure never add users or even
   await assert.rejects(collector.collect(payload([{ ...event('a'), at: now - 8 * 86400000 }])), /time/);
   await assert.rejects(collector.collect(payload([event('a')])), /disk failed/);
   assert.equal(root.sandBusPlayers, undefined);
-  assert.throws(() => sandBusPlayersReport(root, { days: 1 }), /range/);
+  assert.throws(() => sandBusPlayersReport(root, { days: 2 }), /range/);
 });
 
 test('report and details use chosen time range without inventing old users from aggregate metrics', async () => {

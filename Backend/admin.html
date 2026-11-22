@@ -512,7 +512,7 @@
         <div class="cards" id="overviewCards"></div>
         <div class="cards" id="systemCards"></div>
         <div class="panel">
-          <div class="panel-head"><h2>最近 30 天使用情况</h2><span class="pill active">每日更新</span></div>
+          <div class="panel-head"><h2>每日使用情况</h2><label>统计范围 <select id="squadUsageRange"><option value="30">最近 30 天</option><option value="1">今天</option><option value="-1">昨天</option></select></label><span class="pill active">每日更新</span></div>
           <div id="dailyUsageTable"></div>
         </div>
         <div class="panel">
@@ -607,6 +607,8 @@
             <h2>玩家与关卡</h2>
             <label for="sandbusDays">统计范围
               <select id="sandbusDays">
+                <option value="1">今天</option>
+                <option value="-1">昨天</option>
                 <option value="7">最近 7 天</option>
                 <option value="30" selected>最近 30 天</option>
                 <option value="90">最近 90 天</option>
@@ -650,7 +652,9 @@
             <h2>玩家与互动</h2>
             <label for="catswipeDays">统计范围
               <select id="catswipeDays">
-                <option value="7">最近 7 天</option>
+                <option value="1">今天</option>
+                <option value="-1">昨天</option>
+                <option value="7" selected>最近 7 天</option>
                 <option value="30">最近 30 天</option>
                 <option value="90">最近 90 天</option>
               </select>
@@ -999,9 +1003,12 @@
         <div class="alert ${warning.level}"><strong>${escapeHTML(warning.title)}</strong><span>${escapeHTML(warning.message)}</span></div>
       `).join("");
 
+      const usageRange = document.getElementById("squadUsageRange");
+      usageRange.onchange = () => renderOverview(overview);
+      const usageDay = new Date(Date.parse(reportDate) - (usageRange.value === '-1' ? 86400000 : 0)).toISOString().slice(0, 10);
       document.getElementById("dailyUsageTable").innerHTML = table(
         ["日期", "新增用户", "活跃用户", "总请求", "AI 请求", "AI 成功率", "平均延迟", "超时", "不可用", "峰值并发", "队列拒绝"],
-        monitoring.dailyUsage.map((item) => {
+        monitoring.dailyUsage.filter(item => usageRange.value === "30" || item.date === usageDay).map((item) => {
           const rate = item.aiRequests ? `${((item.aiSuccesses / item.aiRequests) * 100).toFixed(1)}%` : "-";
           return `<tr>
             <td>${item.date}</td>

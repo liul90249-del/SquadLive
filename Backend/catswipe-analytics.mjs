@@ -1,6 +1,6 @@
 import { createAnalyticsDataClient } from './analytics-data.mjs';
 
-export const CATSWIPE_REPORT_DAYS = [7, 30, 90];
+export const CATSWIPE_REPORT_DAYS = [-1, 1, 7, 30, 90];
 
 function readCounts(row, metrics) {
   const values = row?.metricValues;
@@ -18,7 +18,9 @@ export function createCatSwipeAnalytics(options) {
     if (!CATSWIPE_REPORT_DAYS.includes(days)) throw new RangeError('Invalid date range');
     if (!configured) return { status: 'not_configured' };
 
-    const dateRanges = [{ startDate: `${days - 1}daysAgo`, endDate: 'today' }];
+    const dateRanges = days === -1
+      ? [{ startDate: 'yesterday', endDate: 'yesterday' }]
+      : [{ startDate: days === 1 ? 'today' : `${days - 1}daysAgo`, endDate: 'today' }];
     const audienceMetrics = ['activeUsers', 'newUsers', 'sessions'];
     const eventMetrics = ['eventCount', 'totalUsers'];
     const metrics = names => names.map(name => ({ name }));

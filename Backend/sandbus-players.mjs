@@ -23,8 +23,11 @@ function validate(body, now) {
 }
 
 export function sandBusPlayersReport(root, { days = 30, search = '', user = '', now = Date.now() } = {}) {
-  if (![7, 30, 90].includes(days)) throw fail('Invalid date range');
-  const cutoff = now - days * DAY;
+  if (![-1, 1, 7, 30, 90].includes(days)) throw fail('Invalid date range');
+  const midnight = Date.parse(new Date(now + 8 * 3600000).toISOString().slice(0, 10)) - 8 * 3600000;
+  const cutoff = days === -1 ? midnight - DAY : days === 1 ? midnight : now - days * DAY;
+  const end = days === -1 ? midnight : Infinity;
+  const inRange = timestamp => timestamp >= cutoff && timestamp < end;
   const accounts = Object.values(root.sandBusPlayers?.accounts || {});
   const query = String(search).toLowerCase().slice(0, 200);
   const users = accounts.filter(account => !query || [account.id, account.lastIPAddress, account.networkCountry,
@@ -36,14 +39,14 @@ export function sandBusPlayersReport(root, { days = 30, search = '', user = '', 
       organization: account.networkOrganization || account.networkISP || null, asn: account.networkASN || null,
       networkStatus: account.networkLookupStatus || 'pending', ipHistory: account.ipHistory || [],
       sharedIPUsers: accounts.filter(other => account.lastIPAddress && other.lastIPAddress === account.lastIPAddress).length,
-      events: (account.events || []).filter(event => event.at >= cutoff),
+      events: (account.events || []).filter(event => inRange(event.at)),
     })).sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
   const totals = {};
   for (const account of accounts) for (const event of account.events || []) {
-    if (event.at >= cutoff) totals[event.name] = (totals[event.name] || 0) + 1;
+    if (inRange(event.at)) totals[event.name] = (totals[event.name] || 0) + 1;
   }
   const countries = new Map();
-  for (const account of accounts.filter(a => Date.parse(a.lastSeenAt) >= cutoff)) {
+  for (const account of accounts.filter(a => inRange(Date.parse(a.lastSeenAt)))) {
     const label = account.networkCountry || account.networkCountryCode || '待解析';
     countries.set(label, (countries.get(label) || 0) + 1);
   }
