@@ -62,6 +62,8 @@
     catswipe: '/assets/products/catswipe.png',
     sandbus: '/assets/products/sandbus.png',
   };
+  const sandBusUsersPanel = document.getElementById('sandbusUsers')?.closest('.panel');
+  if (sandBusUsersPanel) sandBusUsersPanel.id ||= 'sandbusUsersPanel';
   const brandLogo = side.querySelector('.brand img');
   const favicon = document.querySelector('link[rel="icon"]');
   const updateNavigation = () => {
@@ -71,16 +73,19 @@
     brandLogo.alt = `${productName} 图标`;
     favicon.href = logo;
     document.title = `${productName} · 管理后台`;
-    nav.hidden = ['squadlive', 'sandbus'].includes(picker.value);
+    const isSandBus = picker.value === 'sandbus';
+    nav.hidden = picker.value === 'squadlive' || (isSandBus && !sandBusUsersPanel);
     const navigation = picker.value === 'catswipe'
       ? [['catswipeCards', '核心数据', '◫'], ['catswipeEventsPanel', '事件统计', '↗'],
          ['catswipeUsersPanel', '用户列表', '◎'], ['catswipeRegionsPanel', '地区与设备', '◇'],
          ['catswipeIPPanel', 'IP 分析', '◈']]
-      : sections.map(([id, label, icon]) => [`${id}Panel`, label, icon]);
+      : isSandBus
+        ? (sandBusUsersPanel ? [[sandBusUsersPanel.id, '用户列表', '◎']] : [])
+        : sections.map(([id, label, icon]) => [`${id}Panel`, label, icon]);
     nav.innerHTML = navigation.map(([id, label, icon]) =>
       `<a href="#${id}"><span aria-hidden="true">${icon}</span>${label}</a>`).join('');
     nav.querySelectorAll('a').forEach((link, index) => {
-      if (index === 0) link.setAttribute('aria-current', 'location');
+      if (isSandBus ? link.hash === location.hash : index === 0) link.setAttribute('aria-current', 'location');
       else link.removeAttribute('aria-current');
     });
   };
@@ -89,7 +94,7 @@
     if (!link) return;
     nav.querySelectorAll('a').forEach(item => item.removeAttribute('aria-current'));
     link.setAttribute('aria-current', 'location');
-    if (picker.value === 'catswipe') {
+    if (['catswipe', 'sandbus'].includes(picker.value)) {
       event.preventDefault();
       const target = document.getElementById(link.hash.slice(1));
       if (target) target.scrollIntoView({block:'start', behavior:'auto'});
@@ -107,11 +112,11 @@
     }
   });
   picker.addEventListener('change', () => {
-    updateNavigation();
     const url = new URL(location.href);
     url.searchParams.set('product', picker.value);
     url.hash = '';
     history.replaceState(null, '', url);
+    updateNavigation();
   });
   updateNavigation();
 
