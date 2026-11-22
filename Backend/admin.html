@@ -630,7 +630,7 @@
           <div class="panel-head"><h2>用户列表与 IP 分析</h2><button id="sandbusPlayersRefresh" type="button">刷新用户</button></div>
           <p class="sub">新版开启 Gameplay Analytics 后记录独立安装用户、事件和请求 IP。旧版 Firebase 汇总中的玩家无法回填为用户明细。用户记录与 Firebase 统计单独显示。</p>
           <label for="sandbusUserSearch">搜索用户<input id="sandbusUserSearch" type="search" placeholder="用户 ID、IP、国家、城市或平台"></label>
-          <p id="sandbusUserStatus" class="sub" role="status"></p>
+          <p id="sandbusUserStatus" class="sub" role="status"></p><h3>新版客户端事件统计</h3><div id="sandbusPlayerEventTotals" class="table-scroll"></div>
           <div id="sandbusCountries" class="table-scroll"></div>
           <div id="sandbusUsers" class="table-scroll" tabindex="0" role="region" aria-label="Sand Bus 用户列表"></div>
           <div id="sandbusUserDetail"></div>
@@ -1359,7 +1359,9 @@
       try {
         const report = await api('/v1/admin/products/sandbus/players?' + params);
         if (state.product !== 'sandbus' || version !== sandBusUsersVersion) return;
-        status.textContent = `已记录 ${report.total} 个安装用户 · 匹配 ${report.matched} 个 · 最多显示 500 个 · 事件保留最近 90 天`;
+        status.textContent = `已记录 ${report.total} 个安装用户 · 匹配 ${report.matched} 个 · 最多显示 500 个 · 事件展示最近 90 天`;
+        document.getElementById('sandbusPlayerEventTotals').innerHTML = table(['事件', '所选时段触发次数'],
+          report.events.map(item => `<tr><td>${escapeHTML(sandBusEventLabels[item.name] || item.name)}</td><td>${item.count}</td></tr>`), '暂无新版事件。');
         document.getElementById('sandbusCountries').innerHTML = table(['IP 解析国家 / 地区', '最近活跃安装用户'],
           report.countries.map(row => `<tr><td>${escapeHTML(row.country)}</td><td>${row.count}</td></tr>`),'暂无 IP 地区数据。');
         document.getElementById('sandbusUsers').innerHTML = table(
