@@ -27,6 +27,8 @@ export async function readVerifiedProductReceipts(directory, product) {
 export function productOperations(store, product, now = Date.now(), verifiedReceipts = null, historyDays = 30) {
   const state = store.sharedPartnerReferrals?.[product] || {};
   const accounts = Object.values(state.accounts || {});
+  const ipCounts = new Map();
+  for (const account of accounts) if (account.lastIPAddress) ipCounts.set(account.lastIPAddress, (ipCounts.get(account.lastIPAddress) || 0) + 1);
   const sharedReceipts = Object.values(state.receipts || {});
   const verifiedKeys = new Set((verifiedReceipts || []).map(receipt => `${receipt.environment}:${receipt.transaction_id}`));
   const receipts = verifiedReceipts === null ? sharedReceipts : [
@@ -174,6 +176,18 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
       lastIPAddress: account.lastIPAddress || null,
       countryCode: account.networkCountryCode || null,
       country: account.networkCountry || null,
+      displayName: account.displayName || null,
+      networkRegion: account.networkRegion || null,
+      networkCity: account.networkCity || null,
+      networkTimezone: account.networkTimezone || null,
+      networkASN: account.networkASN || null,
+      networkISP: account.networkISP || null,
+      networkLookupStatus: account.networkLookupStatus || (account.lastIPAddress ? 'not_started' : 'not_recorded'),
+      networkLookupError: account.networkLookupError || null,
+      networkUpdatedAt: account.networkUpdatedAt || null,
+      ipHistory: account.ipHistory || [],
+      sameIPUserCount: account.lastIPAddress ? ipCounts.get(account.lastIPAddress) || 0 : 0,
+      activityTrackedFrom: iso(account.activityTrackedFrom),
       networkOrganization: account.networkOrganization || null,
       possibleAppleNetwork: Boolean(account.possibleAppleNetwork),
       paidOrders: paidOrderCounts.get(account.id) || 0,

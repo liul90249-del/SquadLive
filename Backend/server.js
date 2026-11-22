@@ -40,6 +40,7 @@ const sandBusAnalytics = createSandBusAnalytics({
 });
 let sharedProductReferrals;
 let paywallWriteQueue=Promise.resolve();
+let rewardReviewQueue = Promise.resolve();
 const sharedInbox=createTransactionInbox({directory:process.env.DATA_DIR,certDirectory:join(__dirname,"certs"),
  onVerified:(product,transaction,proof,options)=>sharedProductReferrals?.recordVerified(product,transaction,proof,options)});
 const homePagePath = join(__dirname, "index.html");
@@ -487,8 +488,8 @@ function appleNetworkAssessment(network = {}) {
 function applyNetworkDetails(user, address, details) {
   if (!user || user.lastIPAddress !== address) return;
   const assessment = appleNetworkAssessment(details);
-  user.networkCountryCode = details.countryCode || user.networkCountryCode || "";
-  user.networkCountry = details.country || user.networkCountry || "";
+  user.networkCountryCode = details.countryCode || "";
+  user.networkCountry = details.country || "";
   user.networkRegion = details.region || "";
   user.networkCity = details.city || "";
   user.networkTimezone = details.timezone || "";
@@ -498,6 +499,7 @@ function applyNetworkDetails(user, address, details) {
   user.networkDomain = details.domain || "";
   user.possibleAppleNetwork = assessment.possibleAppleNetwork;
   user.appleNetworkNote = assessment.appleNetworkNote;
+  user.networkLookupError = "";
   user.networkLookupStatus = "complete";
   user.networkUpdatedAt = new Date().toISOString();
   const historyItem = user.ipHistory?.find((item) => item.ip === address);
@@ -540,7 +542,13 @@ async function lookupIPAddress(address) {
 }
 
 function scheduleIPAddressLookup(store, user, address) {
-  if (!ipGeolocationEnabled || !address || isPrivateIPAddress(address)) return;
+  if (!address) return;
+  if (!ipGeolocationEnabled || isPrivateIPAddress(address)) {
+    user.networkLookupStatus = ipGeolocationEnabled ? 'private_ip' : 'disabled';
+    return;
+  }
+  if (user.networkLookupStatus === 'failed' && user.networkUpdatedAt
+      && Date.now() - new Date(user.networkUpdatedAt).getTime() < 60 * 60 * 1000) return;
   if (user.networkLookupStatus === "complete"
       && user.networkUpdatedAt
       && Date.now() - new Date(user.networkUpdatedAt).getTime() < 7 * 24 * 60 * 60 * 1000) return;
@@ -548,7 +556,13 @@ function scheduleIPAddressLookup(store, user, address) {
     pendingIPLookups.get(address).then((details) => {
       applyNetworkDetails(user, address, details);
       return saveStore(store);
-    }).catch(() => {});
+    }).catch((error) => {
+      if (user.lastIPAddress !== address) return;
+      user.networkLookupStatus = 'failed';
+      user.networkLookupError = String(error.message || 'Lookup failed').slice(0,160);
+      user.networkUpdatedAt = new Date().toISOString();
+      saveStore(store).catch(() => {});
+    });
     return;
   }
   user.networkLookupStatus = "pending";
@@ -572,6 +586,12 @@ function recordUserNetwork(store, user, req) {
   const address = clientIPAddress(req);
   if (!address) return;
   const now = new Date().toISOString();
+  if (user.lastIPAddress !== address) {
+    for (const field of ['networkCountryCode','networkCountry','networkRegion','networkCity','networkTimezone','networkASN','networkOrganization','networkISP','networkDomain','networkLookupError']) user[field] = '';
+    user.possibleAppleNetwork = false;
+    user.networkLookupStatus = 'pending';
+    user.networkUpdatedAt = null;
+  }
   user.firstIPAddress ||= address;
   user.lastIPAddress = address;
   user.lastIPSeenAt = now;
@@ -587,6 +607,13 @@ function recordUserNetwork(store, user, req) {
     item.lastSeenAt = now;
   }
   scheduleIPAddressLookup(store, user, address);
+}
+
+function backfillUserNetworks(store, users) {
+  for (const user of users) {
+    if (pendingIPLookups.size >= 4) break;
+    scheduleIPAddressLookup(store, user, user.lastIPAddress);
+  }
 }
 
 function getOrCreateUser(store, deviceId = "anonymous", req = null) {
@@ -2263,30 +2290,55 @@ async function route(req, res) {
     const body = await readJSON(req);
     const submission = store.rewardSubmissions[reviewMatch[1]];
     if (!submission) return jsonResponse(res, 404, { error: "Submission not found" });
-    const user = store.users[submission.userId];
-    const bonus = Math.max(0, Math.min(10000, Number(body.bonusCoins || 0)));
-    const shouldGrantReviewBonus = body.status === "approved"
-      && submission.status !== "approved"
-      && !submission.reviewRewardGrantedAt;
-    submission.status = body.status === "approved" ? "approved" : "rejected";
-    if (!submission.reviewRewardGrantedAt) {
-      submission.reviewBonusCoins = submission.status === "approved" ? bonus : 0;
+    if (!["approved", "rejected"].includes(body.status)) {
+      return jsonResponse(res, 400, { error: "请选择通过或拒绝" });
     }
-    submission.reviewedAt = new Date().toISOString();
-    if (user && shouldGrantReviewBonus && bonus > 0) {
-      user.coins += bonus;
-      submission.reviewRewardGrantedAt = new Date().toISOString();
-      recordCoinTransaction(store, {
-        userId: user.id,
-        type: "share_review_bonus",
-        coins: bonus,
-        amountCents: 0,
-        source: "reward_review",
-        note: submission.id
-      });
+    const bonus = Number(body.bonusCoins ?? 0);
+    if (!Number.isSafeInteger(bonus) || bonus < 0 || bonus > 10000
+        || (body.status === "rejected" && bonus !== 0)) {
+      return jsonResponse(res, 400, { error: "额外奖励必须是 0 至 10000 的整数，拒绝时为 0" });
     }
-    await saveStore(store);
-    return jsonResponse(res, 200, { user, submission });
+    const note = String(body.note || "").trim();
+    if (note.length > 1000) return jsonResponse(res, 400, { error: "审核备注最多 1000 字" });
+    const review = rewardReviewQueue.then(async () => {
+      const user = store.users[submission.userId];
+      if (!user) return { status: 409, error: "用户记录不存在，无法审核" };
+      if (submission.status !== "pending") {
+        if (submission.status === body.status && Number(submission.reviewBonusCoins || 0) === bonus) {
+          return { status: 200, user: userPublic(user), submission, duplicate: true };
+        }
+        return { status: 409, error: "此申请已审核，请刷新查看结果" };
+      }
+      const before = { ...submission };
+      let transaction;
+      submission.status = body.status;
+      submission.reviewBonusCoins = bonus;
+      submission.reviewNote = note;
+      submission.reviewedAt = new Date().toISOString();
+      if (bonus > 0 && !submission.reviewRewardGrantedAt) {
+        user.coins += bonus;
+        submission.reviewRewardGrantedAt = submission.reviewedAt;
+        transaction = recordCoinTransaction(store, {
+          userId: user.id, type: "share_review_bonus", coins: bonus,
+          amountCents: 0, source: "reward_review", note: submission.id
+        });
+      }
+      try {
+        await saveStore(store);
+      } catch (error) {
+        for (const key of Object.keys(submission)) delete submission[key];
+        Object.assign(submission, before);
+        // Other wallet operations may have changed the balance while the save was pending.
+        if (transaction) user.coins -= bonus;
+        if (transaction) delete store.coinTransactions[transaction.id];
+        throw error;
+      }
+      return { status: 200, user: userPublic(user), submission, duplicate: false };
+    });
+    rewardReviewQueue = review.catch(() => {});
+    const result = await review;
+    const { status, ...payload } = result;
+    return jsonResponse(res, status, payload);
   }
 
   if (url.pathname.startsWith("/v1/admin/")) {
@@ -2330,6 +2382,31 @@ async function route(req, res) {
       }
       return jsonResponse(res,200,{...prepared,records:prepared.records.slice(0,5),saved:body.confirm===true});
     }
+    const networkRoute = /^\/v1\/admin\/products\/([a-z]+)\/users\/([^/]+)\/network$/.exec(url.pathname);
+    if (req.method === 'POST' && networkRoute) {
+      const [, product, id] = networkRoute;
+      const user = product === 'squadlive' ? store.users[id] : store.sharedPartnerReferrals?.[product]?.accounts?.[id];
+      if (!user) return jsonResponse(res,404,{error:'用户不存在'});
+      if (!user.lastIPAddress) return jsonResponse(res,409,{error:'该用户尚未记录 IP，需要客户端再次连接'});
+      if (!ipGeolocationEnabled) return jsonResponse(res,503,{error:'IP 地区解析未启用'});
+      if (isPrivateIPAddress(user.lastIPAddress)) return jsonResponse(res,400,{error:'本地或内网 IP 无法解析国家地区'});
+      const address = user.lastIPAddress;
+      user.networkLookupStatus = 'pending';
+      try {
+        const details = await lookupIPAddress(address);
+        applyNetworkDetails(user,address,details);
+        await saveStore(store);
+        return jsonResponse(res,200,{updated:user.lastIPAddress===address,
+          user:product==='squadlive'?adminUserPublic(user):productOperations(store,product).users.find(item=>item.id===id)});
+      } catch (error) {
+        if (user.lastIPAddress === address) {
+          user.networkLookupStatus='failed'; user.networkLookupError=String(error.message).slice(0,160);
+          user.networkUpdatedAt=new Date().toISOString(); await saveStore(store);
+        }
+        return jsonResponse(res,502,{error:'IP 地区解析暂时失败，请稍后重试'});
+      }
+    }
+
     const productOperationsRoute = /^\/v1\/admin\/products\/([a-z]+)\/operations$/.exec(url.pathname);
     if (req.method === "GET" && productOperationsRoute) {
       const product = productOperationsRoute[1];
@@ -2338,6 +2415,7 @@ async function route(req, res) {
       const verifiedReceipts = await readVerifiedProductReceipts(dataDir, product);
       const historyDays=Number(url.searchParams.get('days')||90);
       if(![30,90,180,365,730].includes(historyDays))return jsonResponse(res,400,{error:'History days must be 30, 90, 180, 365 or 730'});
+      backfillUserNetworks(store, Object.values(store.sharedPartnerReferrals?.[product]?.accounts || {}));
       const operations=productOperations(store,product,Date.now(),verifiedReceipts,historyDays);
       const lifecycle=product==='cleaner'?await readSubscriptionLifecycle(dataDir,product):null;
       return jsonResponse(res, 200, { ...operations,
@@ -2376,6 +2454,7 @@ async function route(req, res) {
     }
 
     if (req.method === "GET" && url.pathname === "/v1/admin/users") {
+      backfillUserNetworks(store, Object.values(store.users));
       const query = (url.searchParams.get("query") || "").trim().toLowerCase();
       const users = Object.values(store.users)
         .map((user) => ({
@@ -2437,10 +2516,23 @@ async function route(req, res) {
       return jsonResponse(res, 200, { subscriptions });
     }
 
+    const rewardDetail = /^\/v1\/admin\/reward-submissions\/([^/]+)$/.exec(url.pathname);
+    if (req.method === "GET" && rewardDetail) {
+      const submission = store.rewardSubmissions[rewardDetail[1]];
+      if (!submission) return jsonResponse(res, 404, { error: "申请不存在" });
+      const user = store.users[submission.userId];
+      res.setHeader("cache-control", "no-store");
+      return jsonResponse(res, 200, { submission, user: user ? userPublic(user) : null });
+    }
+
     if (req.method === "GET" && url.pathname === "/v1/admin/reward-submissions") {
       const submissions = Object.values(store.rewardSubmissions)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      return jsonResponse(res, 200, { submissions });
+      const rows = url.searchParams.get("summary") === "1"
+        ? submissions.map(({ screenshotBase64, ...item }) => ({ ...item, hasScreenshot: Boolean(screenshotBase64) }))
+        : submissions;
+      res.setHeader("cache-control", "no-store");
+      return jsonResponse(res, 200, { submissions: rows });
     }
   }
 

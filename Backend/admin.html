@@ -424,6 +424,18 @@
   </style>
   <link rel="stylesheet" href="/admin-appearance.css">
   <script src="/admin-appearance.js" defer></script>
+  <style>
+    #rewardDialog { width:min(850px,94vw); max-height:90vh; box-sizing:border-box; overflow:auto; border:1px solid var(--line); border-radius:20px; padding:24px; color:var(--text); background:var(--panel); }
+    #rewardDialog::backdrop { background:#0009; }
+    #rewardDialog header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    #rewardDialog dl { display:grid; grid-template-columns:130px minmax(0,1fr); gap:10px; }
+    #rewardDialog dd { margin:0; overflow-wrap:anywhere; }
+    #rewardDialog img { display:block; max-width:100%; max-height:60vh; object-fit:contain; margin:16px auto; }
+    #rewardDialog textarea { box-sizing:border-box; width:100%; min-height:90px; font:inherit; padding:12px; }
+    #rewardDialog .reward-actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:18px; }
+    #rewardDialog input { max-width:160px; }
+    #rewardTable { overflow:auto; }
+  </style>
   <script type="module" src="/admin-insights.mjs"></script>
   <link rel="stylesheet" href="/admin-insights.css">
   <link rel="stylesheet" href="/admin-subscriptions.css">
@@ -524,7 +536,10 @@
 
       <section class="section" id="section-rewards">
         <div class="panel">
-          <div class="panel-head"><h2>分享奖励审核记录</h2></div>
+          <div class="panel-head"><h2>分享奖励审核记录</h2>
+            <label>审核状态 <select id="rewardStatus"><option value="pending">待审核</option><option value="all">全部</option><option value="approved">已通过</option><option value="rejected">已拒绝</option></select></label>
+          </div>
+          <p class="sub" id="rewardFeedback" role="status" style="padding:0 20px">每日首次提交的 100 金币已自动发放；审核可追加奖励。</p>
           <div id="rewardTable"></div>
         </div>
       </section>
@@ -594,7 +609,7 @@
         <div id="productPaywallPolicy" class="panel"></div>
         <div class="panel" id="productSubscriptionCatalogPanel" style="display:none"><div class="panel-head"><h2>Smart Cleaner 美国区周订阅</h2><span class="sub">目标：US$9.99/周，7 天免费试用</span></div><div id="productSubscriptionCatalog" class="sub"></div></div>
         <div class="panel"><div class="panel-head"><h2>每日注册、活跃与付费</h2></div><div id="productDaily"></div></div>
-        <div class="panel"><div class="panel-head"><h2>用户列表</h2><span class="sub">IP 与网络信息只作线索，不能确认苹果审核员身份</span></div><label>查找反馈用户 <input id="productUserLookup" type="search" placeholder="粘贴邮件中的 User ID 或 Device ID"></label><div id="productUsers"></div></div>
+        <div class="panel"><div class="panel-head"><h2>用户列表</h2><span class="sub">IP 与网络信息只作线索，不能确认苹果审核员身份</span></div><label>查找反馈用户 <input id="productUserLookup" type="search" placeholder="用户 ID、设备 ID、国家或 IP"></label><div id="productUsers"></div></div>
         <div class="panel"><div class="panel-head"><h2>订单与退款</h2></div><div id="productOrders"></div></div>
         <div class="panel" id="productMarketingPanel"><div id="productMarketing"></div></div>
         <div class="panel"><div class="panel-head"><h2>已观察到的商品价格</h2><span class="sub">来自苹果已验证订单；不是 App Store 当前定价</span></div><div id="productPrices"></div></div>
@@ -700,12 +715,22 @@
     }
 
     function renderProductUsers(users) {
-      const query = document.getElementById("productUserLookup").value.trim().toLowerCase();
-      const matches = users.filter(user => !query || [user.id, user.deviceId].some(id => String(id || "").toLowerCase().includes(query)));
-      document.getElementById("productUsers").innerHTML = `<p>匹配 ${matches.length} 个用户${matches.length > 500 ? "，仅显示前 500 个，请缩小查询范围" : ""}</p>` + table(
-        ["用户 ID", "设备 ID", "有过清理", "注册", "最后活跃", "IP", "国家/地区", "订单"],
-        matches.slice(0,500).map(user => `<tr><td>${escapeHTML(user.id)}</td><td>${escapeHTML(user.deviceId || "未记录")}</td><td>${user.hasCompletedCleanup===true?"是":user.hasCompletedCleanup===false?"尚无成功记录":"未采集"}</td><td>${time(user.createdAt)}</td><td>${time(user.lastSeenAt)}</td><td>${escapeHTML(user.lastIPAddress || "-")}</td><td>${escapeHTML(user.country || user.countryCode || "待查询")}</td><td>${user.paidOrders}</td></tr>`));
+      const query = document.getElementById('productUserLookup').value.trim().toLowerCase();
+      const matches = users.filter(user => !query || [user.id,user.deviceId,user.country,user.countryCode,user.lastIPAddress,user.networkOrganization,user.networkCity].some(value => String(value || '').toLowerCase().includes(query)));
+      const cleaner = state.product === 'cleaner';
+      document.getElementById('productUsers').innerHTML = `<p>匹配 ${matches.length} 个用户${matches.length > 500 ? '，仅显示前 500 个，请缩小查询范围' : ''} · 已记录 IP ${matches.filter(u=>u.lastIPAddress).length} · 已解析国家 ${matches.filter(u=>u.countryCode||u.country).length}</p>` + table(
+        ['用户 ID','设备 ID',...(cleaner?['有过清理']:[]),'注册','最后活跃','IP / 网络','国家 / 地区','订单','详情'],
+        matches.slice(0,500).map(user => `<tr><td>${escapeHTML(user.id)}</td><td>${escapeHTML(user.deviceId || '未记录')}</td>
+          ${cleaner?`<td>${user.hasCompletedCleanup===true?'是':user.hasCompletedCleanup===false?'尚无成功记录':'未采集'}</td>`:''}
+          <td>${time(user.createdAt)}</td><td>${time(user.lastSeenAt)}</td>
+          <td>${escapeHTML(user.lastIPAddress || '尚未采集')}<br>${escapeHTML(user.networkOrganization || user.networkISP || networkLabel(user))}</td>
+          <td>${escapeHTML([user.country || user.countryCode,user.networkCity].filter(Boolean).join(' · ') || networkLabel(user))}</td><td>${user.paidOrders}</td>
+          <td><button class="ghost" data-product-user="${escapeHTML(user.id)}">查看资料</button></td></tr>`));
     }
+    document.getElementById('productUsers').onclick = event => {
+      const button = event.target.closest('[data-product-user]');
+      if (button) window.dispatchEvent(new CustomEvent('admin-user-detail', {detail:button.dataset.productUser}));
+    };
     document.getElementById("productUserLookup").addEventListener("input", () => {
       const current = window.adminProductSnapshot;
       if(current?.status === "ready" && current.product === state.product) renderProductUsers(current.data.users);
@@ -934,6 +959,18 @@
       );
     }
 
+    function networkLabel(user) {
+      if (!user.lastIPAddress) return '尚未采集 IP';
+      return ({complete:'已解析',pending:'解析中',failed:'解析失败，可重试',private_ip:'内网 IP',disabled:'解析未启用'})[user.networkLookupStatus] || '等待解析';
+    }
+    async function refreshSquadUserNetwork(userId) {
+      const message = document.getElementById('squadNetworkStatus');
+      message.textContent = '正在解析 IP…';
+      try {
+        await apiPost('/v1/admin/products/squadlive/users/' + encodeURIComponent(userId) + '/network', {});
+        await loadUserDetail(userId);
+      } catch (error) { message.textContent = error.message; }
+    }
     function renderUsers(targetId, users) {
       document.getElementById(targetId).innerHTML = table(
         ["用户", "设备 ID", "IP / 地区", "金币", "VIP", "直播/互动", "AI 对话", "注册时间", "最后活跃"],
@@ -943,7 +980,7 @@
             <td><code title="${user.deviceId}">${user.deviceId}</code></td>
             <td>
               ${user.lastIPAddress ? `<code title="${escapeHTML(user.lastIPAddress)}">${escapeHTML(user.lastIPAddress)}</code><br>` : "-<br>"}
-              ${escapeHTML([user.networkCountryCode, user.networkCity].filter(Boolean).join(" · ") || "待解析")}
+              ${escapeHTML([user.networkCountryCode, user.networkCity].filter(Boolean).join(" · ") || networkLabel(user))}
               ${user.possibleAppleNetwork ? '<br><span class="pill vip">疑似 Apple 网络</span>' : ""}
             </td>
             <td>${user.coins}</td>
@@ -976,12 +1013,14 @@
         <div class="detail-grid">
           <div class="profile">
             <h3>基础信息</h3>
+            <button class="ghost" onclick="refreshSquadUserNetwork('${data.user.id}')">重新解析 IP</button>
+            <p id="squadNetworkStatus" role="status">${escapeHTML(networkLabel(data.user))}</p>
             <div class="kv">
               <div>用户 ID：<br><code title="${data.user.id}">${data.user.id}</code></div>
               <div>用户名称：<strong>${escapeHTML(data.user.displayName || "-")}</strong></div>
               <div>设备 ID：<br><code title="${data.user.deviceId}">${data.user.deviceId}</code></div>
               <div>最近 IP：<br><code title="${escapeHTML(data.user.lastIPAddress || "")}">${escapeHTML(data.user.lastIPAddress || "-")}</code></div>
-              <div>国家 / 地区：<strong>${escapeHTML([data.user.networkCountry, data.user.networkRegion, data.user.networkCity].filter(Boolean).join(" · ") || data.user.networkCountryCode || "待解析")}</strong></div>
+              <div>国家 / 地区：<strong>${escapeHTML([data.user.networkCountry, data.user.networkRegion, data.user.networkCity].filter(Boolean).join(" · ") || data.user.networkCountryCode || networkLabel(data.user))}</strong></div>
               <div>网络组织：<strong>${escapeHTML(data.user.networkOrganization || data.user.networkISP || "待解析")}</strong></div>
               <div>ASN：<strong>${escapeHTML(data.user.networkASN || "-")}</strong></div>
               <div>Apple 网络判断：${data.user.possibleAppleNetwork ? '<span class="pill vip">网络组织疑似 Apple</span>' : '<span class="pill">未发现 Apple 标识</span>'}</div>
@@ -1143,22 +1182,101 @@
       );
     }
 
+    const rewardDialog = document.createElement('dialog');
+    rewardDialog.id = 'rewardDialog';
+    document.body.append(rewardDialog);
+    let rewardRows = [], rewardListVersion = '', rewardBusy = false, rewardDetailVersion = 0;
+    const rewardLabels = { pending: '待审核', approved: '已通过', rejected: '已拒绝' };
+    function safeProofLink(value) {
+      try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) ? url.href : ''; }
+      catch { return ''; }
+    }
+    document.getElementById('rewardStatus').onchange = () => renderRewards(true);
+    function renderRewards(force = false) {
+      const status = document.getElementById('rewardStatus').value;
+      const filtered = rewardRows.filter(item => status === 'all' || item.status === status);
+      const version = JSON.stringify([status, filtered]);
+      if (!force && version === rewardListVersion) return;
+      rewardListVersion = version;
+      document.getElementById('rewardTable').innerHTML = table(
+        ['用户', '平台', '状态', '基础金币', '审核额外金币', '提交资料', '提交时间', '操作'],
+        filtered.map(item => `<tr>
+          <td>${escapeHTML(item.userId)}</td><td>${escapeHTML(item.platform)}</td>
+          <td>${escapeHTML(rewardLabels[item.status] || item.status)}</td>
+          <td>${Number(item.baseRewardCoins || 0)}</td><td>${Number(item.reviewBonusCoins || 0)}</td>
+          <td>${item.hasScreenshot ? '截图 ' : ''}${item.proofLink ? '帖子链接' : item.hasScreenshot ? '' : '未附资料'}</td>
+          <td>${time(item.createdAt)}</td>
+          <td><button class="ghost" data-reward-id="${escapeHTML(item.id)}">${item.status === 'pending' ? '查看并审核' : '查看详情'}</button></td>
+        </tr>`), '当前筛选下没有申请');
+    }
     async function loadRewards() {
-      const data = await api("/v1/admin/reward-submissions");
-      document.getElementById("rewardTable").innerHTML = table(
-        ["提交 ID", "用户 ID", "平台", "状态", "基础奖励", "证明链接", "时间"],
-        data.submissions.map((item) => `
-          <tr onclick="loadUserDetail('${item.userId}')">
-            <td><code title="${item.id}">${item.id}</code></td>
-            <td><code title="${item.userId}">${item.userId}</code></td>
-            <td>${item.platform}</td>
-            <td>${escapeHTML(item.status)}</td>
-            <td>${item.baseRewardCoins}</td>
-            <td>${item.proofLink ? `<a href="${escapeHTML(item.proofLink)}" target="_blank" rel="noopener noreferrer">打开</a>` : "-"}</td>
-            <td>${time(item.createdAt)}</td>
-          </tr>
-        `)
-      );
+      const data = await api('/v1/admin/reward-submissions?summary=1');
+      rewardRows = data.submissions;
+      renderRewards();
+    }
+    document.getElementById('rewardTable').onclick = event => {
+      const button = event.target.closest('[data-reward-id]');
+      if (button) openReward(button.dataset.rewardId);
+    };
+    rewardDialog.addEventListener('cancel', event => { if (rewardBusy) event.preventDefault(); });
+    async function openReward(id) {
+      const version = ++rewardDetailVersion;
+      rewardDialog.innerHTML = '<p role="status">正在读取提交资料…</p><form method="dialog"><button>关闭</button></form>';
+      if (!rewardDialog.open) rewardDialog.showModal();
+      try {
+        const { submission: item, user } = await api('/v1/admin/reward-submissions/' + encodeURIComponent(id));
+        if (version !== rewardDetailVersion || !rewardDialog.open) return;
+        const link = safeProofLink(item.proofLink);
+        rewardDialog.innerHTML = `<header><h2>分享申请详情</h2><form method="dialog"><button>关闭</button></form></header>
+          <dl>${[['申请 ID',item.id],['用户 ID',item.userId],['平台',item.platform],['状态',rewardLabels[item.status] || item.status],['提交时间',time(item.createdAt)],['已发基础金币',item.baseRewardCoins || 0],['审核额外金币',item.reviewBonusCoins || 0],['用户当前金币',user?.coins ?? '用户不存在'],['审核时间',item.reviewedAt ? time(item.reviewedAt) : '待审核'],['审核备注',item.reviewNote || '无']].map(([label,value]) => `<dt>${label}</dt><dd>${escapeHTML(value)}</dd>`).join('')}</dl>
+          <h3>用户提交的资料</h3>
+          <p>${link ? `<a href="${escapeHTML(link)}" target="_blank" rel="noopener noreferrer">打开分享帖子</a>` : item.proofLink ? '链接格式无法打开' : '未提交帖子链接'}</p>
+          <div id="rewardProof"></div>
+          ${item.status === 'pending' ? `<label>通过后追加金币（0–10000） <input id="rewardBonus" type="number" min="0" max="10000" step="1" value="0"></label>
+          <p><label for="rewardNote">审核备注</label></p><textarea id="rewardNote" maxlength="1000" placeholder="填写审核依据或拒绝原因"></textarea>
+          <div class="reward-actions"><button class="primary" data-review="approved">通过并保存</button><button class="danger" data-review="rejected">拒绝申请</button></div>` : ''}
+          <p id="rewardReviewMessage" role="status"></p>`;
+        const proof = document.getElementById('rewardProof');
+        if (item.screenshotBase64) {
+          const raw = String(item.screenshotBase64).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '').replace(/\s/g, '');
+          const image = document.createElement('img');
+          image.alt = '用户上传的分享证明截图';
+          image.onerror = () => { proof.textContent = '截图读取失败，请根据帖子链接核对资料。'; };
+          image.src = 'data:image/jpeg;base64,' + raw;
+          proof.append(image);
+        } else proof.textContent = '未上传证明截图';
+        rewardDialog.querySelectorAll('[data-review]').forEach(button => {
+          button.onclick = () => reviewReward(id, button.dataset.review);
+        });
+      } catch (error) {
+        if (version === rewardDetailVersion) {
+          rewardDialog.innerHTML = '<p role="alert"></p><form method="dialog"><button>关闭</button></form>';
+          rewardDialog.querySelector('p').textContent = '读取失败，' + error.message;
+        }
+      }
+    }
+    async function reviewReward(id, status) {
+      if (rewardBusy) return;
+      const bonus = status === 'approved' ? Number(document.getElementById('rewardBonus').value) : 0;
+      const note = document.getElementById('rewardNote').value.trim();
+      const message = document.getElementById('rewardReviewMessage');
+      if (!Number.isSafeInteger(bonus) || bonus < 0 || bonus > 10000) { message.textContent = '额外奖励请输入 0 至 10000 的整数'; return; }
+      if (status === 'rejected' && !note) { message.textContent = '请填写拒绝原因'; return; }
+      rewardBusy = true;
+      rewardDialog.querySelectorAll('button,input,textarea').forEach(el => el.disabled = true);
+      message.textContent = '正在保存审核结果…';
+      try {
+        await apiPost('/v1/rewards/' + encodeURIComponent(id) + '/review', { status, bonusCoins: bonus, note });
+        document.getElementById('rewardFeedback').textContent = status === 'approved'
+          ? `已通过，额外发放 ${bonus} 金币。` : '已拒绝申请，原因已保存。';
+        await openReward(id);
+        await loadRewards();
+      } catch (error) {
+        message.textContent = '保存未确认，' + error.message + '。可重试或关闭后重新查看。';
+      } finally {
+        rewardBusy = false;
+        rewardDialog.querySelectorAll('button,input,textarea').forEach(el => el.disabled = false);
+      }
     }
 
     const sandBusEventLabels = {

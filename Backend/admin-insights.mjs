@@ -96,11 +96,21 @@ function filters() {
 function pagination(p) {
   return `<footer class="insight-pagination"><span>共 ${p.total} 条 · 每页 10 条</span><div>${btn('上一页','prev',p.page===1?'disabled':'')}<span>${p.page} / ${p.pages}</span>${btn('下一页','next',p.page===p.pages?'disabled':'')}</div></footer>`;
 }
+function networkStatus(user) {
+  const labels = { complete:'已解析', pending:'解析中', failed:'解析失败，可重试', private_ip:'内网 IP', disabled:'解析未启用', not_recorded:'尚未采集 IP', not_started:'等待解析' };
+  return labels[user.networkLookupStatus] || (user.lastIPAddress ? '等待解析' : '尚未采集 IP');
+}
+function countryName(user) {
+  if (user.countryCode) {
+    try { return new Intl.DisplayNames(['zh-CN'], {type:'region'}).of(user.countryCode.toUpperCase()); } catch {}
+  }
+  return user.country || networkStatus(user);
+}
 function usersView() {
   const filtered=filterUsers(data.users,{query,status,start:listStart,end:listEnd,sort}), p=pageRows(filtered,page); page=p.page;
-  const row=u=>`<tr><td>${btn(esc(u.id),'user',`data-id="${esc(u.id)}" class="text-button"`)}<small class="device-id">Device ID: ${esc(u.deviceId||'未记录')}</small></td><td><span class="status-badge">${u.paidOrders?'有净实付':'无净实付'}</span></td><td>${esc(u.country||u.countryCode||'未知')}</td><td>${time(u.createdAt)}</td><td>${time(u.lastSeenAt)}</td><td>${u.paidOrders}</td></tr>`;
-  const boards=`<div class="user-board">${[false,true].map(paid=>`<section><h3>${paid?'有净实付订单':'无净实付订单'} <span>${filtered.filter(u=>!!u.paidOrders===paid).length}</span></h3>${p.rows.filter(u=>!!u.paidOrders===paid).map(u=>`<button class="user-card" data-action="user" data-id="${esc(u.id)}"><b>${esc(u.id)}</b><span>${esc(u.country||u.countryCode||'地区未知')} · ${u.paidOrders} 笔净实付订单</span><small>注册 ${dateOf(u.createdAt)}</small></button>`).join('')||'<p>本页无此类用户</p>'}</section>`).join('')}</div>`;
-  return `${filters()}<section class="insight-surface"><header><div><h2>用户明细</h2><p>全部身份；日期只筛选注册时间。状态为订单口径，并非当前会员资格。</p></div><div class="view-switch">${btn('表格','user-table',`aria-pressed="${userMode==='table'}"`)}${btn('按付费状态','user-board',`aria-pressed="${userMode==='board'}"`)}</div></header>${userMode==='board'?boards:table(['用户身份','付费状态','地区','注册时间 UTC','最后活跃 UTC','净实付订单'],p.rows.map(row))}${pagination(p)}</section>`;
+  const row=u=>`<tr><td>${btn(esc(u.id),'user',`data-id="${esc(u.id)}" class="text-button"`)}<small class="device-id">Device ID: ${esc(u.deviceId||'未记录')}</small></td><td><span class="status-badge">${u.paidOrders?'有净实付':'无净实付'}</span></td><td>${esc(countryName(u))}<small>${esc([u.networkRegion,u.networkCity].filter(Boolean).join(' · '))}</small></td><td><code>${esc(u.lastIPAddress||'尚未采集')}</code><small>${esc(u.networkOrganization||u.networkISP||networkStatus(u))}</small></td><td>${time(u.createdAt)}</td><td>${time(u.lastSeenAt)}</td><td>${u.paidOrders}</td></tr>`;
+  const boards=`<div class="user-board">${[false,true].map(paid=>`<section><h3>${paid?'有净实付订单':'无净实付订单'} <span>${filtered.filter(u=>!!u.paidOrders===paid).length}</span></h3>${p.rows.filter(u=>!!u.paidOrders===paid).map(u=>`<button class="user-card" data-action="user" data-id="${esc(u.id)}"><b>${esc(u.id)}</b><span>${esc(countryName(u))} · ${u.paidOrders} 笔净实付订单</span><small>注册 ${dateOf(u.createdAt)}</small></button>`).join('')||'<p>本页无此类用户</p>'}</section>`).join('')}</div>`;
+  return `${filters()}<section class="insight-surface"><header><div><h2>用户明细</h2><p>全部身份；日期只筛选注册时间。状态为订单口径，并非当前会员资格。</p></div><div class="view-switch">${btn('表格','user-table',`aria-pressed="${userMode==='table'}"`)}${btn('按付费状态','user-board',`aria-pressed="${userMode==='board'}"`)}</div></header><p class="scope-note">当前筛选 ${filtered.length} 个用户 · 已记录 IP ${filtered.filter(u=>u.lastIPAddress).length} · 已解析国家 ${filtered.filter(u=>u.country||u.countryCode).length} · 出口 IP ${new Set(filtered.map(u=>u.lastIPAddress).filter(Boolean)).size} 个</p>${userMode==='board'?boards:table(['用户身份','付费状态','国家 / 地区','IP / 网络','注册时间 UTC','最后活跃 UTC','净实付订单'],p.rows.map(row))}${pagination(p)}</section>`;
 }
 function ordersView() {
   const filtered=filterOrders(data.orders,{query,status,currency:orderCurrency,start:listStart,end:listEnd,dateField,accountId:exactAccount,sku:exactSku}),p=pageRows(filtered,page);page=p.page;
@@ -161,17 +171,32 @@ function receive(next) {
   patchHTML($('productMarketing'),next.status==='ready'?marketingHTML({...data.marketing,subscriptions:data.subscriptions}):'<p>当前产品投放数据尚未就绪</p>');
   render(true);
 }
+function userOrdersHTML(id) {
+  const orders = data.orders.filter(order=>order.accountId===id);
+  return `<section id="userRelatedOrders"><h3>此用户的已验证订单（${orders.length} 笔）</h3>${table(['交易','商品','购买时间 UTC','金额','退款'],orders.slice(0,100).map(order=>`<tr>${[order.transactionId,order.sku,time(order.purchasedAt),order.currency ? order.currency+' '+amount(order.priceMilliunits) : '币种未记录',order.refunded ? '有退款' : '无退款'].map(value=>`<td>${esc(value)}</td>`).join('')}</tr>`))}${orders.length>100?'<p>此处展示最近 100 笔，可到订单列表查询全部。</p>':''}</section>`;
+}
 function showDetail(kind,id) {
   let title, values;
   if(kind==='user') {
     const u=data.users.find(u=>u.id===id);if(!u)return;
-    title='用户详情';values=[['用户 ID',u.id],['设备 ID（产品内安装标识）',u.deviceId||'未记录'],['有过清理',u.hasCompletedCleanup===true?'是':u.hasCompletedCleanup===false?'尚无成功记录':'旧版本未采集'],['注册时间 UTC',time(u.createdAt)],['最后活跃 UTC',time(u.lastSeenAt)],['记录中的活跃天数',u.activeDays],['国家 / 地区',u.country||u.countryCode||'未知'],['最近 IP',u.lastIPAddress||'未记录'],['网络',u.networkOrganization||'未知'],['净实付订单数',u.paidOrders],['邀请码',u.bindingCode||'无']];
+    title='用户详情';values=[
+      ['用户 ID',u.id],['用户名称',u.displayName||'未采集'],['设备 ID',u.deviceId||'未记录'],
+      ['注册时间 UTC',time(u.createdAt)],['最后活跃 UTC',time(u.lastSeenAt)],['记录中的活跃天数',u.activeDays],
+      ['活跃采集开始 UTC',u.activityTrackedFrom?time(u.activityTrackedFrom):'历史版本未记录'],
+      ['国家 / 地区',countryName(u)],['省份 / 城市',[u.networkRegion,u.networkCity].filter(Boolean).join(' / ')||'未解析'],
+      ['首次 IP',u.firstIPAddress||'未采集'],['最近 IP',u.lastIPAddress||'未采集'],
+      ['同出口 IP 用户数',u.sameIPUserCount||0],['IP 解析状态',networkStatus(u)],
+      ['IP 更新时间 UTC',u.networkUpdatedAt?time(u.networkUpdatedAt):'未解析'],
+      ['网络组织',u.networkOrganization||'未解析'],['运营商',u.networkISP||'未解析'],['ASN',u.networkASN||'未解析'],
+      ['时区',u.networkTimezone||'未解析'],['净实付订单数',u.paidOrders],['邀请码',u.bindingCode||'无']
+    ];
+    if(data.product==='cleaner')values.push(['有过清理',u.hasCompletedCleanup===true?'是':u.hasCompletedCleanup===false?'尚无成功记录':'历史版本未采集'],['首次清理 UTC',u.firstCleanupAt?time(u.firstCleanupAt):'未记录']);
   } else {
     const o=data.orders.find(o=>o.transactionId===id);if(!o)return;
     title='交易详情';values=[['交易 ID',o.transactionId],['原始交易 ID',o.originalTransactionId],['用户身份',o.accountId||'未绑定'],['商品',o.sku],['币种',o.currency||'未知'],['扣款（原币）',o.priceMilliunits===null?'未知':amount(o.priceMilliunits)],['退款（原币）',amount(o.refundedMilliunits)],['购买时间 UTC',time(o.purchasedAt)],['退款时间 UTC',o.refundedAt?time(o.refundedAt):o.refunded?'时间未记录':'无退款'],['扣款归因状态',o.singularPurchaseStatus||'未记录'],['退款归因状态',o.singularRefundStatus||'未记录']];
   }
-  dialog.innerHTML=`<header><h2 id="insightDetailTitle">${title}</h2><form method="dialog"><button aria-label="关闭详情">关闭 ✕</button></form></header><dl>${values.map(([k,v])=>`<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${kind==='user'?btn('查看此用户全部订单','user-orders',`data-id="${esc(id)}" class="primary"`):''}<p class="scope-note">只读信息 · 不修改用户或订单</p>`;
-  dialog.setAttribute('aria-labelledby','insightDetailTitle');dialog.showModal();
+  dialog.innerHTML=`<header><h2 id="insightDetailTitle">${title}</h2><form method="dialog"><button aria-label="关闭详情">关闭 ✕</button></form></header><dl>${values.map(([k,v])=>`<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${kind==='user'?btn('查看此用户全部订单','user-orders',`data-id="${esc(id)}" class="primary"`)+btn('重新解析 IP','user-network',`data-id="${esc(id)}"`) + `<h3>IP 历史</h3>${table(['IP','国家 / 城市','网络','首次出现 UTC','最后出现 UTC'],(data.users.find(u=>u.id===id)?.ipHistory||[]).map(item=>`<tr>${[item.ip,[item.countryCode||item.country,item.city].filter(Boolean).join(' / '),item.organization||item.isp||item.asn||'未解析',time(item.firstSeenAt),time(item.lastSeenAt)].map(v=>`<td>${esc(v)}</td>`).join('')}</tr>`))}<p>国家地区按连接 IP 估算；共享出口 IP 可能对应多个用户。</p>`:''}${kind==='user'?userOrdersHTML(id):''}<p id="networkMessage" role="status"></p>`;
+  dialog.setAttribute('aria-labelledby','insightDetailTitle');if(!dialog.open)dialog.showModal();
 }
 function selectDay(date) {
   const row = data.daily.find(r=>r.date===date);
@@ -185,9 +210,29 @@ function selectDay(date) {
   detail.innerHTML=`${row.date}：注册 ${row.registrations} · 活跃 ${row.activeUsers} · 实付订单 ${row.paidOrders} · 退款 ${row.refunds} ${btn('查看当天订单','day-orders')}`;
   if(!reducedMotion.matches)detail.animate([{opacity:.25},{opacity:1}],{duration:160});
 }
+async function refreshUserNetwork(button) {
+  const product = data.product, id = button.dataset.id;
+  const message = dialog.querySelector('#networkMessage');
+  button.disabled = true;
+  message.textContent = '正在解析 IP…';
+  try {
+    const response = await fetch(`/v1/admin/products/${encodeURIComponent(product)}/users/${encodeURIComponent(id)}/network`, {
+      method:'POST', headers:{authorization:`Bearer ${localStorage.getItem('squadlive.adminToken') || ''}`}
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '解析失败');
+    if (picker.value !== product || !dialog.open) return;
+    Object.assign(data.users.find(user=>user.id===id), result.user);
+    showDetail('user',id);
+    dialog.querySelector('#networkMessage').textContent = result.updated ? 'IP 资料已更新' : '用户 IP 已变化，请重试';
+    render();
+  } catch (error) { if (dialog.open && picker.value===product) message.textContent=error.message; }
+  finally {button.disabled=false;}
+}
 function action(event) {
   const b=event.target.closest('[data-action]');if(!b || !data)return;
   const a=b.dataset.action;
+  if(a==='user-network'){refreshUserNetwork(b);return;}
   if(a==='today-overview'){setView('overview');liveToday=true;start=end=data.daily.at(-1).date;render();return;}
   if(a==='today-metric'){liveToday=true;start=end=data.daily.at(-1).date;b.dataset.action='metric';return action(event);}
   if(a==='subscription-status'){setView('orders');return;}
@@ -208,7 +253,7 @@ function action(event) {
   if(a==='prev')page--; if(a==='next')page++;
   if(a==='user-table')userMode='table';if(a==='user-board')userMode='board';
   if(a==='user'||a==='order'){showDetail(a,b.dataset.id);return;}
-  if(a==='user-orders'){dialog.close();setView('orders');exactAccount=b.dataset.id;}
+  if(a==='user-orders'){if(document.documentElement.dataset.adminStyle!=='pearl'){dialog.querySelector('#userRelatedOrders')?.scrollIntoView({block:'start'});return;}dialog.close();setView('orders');exactAccount=b.dataset.id;}
   render();
 }
 host.addEventListener('click',action);dialog.addEventListener('click',action);

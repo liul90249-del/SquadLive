@@ -22,7 +22,7 @@ export function delta(current, previous, comparable) {
 }
 export function filterUsers(users, {query = '', status = 'all', start = '', end = '', sort = 'newest'} = {}) {
   const q = query.trim().toLowerCase();
-  return users.filter(u => (!q || [u.id,u.deviceId,u.country,u.countryCode,u.lastIPAddress,u.bindingCode].some(v => String(v || '').toLowerCase().includes(q))) &&
+  return users.filter(u => (!q || [u.id,u.deviceId,u.country,u.countryCode,u.firstIPAddress,u.lastIPAddress,u.networkCity,u.networkRegion,u.networkOrganization,u.networkISP,u.networkASN,u.bindingCode].some(v => String(v || '').toLowerCase().includes(q))) &&
     (status === 'all' || (status === 'paid' ? u.paidOrders > 0 : !u.paidOrders)) &&
     (!start || dateOf(u.createdAt) >= start) && (!end || dateOf(u.createdAt) <= end))
     .sort((a,b) => sort === 'orders' ? b.paidOrders - a.paidOrders : String(sort === 'active' ? b.lastSeenAt : b.createdAt).localeCompare(String(sort === 'active' ? a.lastSeenAt : a.createdAt)));
