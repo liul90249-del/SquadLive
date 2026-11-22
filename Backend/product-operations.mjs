@@ -169,7 +169,7 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
       deviceId: account.deviceId || null,
       clientInfo: account.clientInfo || null,
       gameplayTrackedFrom: account.gameplayTrackedFrom || null,
-      gameplayCounts: product === 'catswipe' ? Object.values(account.gameplayDaily || {}).reduce((counts, events) => {
+      gameplayCounts: product === 'catswipe' ? Object.entries(account.gameplayDaily || {}).filter(([date]) => date >= dayAfter(today, -89)).reduce((counts, [, events]) => {
         for (const [name, count] of Object.entries(events)) counts[name] = (counts[name] || 0) + count;
         return counts;
       }, {}) : null,
