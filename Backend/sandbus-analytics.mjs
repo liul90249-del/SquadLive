@@ -14,9 +14,32 @@ function count(value) {
   return number;
 }
 
-function normalizeReports(reports) {
-  if (!Array.isArray(reports) || reports.length !== 3) throw new Error('Invalid Analytics reports');
-  const [audience, gameplay, shaker] = reports;
+function normalizeReports(reports, days, now) {
+  if (!Array.isArray(reports) || reports.length !== 5) throw new Error('Invalid Analytics reports');
+  const [audience, gameplay, shaker, daily, totals] = reports;
+  const timeZone = daily.metadata?.timeZone || audience.metadata?.timeZone || gameplay.metadata?.timeZone || null;
+  const observedDays = new Map((daily.rows ?? []).map(row => [
+    row.dimensionValues[0].value.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3'),
+    { active: count(row.metricValues[0]?.value), new: count(row.metricValues[1]?.value) },
+  ]));
+  let dailyRows = [...observedDays].map(([date, players]) => ({ date, ...players }));
+  if (timeZone) {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(now).map(({ type, value }) => [type, value]));
+    const today = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+    const restricted = daily.metadata?.subjectToThresholding || daily.metadata?.dataLossFromOtherRow;
+    dailyRows = Array.from({ length: days }, (_, index) => {
+      const date = new Date(today - (days - index - 1) * 86400000).toISOString().slice(0, 10);
+      return { date, ...(observedDays.get(date) || { active: restricted ? null : 0, new: restricted ? null : 0 }) };
+    });
+  }
+  dailyRows.sort((a, b) => a.date.localeCompare(b.date));
+  const eventTotals = {};
+  for (const entry of totals.rows ?? []) {
+    const event = entry.dimensionValues[0].value;
+    if (EVENTS.includes(event)) eventTotals[event] = count(entry.metricValues[0]?.value);
+  }
   const audienceValues = audience.rows?.[0]?.metricValues;
   const players = audienceValues
     ? { active: count(audienceValues[0]?.value), new: count(audienceValues[1]?.value) }
@@ -39,22 +62,26 @@ function normalizeReports(reports) {
   }
   return {
     players,
+    daily: dailyRows,
+    eventTotals,
     rows: [...rows.values()].sort((a, b) =>
       a.level.localeCompare(b.level, undefined, { numeric: true })
       || a.platform.localeCompare(b.platform)
       || a.build.localeCompare(b.build, undefined, { numeric: true })),
     limited: reports.some(report => report.metadata?.subjectToThresholding
       || report.metadata?.dataLossFromOtherRow || report.rowCount > MAX_ROWS),
-    timeZone: gameplay.metadata?.timeZone || audience.metadata?.timeZone || null,
+    timeZone,
   };
 }
 
 export function createSandBusAnalytics(options) {
   const { configured, query } = createAnalyticsDataClient(options);
+  const now = options?.now ?? Date.now;
 
   async function report(days) {
     if (!SANDBUS_REPORT_DAYS.includes(days)) throw new RangeError('Invalid date range');
     if (!configured) return { status: 'not_configured', days };
+    const requestedAt = now();
     const dateRanges = [{ startDate: `${days - 1}daysAgo`, endDate: 'today' }];
     const groups = ['platform', 'appVersion', 'customEvent:sb_level'].map(name => ({ name }));
     const { reports } = await query('batchRunReports', { requests: [
@@ -80,8 +107,21 @@ export function createSandBusAnalytics(options) {
           },
           limit: String(MAX_ROWS),
         },
+        {
+          dateRanges,
+          dimensions: [{ name: 'date' }],
+          metrics: [{ name: 'activeUsers' }, { name: 'newUsers' }],
+          orderBys: [{ dimension: { dimensionName: 'date' } }],
+          limit: '90',
+        },
+        {
+          dateRanges,
+          dimensions: [{ name: 'eventName' }],
+          metrics: [{ name: 'eventCount' }],
+          dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: EVENTS } } },
+        },
     ] });
-    return { status: 'ready', days, ...normalizeReports(reports) };
+    return { status: 'ready', days, ...normalizeReports(reports, days, requestedAt) };
   }
 
   report.realtime = async function realtime() {

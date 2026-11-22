@@ -421,6 +421,28 @@
       .token-box, .tools { width: 100%; }
       .token-box input, .tools input { width: 100%; }
     }
+    #section-sandbus .sb-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:16px; margin:20px 0; }
+    #section-sandbus .sb-metric { padding:20px; border:1px solid var(--line); border-radius:16px; display:flex; flex-direction:column; gap:10px; }
+    #section-sandbus .sb-metric strong { font-size:32px; line-height:1.2; font-variant-numeric:tabular-nums; }
+    #section-sandbus .sb-metric small, #section-sandbus .sb-legend { color:var(--muted); }
+    #section-sandbus details { margin:20px 0; }
+    #section-sandbus summary { cursor:pointer; padding:12px 0; }
+    #section-sandbus .sb-legend { display:flex; flex-wrap:wrap; gap:18px; margin:12px 0; font-size:13px; }
+    #section-sandbus .sb-new, #section-sandbus .sb-active, #section-sandbus .sb-complete, #section-sandbus .sb-timeout { display:flex; align-items:center; gap:6px; }
+    #section-sandbus .sb-new::before, #section-sandbus .sb-active::before, #section-sandbus .sb-complete::before, #section-sandbus .sb-timeout::before { content:""; display:inline-block; width:10px; height:10px; border-radius:3px; }
+    #section-sandbus .sb-new::before, #section-sandbus .sb-new-bar, #section-sandbus .sb-start-bar { background:#3478f6; }
+    #section-sandbus .sb-active::before, #section-sandbus .sb-active-bar { background:#8391a5; }
+    #section-sandbus .sb-complete::before, #section-sandbus .sb-complete-bar { background:#21906f; }
+    #section-sandbus .sb-timeout::before, #section-sandbus .sb-timeout-bar { background:#d58b22; }
+    #section-sandbus .sb-trend { display:flex; gap:7px; overflow-x:auto; padding:12px 0; border-bottom:1px solid var(--line); }
+    #section-sandbus .sb-day { flex:1; min-width:30px; display:flex; flex-direction:column; gap:9px; font-size:10px; color:var(--muted); text-align:center; }
+    #section-sandbus .sb-day-bars { height:130px; display:flex; justify-content:center; align-items:flex-end; gap:3px; border-bottom:1px solid var(--line); }
+    #section-sandbus .sb-day-bars i { width:10px; border-radius:3px 3px 0 0; }
+    #section-sandbus .sb-level-chart { max-height:520px; overflow:auto; }
+    #section-sandbus .sb-level-row { display:grid; grid-template-columns:90px 1fr; gap:15px; padding:15px 0; border-bottom:1px solid var(--line); }
+    #section-sandbus .sb-level-bar { display:grid; grid-template-columns:35px 1fr 55px; gap:12px; align-items:center; font-size:12px; margin:5px 0; }
+    #section-sandbus .sb-level-bar > div { background:var(--panel2); height:10px; border-radius:5px; overflow:hidden; }
+    #section-sandbus .sb-level-bar i { display:block; height:100%; border-radius:5px; }
   </style>
   <link rel="stylesheet" href="/admin-appearance.css">
   <script src="/admin-appearance.js" defer></script>
@@ -594,14 +616,22 @@
             <label for="sandbusDays">统计范围
               <select id="sandbusDays">
                 <option value="7">最近 7 天</option>
-                <option value="30">最近 30 天</option>
+                <option value="30" selected>最近 30 天</option>
                 <option value="90">最近 90 天</option>
               </select>
             </label>
           </div>
           <p id="sandbusStatus" class="sub" role="status"></p>
-          <div id="sandbusPlayers" class="cards"></div>
-          <div id="sandbusLevels" class="table-scroll" tabindex="0" role="region" aria-label="按平台、版本与关卡查看玩法数据"></div>
+          <div id="sandbusPlayers" class="sb-metrics"></div>
+          <p class="sub">仅统计开启游戏分析的玩家。新增玩家按 Firebase 首次打开记录，游戏无需注册。历史报表通常需要 24–48 小时完成处理。</p>
+          <h3>每日新增与活跃</h3>
+          <div id="sandbusTrend"></div>
+          <details><summary>查看每日数据</summary><div id="sandbusDaily" class="table-scroll" tabindex="0" role="region" aria-label="每日玩家数据"></div></details>
+          <h3>关卡表现</h3>
+          <p class="sub">柱形表示事件次数，同一玩家重开会产生多次开局。关卡详情按平台和版本列在下方。</p>
+          <div id="sandbusProgress"></div>
+          <details><summary>查看平台与版本明细</summary>
+          <div id="sandbusLevels" class="table-scroll" tabindex="0" role="region" aria-label="按平台、版本与关卡查看玩法数据"></div></details>
         </div>
       </section>
       <section class="section" id="section-catswipe">
@@ -1329,18 +1359,51 @@
           status.textContent = 'Firebase 报表读取尚待配置。';
           return;
         }
-        status.textContent = `已刷新 ${new Date().toLocaleTimeString()}`;
+        status.textContent = `Firebase 查询成功 · 已刷新 ${new Date().toLocaleTimeString()}`;
         rows.innerHTML = table(
           ['平台', '事件', '次数'],
           report.rows.map(({ platform, event, count }) => {
             const cells = [platform, sandBusEventLabels[event] ?? event, count];
             return `<tr>${cells.map(cell => `<td>${escapeHTML(cell)}</td>`).join('')}</tr>`;
           }),
-          '最近 30 分钟暂无玩法事件。',
+          '最近 30 分钟未收到玩法事件。可查看下方历史趋势；测试采集时，请在游戏设置中开启 Gameplay Analytics 后完成一次接沙。',
         );
       } catch (error) {
         if (state.product === 'sandbus' && version === sandBusRealtimeVersion) status.textContent = error.message;
       }
+    }
+
+    function sandBusMetric(label, value, detail) {
+      return `<div class="sb-metric"><span>${escapeHTML(label)}</span><strong>${escapeHTML(value)}</strong><small>${escapeHTML(detail)}</small></div>`;
+    }
+
+    function sandBusTrend(daily) {
+      if (!daily.length) return '<p class="sub">尚无每日玩家记录。</p>';
+      const peak = Math.max(1, ...daily.flatMap(day => [day.new ?? 0, day.active ?? 0]));
+      return `<div class="sb-legend"><span class="sb-new">新增玩家</span><span class="sb-active">活跃玩家</span><span>每日最高 ${peak} 人</span></div>
+        <div class="sb-trend" role="img" aria-label="每日新增与活跃玩家柱形图，具体数字可展开查看每日数据">
+          ${daily.map(({ date, new: added, active }) => `<div class="sb-day" title="${escapeHTML(date)} · 新增 ${added ?? '受限'} · 活跃 ${active ?? '受限'}">
+            <div class="sb-day-bars"><i class="sb-new-bar" style="height:${100 * (added ?? 0) / peak}%"></i><i class="sb-active-bar" style="height:${100 * (active ?? 0) / peak}%"></i></div>
+            <span>${escapeHTML(date.slice(5))}</span></div>`).join('')}
+        </div>`;
+    }
+
+    function sandBusProgress(rows) {
+      const levels = new Map();
+      for (const { level, events } of rows) {
+        const label = level && level !== '(not set)' ? level : '未记录关卡';
+        if (!levels.has(label)) levels.set(label, { start: 0, complete: 0, timeout: 0 });
+        const entry = levels.get(label);
+        entry.start += events.sb_level_start ?? 0;
+        entry.complete += events.sb_level_complete ?? 0;
+        entry.timeout += events.sb_level_timeout ?? 0;
+      }
+      if (!levels.size) return '<p class="sub">所选时间内暂无关卡记录。可切换到最近 90 天查看较早的数据。</p>';
+      const peak = Math.max(1, ...[...levels.values()].flatMap(entry => Object.values(entry)));
+      return `<div class="sb-legend"><span class="sb-new">开局</span><span class="sb-complete">通关</span><span class="sb-timeout">超时</span></div>
+        <div class="sb-level-chart">${[...levels].map(([level, values]) => `<div class="sb-level-row"><strong>${escapeHTML(level)}</strong>
+          <div>${[['start', '开局'], ['complete', '通关'], ['timeout', '超时']].map(([key, label]) =>
+            `<div class="sb-level-bar"><span>${label}</span><div><i class="sb-${key}-bar" style="width:${100 * values[key] / peak}%"></i></div><b>${values[key]}</b></div>`).join('')}</div></div>`).join('')}</div>`;
     }
 
     let sandBusLoadVersion = 0;
@@ -1349,10 +1412,16 @@
       const status = document.getElementById('sandbusStatus');
       const players = document.getElementById('sandbusPlayers');
       const levels = document.getElementById('sandbusLevels');
+      const trend = document.getElementById('sandbusTrend');
+      const daily = document.getElementById('sandbusDaily');
+      const progress = document.getElementById('sandbusProgress');
       const days = document.getElementById('sandbusDays').value;
       status.textContent = '正在读取 Firebase 数据…';
       players.replaceChildren();
       levels.replaceChildren();
+      trend.replaceChildren();
+      daily.replaceChildren();
+      progress.replaceChildren();
       try {
         const report = await api(`/v1/admin/products/sandbus/analytics?days=${days}`);
         if (state.product !== 'sandbus' || version !== sandBusLoadVersion) return;
@@ -1363,12 +1432,25 @@
         status.textContent = [
           report.timeZone && `统计时区 ${report.timeZone}`,
           report.limited && '部分数据受 Analytics 报表限制',
-          '关卡列为事件次数',
+          `已刷新 ${new Date().toLocaleTimeString()}`,
+          'Firebase 查询成功',
         ].filter(Boolean).join(' · ');
+        const totals = report.eventTotals;
         players.innerHTML = [
-          metricCard('活跃玩家', report.players.active, '—', '所选日期内活跃玩家', '区间', ''),
-          metricCard('新增玩家', report.players.new, '—', '所选日期内新增玩家', '区间', ''),
+          sandBusMetric('新增玩家', report.players.new, '所选时段首次打开'),
+          sandBusMetric('活跃玩家', report.players.active, '所选时段去重人数'),
+          sandBusMetric('开局次数', totals.sb_level_start ?? 0, '含重开后的再次开局'),
+          sandBusMetric('通关次数', totals.sb_level_complete ?? 0, '已记录的关卡完成'),
+          sandBusMetric('超时次数', totals.sb_level_timeout ?? 0, '已记录的倒计时结束'),
         ].join('');
+        trend.innerHTML = sandBusTrend(report.daily);
+        daily.innerHTML = table(['日期', '新增玩家', '活跃玩家'], [...report.daily].reverse().map(day =>
+          `<tr><td>${escapeHTML(day.date)}</td><td>${escapeHTML(day.new ?? '受限')}</td><td>${escapeHTML(day.active ?? '受限')}</td></tr>`), '尚无每日记录。');
+        progress.innerHTML = sandBusProgress(report.rows);
+        const detailedStarts = report.rows.reduce((sum, row) => sum + (row.events.sb_level_start ?? 0), 0);
+        if ((totals.sb_level_start ?? 0) > detailedStarts) {
+          status.textContent += ' · 部分开局尚未出现在关卡明细中，请等待关卡维度处理完成';
+        }
         levels.innerHTML = table(
           ['关卡', '平台', '版本', ...Object.values(sandBusEventLabels), '平均装载提升'],
           report.rows.map(({ level, platform, build, events, meanShakerGain }) => {

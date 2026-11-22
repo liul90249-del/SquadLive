@@ -25,7 +25,7 @@ test('requests a read-only token and reports real event counts and average gain 
     metricValues: [{ value: String(count) }],
   });
   const report = createSandBusAnalytics({
-    propertyId: '563966794', credentialsJson,
+    propertyId: '563966794', credentialsJson, now: () => Date.parse('2026-11-22T16:30:00Z'),
     async fetcher(url, options) {
       if (url === 'https://oauth2.googleapis.com/token') {
         tokenRequests++;
@@ -42,6 +42,8 @@ test('requests a read-only token and reports real event counts and average gain 
       assert.ok(requests[1].dimensions.some(({ name }) => name === 'customEvent:sb_level'));
       assert.deepEqual(requests[1].metrics, [{ name: 'eventCount' }]);
       assert.equal(requests[2].dimensionFilter.filter.stringFilter.value, 'sb_shaker_settled');
+      assert.deepEqual(requests[3].metrics, [{ name: 'activeUsers' }, { name: 'newUsers' }]);
+      assert.deepEqual(requests[4].dimensions, [{ name: 'eventName' }]);
       return Response.json({ reports: [
         { rows: [{ metricValues: [{ value: '4' }, { value: '2' }] }] },
         {
@@ -58,6 +60,13 @@ test('requests a read-only token and reports real event counts and average gain 
           dimensionValues: ['iOS', '1.0', '30'].map(value => ({ value })),
           metricValues: [{ value: '13.5' }, { value: '2' }],
         }] },
+        { metadata: { timeZone: 'Asia/Shanghai' }, rows: [{
+          dimensionValues: [{ value: '20261123' }],
+          metricValues: [{ value: '3' }, { value: '2' }],
+        }] },
+        { rows: [{
+          dimensionValues: [{ value: 'sb_level_start' }], metricValues: [{ value: '9' }],
+        }] },
       ] });
     },
   });
@@ -66,6 +75,10 @@ test('requests a read-only token and reports real event counts and average gain 
   assert.equal(reportRequests, 2);
   assert.deepEqual(results[0], results[1]);
   assert.deepEqual(results[0].players, { active: 4, new: 2 });
+  assert.equal(results[0].daily.length, 7);
+  assert.deepEqual(results[0].daily.at(-1), { date: '2026-11-23', active: 3, new: 2 });
+  assert.deepEqual(results[0].daily[0], { date: '2026-11-17', active: 0, new: 0 });
+  assert.equal(results[0].eventTotals.sb_level_start, 9);
   assert.deepEqual(results[0].rows.map(({ level }) => level), ['3', '30']);
   assert.equal(results[0].rows[0].meanShakerGain, null);
   assert.equal(results[0].rows[1].meanShakerGain, 13.5);
@@ -86,7 +99,7 @@ test('realtime reports request recent gameplay events and keep both mobile platf
     metricValues: [{ value: String(count) }],
   });
   const report = createSandBusAnalytics({
-    propertyId: '563966794', credentialsJson,
+    propertyId: '563966794', credentialsJson, now: () => Date.parse('2026-11-22T16:30:00Z'),
     async fetcher(url, options) {
       if (url === 'https://oauth2.googleapis.com/token') {
         return Response.json({ access_token: 'test-token', expires_in: 3600 });
@@ -111,4 +124,24 @@ test('realtime reports request recent gameplay events and keep both mobile platf
       { platform: 'Android', event: 'sb_first_transfer', count: 3 },
     ],
   });
+});
+
+test('daily suppressed dates remain unknown, while aggregate events survive missing level rows', async () => {
+  const report = createSandBusAnalytics({
+    propertyId: '563966794', credentialsJson, now: () => Date.parse('2026-11-22T16:30:00Z'),
+    async fetcher(url) {
+      if (url === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'test-token', expires_in: 3600 });
+      return Response.json({ reports: [
+        {}, {}, {},
+        { metadata: { timeZone: 'Asia/Shanghai', subjectToThresholding: true } },
+        { rows: [{ dimensionValues: [{ value: 'sb_level_complete' }], metricValues: [{ value: '2' }] }] },
+      ] });
+    },
+  });
+  const result = await report(7);
+  assert.equal(result.daily.at(-1).date, '2026-11-23');
+  assert.ok(result.daily.every(day => day.new === null && day.active === null));
+  assert.equal(result.eventTotals.sb_level_complete, 2);
+  assert.deepEqual(result.rows, []);
+  assert.equal(result.limited, true);
 });
