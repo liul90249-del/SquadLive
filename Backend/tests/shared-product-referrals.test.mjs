@@ -181,3 +181,29 @@ test('turning off new Singular enrollment keeps delivery for already opted-in ac
   purchaseDate:180000,price:9900,currency:'USD',appAccountToken:first.account_token,type:'Auto-Renewable Subscription'},'apple proof');
  assert.equal(events.length,1);
 });
+
+test('CatSwipe installation retry preserves identity and gameplay retry is counted once', async () => {
+ const root = {};
+ const now = Date.UTC(2026, 10, 22, 6);
+ const service = createSharedProductReferrals({
+  getStore: async () => root, saveStore: async () => {}, products: { catswipe: {} },
+  clients: {}, now: () => now,
+ });
+ const body = { deviceId: '12345678-1234-4234-8234-123456789abc', credential: 'anon_' + 'a'.repeat(43),
+  createInstallation: true, clientInfo: { appVersion: '1.0.11', deviceModel: 'iPhone' } };
+ const first = await service.session('catswipe', body);
+ const retry = await service.session('catswipe', body);
+ assert.equal(first.user_id, retry.user_id);
+ assert.equal(Object.keys(root.sharedPartnerReferrals.catswipe.accounts).length, 1);
+ const events = [{ id: '12345678-1234-4234-8234-123456789abd', name: 'sound_play', occurredAt: now,
+  parameters: { sound_name: 'happy' } }];
+ await service.gameplay('Bearer ' + first.token, { events });
+ await service.gameplay('Bearer ' + first.token, { events });
+ const account = root.sharedPartnerReferrals.catswipe.accounts[first.user_id];
+ assert.equal(account.gameplayDaily['2026-11-22'].sound_play, 1);
+ assert.equal(account.gameplayRecent.length, 1);
+ assert.equal(account.clientInfo.appVersion, '1.0.11');
+ await assert.rejects(service.gameplay('Bearer invalid', { events }), { status: 401 });
+ await assert.rejects(service.gameplay('Bearer ' + first.token, { events: [{ ...events[0], name: 'unexpected' }] }), { status: 400 });
+ await assert.rejects(service.session('catswipe', { ...body, credential: 'anon_' + 'b'.repeat(43) }), { status: 401 });
+});

@@ -663,10 +663,7 @@
           <div class="panel-head"><h2>每日玩家</h2></div>
           <div id="catswipeDaily" class="table-scroll" tabindex="0" role="region" aria-label="每日玩家数据"></div>
         </div>
-        <div class="panel">
-          <div class="panel-head"><h2>用户记录</h2></div>
-          <p class="sub">当前版本通过 Firebase 提供匿名玩家与游戏行为统计。新增玩家按首次打开游戏统计。逐用户身份记录尚未接入，历史姓名、邮箱和安装身份明细无法从汇总报表恢复。</p>
-        </div>
+        <div id="catswipeDetails"></div>
       </section>
       <section class="section" id="section-product">
         <div class="panel"><div class="panel-head"><h2 id="productHeading">产品数据</h2><span class="sub" id="productNotice"></span></div><div class="cards" id="productCards"></div></div>
@@ -940,10 +937,10 @@
             <span class="metric-period">${escapeHTML(totalLabel)}</span>
             <div class="value">${totalValue}</div>
           </div>
-          <div class="metric-value-column today">
+          ${todayValue === null ? '' : `<div class="metric-value-column today">
             <span class="metric-period">${escapeHTML(todayLabel)}</span>
             <div class="value">${todayValue}</div>
-          </div>
+          </div>`}
         </div>
       </div>`;
     }
@@ -1546,9 +1543,11 @@
       const status = document.getElementById('catswipeStatus');
       const cards = document.getElementById('catswipeCards');
       const daily = document.getElementById('catswipeDaily');
+      const details = document.getElementById('catswipeDetails');
       status.textContent = '正在读取 Firebase 数据…';
       cards.replaceChildren();
       daily.replaceChildren();
+      details.replaceChildren();
       try {
         const report = await api(`/v1/admin/products/catswipe/analytics?days=${days}`);
         if (state.product !== 'catswipe' || version !== catSwipeLoadVersion) return;
@@ -1565,17 +1564,24 @@
         cards.innerHTML = [
           ['活跃玩家', report.audience.activeUsers, '所选日期内的去重活跃玩家'],
           ['新增玩家', report.audience.newUsers, '所选日期内首次打开游戏的玩家'],
+          ['会话数', report.audience.sessions, 'Firebase 记录的会话次数'],
           ['开始游戏', report.events.game_start ?? 0, '开始游戏次数'],
           ['结束游戏', report.events.game_end ?? 0, '确认退出游戏次数'],
           ['打开猫咪声音', report.events.cat_sounds_open ?? 0, '打开猫咪声音页面次数'],
           ['播放猫咪声音', report.events.sound_play ?? 0, '点击播放次数'],
-        ].map(([label, value, tooltip]) => metricCard(label, value, '—', tooltip, '区间', '')).join('');
+        ].map(([label, value, tooltip]) => metricCard(label, value, null, tooltip, '区间', '')).join('');
         daily.innerHTML = table(
           ['日期', '活跃玩家', '新增玩家'],
           report.daily.map(({ date, activeUsers, newUsers }) =>
             `<tr>${[date, activeUsers, newUsers].map(value => `<td>${escapeHTML(value)}</td>`).join('')}</tr>`),
           '所选时段暂无玩家数据。',
         );
+        const [operationsResult, view] = await Promise.all([
+          api(`/v1/admin/products/catswipe/operations?days=90&gameplayDays=${days}`).catch(() => null),
+          import('/catswipe-admin.mjs'),
+        ]);
+        if (state.product !== 'catswipe' || version !== catSwipeLoadVersion) return;
+        view.renderCatSwipeDetails({root: details, report, operations: operationsResult, apiPost, refresh: loadCatSwipe});
       } catch (error) {
         if (state.product === 'catswipe' && version === catSwipeLoadVersion) status.textContent = error.message;
       }

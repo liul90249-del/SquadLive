@@ -1,4 +1,5 @@
 import { createSandBusPlayers, sandBusPlayersReport } from './sandbus-players.mjs';
+import { catSwipeActivity } from './catswipe-events.mjs';
 import { createCatSwipeAnalytics, CATSWIPE_REPORT_DAYS } from './catswipe-analytics.mjs';
 import {createWebFunnel,webFunnelDataset} from './web-funnel.mjs';
 import {createSandBusAnalytics,SANDBUS_REPORT_DAYS} from './sandbus-analytics.mjs';
@@ -167,7 +168,7 @@ const cleanerCatalog = createCleanerCatalogReader({
  subscriptionId: process.env.ASC_CLEANER_WEEKLY_SUBSCRIPTION_ID
 });
 const policyCatalog=createPolicyCatalogReader({keyId:process.env.ASC_API_KEY_ID,issuerId:process.env.ASC_API_ISSUER_ID,privateKey:process.env.ASC_API_PRIVATE_KEY,weeklySubscriptionId:process.env.ASC_CLEANER_WEEKLY_SUBSCRIPTION_ID});
-sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:inboxProducts,
+sharedProductReferrals=createSharedProductReferrals({getStore,saveStore,clients:sharedPartnerClients,products:{...inboxProducts,catswipe:{}},
  singularClients:cleanerSingularClient?{cleaner:cleanerSingularClient}:{},
  singularEnrollments:{cleaner:process.env.SINGULAR_S2S_CLEANER_ENABLED==='true'},
  onSession:(store,account,req)=>recordUserNetwork(store,account,req)});
@@ -1471,10 +1472,15 @@ async function route(req, res) {
     if (!allowWebReturnRequest(req,'sandbus')) return jsonResponse(res,429,{error:'Please try again later'});
     return jsonResponse(res,200,await sandBusPlayers.collect(await readJSON(req),req));
   }
+  if(req.method==='POST'&&url.pathname==='/v1/partners/catswipe/events'){
+    if(!allowWebReturnRequest(req,'catswipe'))return jsonResponse(res,429,{error:'Please try again later'});
+    return jsonResponse(res,200,await sharedProductReferrals.gameplay(req.headers.authorization,await readJSON(req),req));
+  }
   const sharedSessionRoute=/^\/v1\/partners\/([a-z]+)\/session$/.exec(url.pathname);
   if(req.method==='POST'&&sharedSessionRoute){
     const product=sharedSessionRoute[1];
-    if(!sharedPartnerClients[product])return jsonResponse(res,503,{error:'Referral service is not configured'});
+    if(product!=='catswipe'&&!sharedPartnerClients[product])return jsonResponse(res,503,{error:'Referral service is not configured'});
+    if(product==='catswipe'&&!allowWebReturnRequest(req,'catswipe'))return jsonResponse(res,429,{error:'Please try again later'});
     return jsonResponse(res,200,await sharedProductReferrals.session(product,await readJSON(req),req));
   }
   const sparkleSharingRoute=/^\/v1\/partners\/sparkle\/(share-link|rewards)$/.exec(url.pathname);
@@ -1552,7 +1558,7 @@ async function route(req, res) {
     return res.end(html);
   }
 
-  if (req.method === "GET" && ["/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-health.mjs", "/admin-preferences.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs", "/web-return-report.mjs", "/admin-marketing-paths.mjs", "/marketing-paths-report.mjs", "/marketing-time.mjs"].includes(url.pathname)) {
+  if (req.method === "GET" && ["/catswipe-admin.mjs", "/admin-appearance.css", "/admin-appearance.js", "/admin-insights.css", "/admin-insights.mjs", "/admin-refresh.mjs", "/admin-health.mjs", "/admin-preferences.mjs", "/admin-insights-core.mjs", "/admin-subscriptions.mjs", "/admin-subscriptions.css", "/admin-paywall.mjs", "/admin-marketing.mjs", "/admin-marketing.css", "/marketing-core.mjs", "/web-return-report.mjs", "/admin-marketing-paths.mjs", "/marketing-paths-report.mjs", "/marketing-time.mjs"].includes(url.pathname)) {
     const content = await readFile(join(__dirname, url.pathname.slice(1)), "utf8");
     res.writeHead(200, { "content-type": url.pathname.endsWith('.css')
       ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" });
@@ -2448,6 +2454,7 @@ async function route(req, res) {
       const operations=productOperations(store,product,Date.now(),verifiedReceipts,historyDays);
       const lifecycle=product==='cleaner'?await readSubscriptionLifecycle(dataDir,product):null;
       return jsonResponse(res, 200, { ...operations,
+        gameplay:product==='catswipe'?catSwipeActivity(Object.values(store.sharedPartnerReferrals?.catswipe?.accounts||{}),([7,30,90].includes(Number(url.searchParams.get('gameplayDays')))?Number(url.searchParams.get('gameplayDays')):90),Date.now()):null,
         marketing:{...marketingDataset(store,product,operations),webReturns:product==='cleaner'?webReturnDataset(store):null,webFunnel:product==='cleaner'?webFunnelDataset(store):null,meta:product==='cleaner'?await metaSync.status():null,metaReports:product==='cleaner'?metaReportDataset(store):null,applovin:product==='cleaner'?await applovinSync.status():null},
         subscriptions:lifecycle?subscriptionAnalytics(operations,lifecycle,store.sharedPartnerReferrals?.[product]?.accountTokens):null,
         connected: Boolean(inboxProducts[product]),

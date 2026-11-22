@@ -167,6 +167,12 @@ export function productOperations(store, product, now = Date.now(), verifiedRece
     users: accounts.map(account => ({
       id: account.id,
       deviceId: account.deviceId || null,
+      clientInfo: account.clientInfo || null,
+      gameplayTrackedFrom: account.gameplayTrackedFrom || null,
+      gameplayCounts: product === 'catswipe' ? Object.values(account.gameplayDaily || {}).reduce((counts, events) => {
+        for (const [name, count] of Object.entries(events)) counts[name] = (counts[name] || 0) + count;
+        return counts;
+      }, {}) : null,
       hasCompletedCleanup: account.hasCompletedCleanup===true ? true : account.cleanupTrackedFrom ? false : null,
       firstCleanupAt: iso(account.firstCleanupAt),
       createdAt: account.createdAt,

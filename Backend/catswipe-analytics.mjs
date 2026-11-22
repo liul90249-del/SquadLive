@@ -1,7 +1,6 @@
 import { createAnalyticsDataClient } from './analytics-data.mjs';
 
 export const CATSWIPE_REPORT_DAYS = [7, 30, 90];
-const EVENTS = ['game_start', 'game_end', 'cat_sounds_open', 'sound_play'];
 
 function readCounts(row, metrics) {
   const values = row?.metricValues;
@@ -20,20 +19,25 @@ export function createCatSwipeAnalytics(options) {
     if (!configured) return { status: 'not_configured' };
 
     const dateRanges = [{ startDate: `${days - 1}daysAgo`, endDate: 'today' }];
-    const audienceMetrics = ['activeUsers', 'newUsers'];
-    const eventMetrics = ['eventCount'];
+    const audienceMetrics = ['activeUsers', 'newUsers', 'sessions'];
+    const eventMetrics = ['eventCount', 'totalUsers'];
     const metrics = names => names.map(name => ({ name }));
     const { reports } = await query('batchRunReports', {
       requests: [
         { dateRanges, metrics: metrics(audienceMetrics) },
         { dateRanges, dimensions: [{ name: 'date' }], metrics: metrics(audienceMetrics),
           orderBys: [{ dimension: { dimensionName: 'date' }, desc: true }] },
-        { dateRanges, dimensions: [{ name: 'eventName' }], metrics: metrics(eventMetrics),
-          dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: EVENTS, caseSensitive: true } } } },
+        { dateRanges, dimensions: [{ name: 'eventName' }], metrics: metrics(eventMetrics), limit: '1000' },
+        { dateRanges, dimensions: [{ name: 'country' }, { name: 'city' }],
+          metrics: metrics(['activeUsers', 'newUsers']), limit: '500',
+          orderBys: [{ metric: { metricName: 'activeUsers' }, desc: true }] },
+        { dateRanges, dimensions: [{ name: 'platform' }, { name: 'appVersion' }, { name: 'deviceCategory' }],
+          metrics: metrics(['activeUsers', 'sessions']), limit: '500',
+          orderBys: [{ metric: { metricName: 'activeUsers' }, desc: true }] },
       ],
     });
-    if (reports?.length !== 3) throw new Error('Invalid Analytics reports');
-    const [audience, daily, events] = reports;
+    if (reports?.length !== 5) throw new Error('Invalid Analytics reports');
+    const [audience, daily, events, regions, versions] = reports;
     return {
       status: 'ready',
       timeZone: daily.metadata?.timeZone ?? null,
@@ -42,6 +46,17 @@ export function createCatSwipeAnalytics(options) {
       daily: (daily.rows ?? []).map(row => ({
         date: row.dimensionValues[0].value.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3'),
         ...readCounts(row, audienceMetrics),
+      })),
+      eventRows: (events.rows ?? []).map(row => ({
+        name: row.dimensionValues[0].value, ...readCounts(row, eventMetrics),
+      })).sort((a, b) => b.eventCount - a.eventCount),
+      regions: (regions.rows ?? []).map(row => ({
+        country: row.dimensionValues[0].value, city: row.dimensionValues[1].value,
+        ...readCounts(row, ['activeUsers', 'newUsers']),
+      })),
+      versions: (versions.rows ?? []).map(row => ({
+        platform: row.dimensionValues[0].value, version: row.dimensionValues[1].value,
+        device: row.dimensionValues[2].value, ...readCounts(row, ['activeUsers', 'sessions']),
       })),
       events: Object.fromEntries((events.rows ?? []).map(row => [
         row.dimensionValues[0].value, readCounts(row, eventMetrics).eventCount,

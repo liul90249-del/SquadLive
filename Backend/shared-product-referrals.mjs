@@ -1,3 +1,4 @@
+import { validateCatSwipeEvents, mergeCatSwipeEvents } from './catswipe-events.mjs';
 import {FUNNEL_EVENTS} from './marketing-core.mjs';
 import {validatePaywallEvents,mergePaywallEvents} from './paywall-events.mjs';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
@@ -16,8 +17,9 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
  const clientFor=product=>clients[product]||null;
  const productFor=product=>products[product]||null;
 
- async function session(product,{credential,deviceId,singularSdid,serverRevenueV1,cleanupTrackingV1,hasCompletedCleanup,firstCleanupAt,funnelEvents,funnelTrackingV1,paywallEvents,paywallHistoryIncomplete},req) {
+ async function session(product,{credential,deviceId,singularSdid,serverRevenueV1,cleanupTrackingV1,hasCompletedCleanup,firstCleanupAt,funnelEvents,funnelTrackingV1,paywallEvents,paywallHistoryIncomplete,clientInfo,createInstallation},req) {
   if(!productFor(product))throw fail('Product is not connected',404);
+  if(product==='catswipe' && clientInfo && (typeof clientInfo !== 'object' || Array.isArray(clientInfo) || Object.entries(clientInfo).some(([key,value])=>!['appVersion','build','osVersion','deviceModel','language','environment'].includes(key) || typeof value!=='string' || value.length>80)))throw fail('Invalid app metadata');
   const validatedPaywallEvents=product==='cleaner'?validatePaywallEvents(paywallEvents,now()):[];
   if(product==='cleaner' && cleanupTrackingV1===true && (typeof hasCompletedCleanup!=='boolean' ||
    (firstCleanupAt!==undefined && (!hasCompletedCleanup || !Number.isSafeInteger(firstCleanupAt) || firstCleanupAt<=0 || firstCleanupAt>now()+300000))))throw fail('Invalid cleanup completion metadata');
@@ -28,9 +30,18 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   // its S2S docs showing version 4. Accept SDK-issued canonical UUIDs.
   if(sdid!==null&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(sdid))throw fail('Invalid Singular device identifier');
   const root=await getStore(),s=state(root,product);let account,token;
+  function createAccount(installation,secret){
+   const created={id:'anon_'+randomUUID(),deviceId:installation.toLowerCase(),createdAt:new Date(now()).toISOString(),accountToken:randomUUID()};
+   s.accounts[created.id]=created;s.credentials[hash(secret)]=created.id;
+   s.devices[created.deviceId]={accountId:created.id,createdAt:created.createdAt};
+   s.accountTokens[created.accountToken.toLowerCase()]=created.id;
+   return created;
+  }
   if(credential!==undefined&&credential!==null&&credential!==''){
    if(typeof credential!=='string'||!/^anon_[A-Za-z0-9_-]{43}$/.test(credential))throw fail('Installation credential is invalid',401);
    account=s.accounts[s.credentials[hash(credential)]];token=credential;
+   if(!account&&product==='catswipe'&&createInstallation===true&&typeof deviceId==='string'
+    &&/^[-a-f0-9]{36}$/i.test(deviceId)&&!s.devices[deviceId.toLowerCase()])account=createAccount(deviceId,token);
    if(!account||account.disabled)throw fail('Installation credential is unavailable',401);
   }else{
    if(typeof deviceId!=='string'||!/^[-a-f0-9]{36}$/i.test(deviceId))throw fail('Invalid installation');
@@ -41,10 +52,7 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
     if(account)throw fail('Restore the private installation credential for this device',409);
    }
    token='anon_'+randomBytes(32).toString('base64url');
-   account={id:'anon_'+randomUUID(),deviceId:deviceId.toLowerCase(),createdAt:new Date(now()).toISOString(),accountToken:randomUUID()};
-   s.accounts[account.id]=account;s.credentials[hash(token)]=account.id;
-   s.devices[account.deviceId]={accountId:account.id,createdAt:account.createdAt};
-   s.accountTokens[account.accountToken.toLowerCase()]=account.id;
+   account=createAccount(deviceId,token);
   }
   const seenAt=new Date(now()).toISOString();
   if(sdid)account.singularSdid=sdid;
@@ -55,6 +63,7 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   // to persist the cutover timestamp before any purchase can use S2S.
   if(serverRevenueV1===true&&account.singularSdid&&singularClients[product]&&singularEnrollments[product])account.singularS2SEnabledAt||=now()+60000;
   account.lastSeenAt=seenAt;
+  if(product==='catswipe'&&clientInfo)account.clientInfo={...clientInfo};
   if(product==='cleaner')mergePaywallEvents(account,validatedPaywallEvents,now());
   if(product==='cleaner'&&paywallHistoryIncomplete===true)account.paywallHistoryTruncated=true;
   if(product==='cleaner' && cleanupTrackingV1===true){
@@ -84,6 +93,15 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   const root=await getStore(),s=state(root,product),account=s.accounts[s.credentials[hash(token)]];
   if(!account||account.disabled)throw fail('Installation credential unavailable',401);
   return {root,s,account,token};
+ }
+
+ async function gameplay(authorization,body,req){
+  const events=validateCatSwipeEvents(body?.events,now());
+  const {root,account}=await verify('catswipe',authorization);
+  const accepted=mergeCatSwipeEvents(account,events,now());
+  onSession(root,account,req);
+  await saveStore(root);
+  return {accepted_event_ids:accepted};
  }
 
  async function status(product,authorization){
@@ -252,5 +270,5 @@ export function createSharedProductReferrals({getStore,saveStore,clients,product
   }
  }
 
- return {session,status,shareLink,rewards,acknowledgeReward,preview,bind,recordVerified,drain,drainSingular};
+ return {session,gameplay,status,shareLink,rewards,acknowledgeReward,preview,bind,recordVerified,drain,drainSingular};
 }
