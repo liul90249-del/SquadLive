@@ -1,4 +1,5 @@
 const labels = {
+  app_update: '更新 App', os_update: '系统更新', ad_reward: '激励广告奖励',
   app_open: '打开游戏', first_open: '首次打开', session_start: '会话开始',
   user_engagement: '使用互动', screen_view: '页面浏览',
   game_start: '开始游戏', game_pause: '暂停游戏', game_end: '结束游戏',
@@ -13,7 +14,7 @@ const esc = value => String(value ?? '—').replace(/[&<>"']/g, char => ({
 const time = value => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '—';
 const cells = values => `<tr>${values.map(value => `<td>${esc(value)}</td>`).join('')}</tr>`;
 const table = (headers, rows, empty = '所选时间内暂无记录') => rows.length
-  ? `<div class="table-scroll" tabindex="0"><table><thead>${cells(headers)}</thead><tbody>${rows.join('')}</tbody></table></div>`
+  ? `<div class="table-scroll" tabindex="0"><table><thead><tr>${headers.map(header => `<th scope="col">${esc(header)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`
   : `<p class="sub">${esc(empty)}</p>`;
 
 export function renderCatSwipeDetails({ root, report, operations, apiPost, refresh }) {

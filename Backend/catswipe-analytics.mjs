@@ -49,7 +49,8 @@ export function createCatSwipeAnalytics(options) {
       })),
       eventRows: (events.rows ?? []).map(row => ({
         name: row.dimensionValues[0].value, ...readCounts(row, eventMetrics),
-      })).sort((a, b) => b.eventCount - a.eventCount),
+      })).filter(row => row.name && row.name !== '(not set)' && row.eventCount > 0)
+        .sort((a, b) => b.eventCount - a.eventCount),
       regions: (regions.rows ?? []).map(row => ({
         country: row.dimensionValues[0].value, city: row.dimensionValues[1].value,
         ...readCounts(row, ['activeUsers', 'newUsers']),
