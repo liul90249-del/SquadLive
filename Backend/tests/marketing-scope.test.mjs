@@ -35,7 +35,8 @@ test('Cleaner shows Meta account-day totals even when the UTC import has zero sp
  const acquiredAt='2026-11-17T23:00:00Z';
  const users=[{id:'linked',createdAt:acquiredAt,acquiredAt,events:{},singularDeviceAttributed:true,
   attribution:{acquiredAt,channel:'facebook',campaignId:'123456',adGroupId:'234567',creativeId:'345678'}}];
- const html=marketingHTML({...data,users,now,meta:{timezone},metaReports:{rows},
+ const orders=[{accountId:'linked',isFreeTrial:true,priceMilliunits:0,purchasedAt:'2026-11-17T23:00:01Z'}];
+ const html=marketingHTML({...data,users,orders,now:now+2000,meta:{timezone},metaReports:{rows},
   costs:[{date:'2026-11-17',channel:'applovin',currency:'USD',spendMilliunits:0,impressions:0,clicks:0,installs:0}]});
  const meta=section(html,'market-meta-summary'), imported=section(html,'market-ad-summary');
  assert.match(meta,/2026-11-18（Asia\/Shanghai）/);
@@ -47,5 +48,5 @@ test('Cleaner shows Meta account-day totals even when the UTC import has zero sp
  assert.match(imported,/<strong>USD 0\.00<\/strong>/);
  assert.doesNotMatch(imported,/37\.49/);
  assert.match(html,/Singular 已关联用户/);
- assert.match(html,/Meta \/ clean-01 \/ US \/ clean-01-ad<\/td><td>USD 37\.49<\/td><td>474<\/td><td>90<\/td><td>19\.0%<\/td><td>—<\/td><td>1<\/td>/);
+ assert.match(html,/Meta \/ clean-01 \/ US \/ clean-01-ad<\/button><small>Asia\/Shanghai<\/small><\/td><td>USD 37\.49<\/td><td>474<\/td><td>90<\/td><td>19\.0%<\/td><td>—<\/td><td>—<\/td><td>1<\/td><td>37\.49<\/td><td>1<\/td><td>37\.49<\/td><td>0<\/td><td>—<\/td>/);
 });

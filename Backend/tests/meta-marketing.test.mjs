@@ -105,6 +105,7 @@ test('Meta spend and device-linked Singular users share ad IDs and local reporti
  const {breakdown,totals}=buildMarketingPathsReport({rows:[{...meta,timezone:filters.timezone}]},{...filters,level:'creative'},users);
  assert.deepEqual(breakdown.map(row=>[row.spendMilliunits,row.appInstalls,row.singularUsers]),[[50250,0,1],[null,null,1]]);
  assert.equal(totals.appInstalls,0);
+ assert.deepEqual(breakdown.map(row=>row.hasCostForAcquiredUsers),[true,false]);
  assert.equal(buildMarketingPathsReport({rows:[meta]},filters,users).breakdown[0].singularUsers,3);
  assert.equal(buildMarketingPathsReport({rows:[meta]},{...filters,creativeId:meta.adId,level:'creative'},users).breakdown.length,1);
 });

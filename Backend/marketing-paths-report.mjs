@@ -31,7 +31,7 @@ export function buildMarketingPathsReport(data,{start='',end='',currency='USD',c
   const ids=[row.campaignId,row.adGroupId,row.adId].slice(0,depth);
   const names=[row.campaignName,row.adGroupName,row.adName].slice(0,depth);
   const key=JSON.stringify(ids);
-  if(!platformGroups.has(key))platformGroups.set(key,{ids,names,rows:[],singularUsers:new Set()});
+  if(!platformGroups.has(key))platformGroups.set(key,{ids,names,rows:[],singularUsers:new Map()});
   platformGroups.get(key).rows.push(row);
  }
  // Compare the same local dates, joining strictly by IDs at the selected level.
@@ -48,15 +48,21 @@ export function buildMarketingPathsReport(data,{start='',end='',currency='USD',c
   const key=JSON.stringify(ids);
   if(!platformGroups.has(key)){
    const names=[a.campaignName,a.adGroupName,a.creativeName].slice(0,depth);
-   platformGroups.set(key,{ids,names,rows:[],singularUsers:new Set()});
+   platformGroups.set(key,{ids,names,rows:[],singularUsers:new Map()});
   }
-  platformGroups.get(key).singularUsers.add(user.id);
+  platformGroups.get(key).singularUsers.set(user.id,date);
  }
- const breakdown=[...platformGroups.values()].map(group=>({
+ const breakdown=[...platformGroups.values()].map(group=>{
+  const costDates=new Set(group.rows.filter(row=>Number.isFinite(row.spendMilliunits)).map(row=>row.date));
+  return {
   label:['Meta',...group.ids.map((id,i)=>group.names[i]||id)].join(' / '),
+  campaignId:group.ids[0]||'',adGroupId:group.ids[1]||'',creativeId:group.ids[2]||'',
   singularUsers:group.singularUsers.size,
+  singularUserIds:[...group.singularUsers.keys()],
+  hasCostForAcquiredUsers:[...group.singularUsers.values()].every(date=>costDates.has(date)),
   ...summarize(group.rows)
- })).sort((a,b)=>b.spendMilliunits-a.spendMilliunits||a.label.localeCompare(b.label));
+  };
+ }).sort((a,b)=>b.spendMilliunits-a.spendMilliunits||a.label.localeCompare(b.label));
 
  return {rows,routes,breakdown,totals:summarize(rows),currency,timezones:[...new Set(rows.map(r=>r.timezone))],source:'Meta Ads Insights',actionReportTime:'impression',appleRevenueIncluded:false};
 }

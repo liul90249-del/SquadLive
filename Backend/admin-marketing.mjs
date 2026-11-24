@@ -3,7 +3,7 @@ import {buildMarketingPathsReport} from './marketing-paths-report.mjs';
 import {marketingPathsHTML,webFunnelHTML} from './admin-marketing-paths.mjs';
 import {buildWebReturnReport} from './web-return-report.mjs';
 import {readPreference,savePreference} from './admin-preferences.mjs';
-import {buildMarketingReport,buildGrowthReport,growthDrilldown,dateOf,DAY,RETURN_WINDOWS,GROWTH_DAYS,marketingSyncHealth} from './marketing-core.mjs';
+import {buildMarketingReport,sourceKey,buildGrowthReport,growthDrilldown,dateOf,DAY,RETURN_WINDOWS,GROWTH_DAYS,marketingSyncHealth} from './marketing-core.mjs';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>v===null||v===undefined?'—':(v/1000).toLocaleString('zh-CN',{maximumFractionDigits:2,minimumFractionDigits:2});
 const pct=v=>v===null||v===undefined?'—':v.toFixed(1)+'%';
@@ -131,6 +131,21 @@ function changed(){
   for(const [product,s] of states)savePreference(product,'marketing',Object.fromEntries(['scopeVersion','start','end','rangeDays','channel','currency','level','growthDimension','growthGroup','growthColumns'].map(k=>[k,s[k]])));
   window.dispatchEvent(new Event('admin-marketing-change'));
 }
+function metaAcquisitionRows(data,filters,breakdown){
+  const linkedIds=new Set(breakdown.flatMap(row=>row.singularUserIds));
+  const users=data.users.filter(user=>linkedIds.has(user.id)).map(user=>({
+    ...user,acquiredAt:user.attribution.acquiredAt,attribution:{...user.attribution,channel:'facebook'}
+  }));
+  const cohorts=buildMarketingReport({...data,users,costs:[]},{currency:filters.currency,level:filters.level});
+  const groups=new Map(cohorts.groups.map(row=>[sourceKey(row),row]));
+  return breakdown.map((row,i)=>{
+    const cohort=groups.get(sourceKey({...row,channel:'facebook'}));
+    const paid=cohort?.paid||0,trial=cohort?.trial||0;
+    const spend=row.spendMilliunits, divisorSpend=row.hasCostForAcquiredUsers?spend:null;
+    const unitCost=(amount,count)=>money(amount!==null&&count>0?amount/count:null);
+    return `<tr><td><button class="market-link" data-market="drill-meta" data-row="${i}">${esc(row.label)}</button><small>${esc(filters.timezone)}</small></td><td>${spend===null?'—':esc(filters.currency)+' '+money(spend)}</td><td>${row.impressions??'—'}</td><td>${row.clicks??'—'}</td><td>${pct(ratio(row.clicks,row.impressions))}</td><td>${row.appInstalls??'—'}</td><td>${unitCost(spend,row.appInstalls)}</td><td>${row.singularUsers}</td><td>${unitCost(divisorSpend,row.singularUsers)}</td><td>${trial}</td><td>${unitCost(divisorSpend,trial)}</td><td>${paid}</td><td>${unitCost(divisorSpend,paid)}</td><td>${money(cohort?.net||0)}</td></tr>`;
+  });
+}
 export function marketingHTML(data) {
   if(!data)return '<div class="insight-empty">广告数据接口尚未接入当前后台版本。</div>';
   activeProduct=data.product;datasets.set(data.product,data);const s=state(data),r=buildMarketingReport(data,s);
@@ -179,8 +194,9 @@ export function marketingHTML(data) {
   <p class="scope-note">行为未采集 ${r.quality.funnelUnknown} 人 · 更新后才开始采集 ${r.quality.funnelPartial} 人。旁路行为不强制先后，首次发生记录不代表当天发生次数。</p></section>
   ${webFunnelHTML(data,s)}
   ${data.product==='cleaner'?`<section class="insight-surface"><header><h2>Web → App 来源关联 · 后台实测</h2></header><p class="scope-note">仅统计用户同意衡量、下载后返回网页点击“打开 App”而完成的来源关联。按网页下载点击的北京时间（UTC+8）日期和上方日期、币种筛选；“今天”在北京时间 00:00 换日；跟随上方渠道及广告层级筛选。活动名称来自网页链接，未经广告平台认证；不等同于 Singular 安装归因，不并入安装数或广告 ROAS。仅显示绑定之后的已验证正式扣款，包含续费并扣除已知退款。新账号表示后台账号在点击后创建，不代表已验证的新安装。</p>${table(['点击日 / 网页来源','下载点击','关联账号','新账号 / 已有账号','付费账号','扣款笔数','关联净扣款'],webReturn.rows.map(row=>`<tr><td>${esc(row.date)}<small>${esc([row.campaign.utm_source,row.campaign.utm_campaign||row.campaign.campaign_id,row.campaign.adset_name||row.campaign.adset_id,row.campaign.utm_content||row.campaign.ad_id].filter(Boolean).join(' / '))}</small></td><td>${row.downloadClicks}</td><td>${row.associatedAccounts}</td><td>${row.newAccounts} / ${row.existingAccounts}</td><td>${row.payers}</td><td>${row.paidOrders}</td><td>${esc(s.currency)} ${money(row.netMilliunits)}</td></tr>`))}</section>`:''}
-  <section class="insight-surface"><header><h2>渠道与素材表现</h2><button data-market="export">导出 UTC 获客表 CSV</button></header>${showMeta?`<h3>Meta 投放与 Singular 用户归因</h3><p class="scope-note">${esc(metaFilters.start)}${metaFilters.start!==metaFilters.end?' 至 '+esc(metaFilters.end):''}（${esc(metaFilters.timezone)}） · ${esc(({channel:'渠道',campaign:'广告系列',adGroup:'广告组',creative:'广告素材'})[s.level]||'广告系列')} · Meta 按广告曝光日统计，Singular 按首次安装日统计。Singular 列仅计入通过设备标识匹配到后台的用户。</p>
-  ${table(['来源 / 广告层级','Meta 花费','展示','点击','点击率',h('Meta App 安装','meta-installs'),'Singular 已关联用户'],metaReport.breakdown.map(v=>`<tr><td>${esc(v.label)}</td><td>${esc(s.currency)} ${money(v.spendMilliunits)}</td><td>${v.impressions??'—'}</td><td>${v.clicks??'—'}</td><td>${pct(ratio(v.clicks,v.impressions))}</td><td>${v.appInstalls??'—'}</td><td>${v.singularUsers}</td></tr>`), '当前筛选范围暂无 Meta 报表或 Singular 设备归因。')}`:''}
+  <section class="insight-surface"><header><h2>渠道与素材表现</h2><button data-market="export">导出 UTC 获客表 CSV</button></header>
+  ${showMeta?`<h3>Meta 投放与 Singular 获客成本</h3><p class="scope-note">${esc(metaFilters.start)}${metaFilters.start!==metaFilters.end?' 至 '+esc(metaFilters.end):''}（${esc(metaFilters.timezone)}） · Meta 按广告曝光日统计，Singular 按首次安装日统计。获客成本、试用成本和首次付费成本分别以已关联用户、苹果验证试用用户和首次扣款用户为分母。分母为 0 或用户获客日缺少花费时显示 —。</p>
+  ${table(['来源',h('Meta 花费','meta-spend'),'展示','点击','点击率',h('Meta 安装','meta-installs'),h('安装成本','cpi'),'Singular 已关联用户','每位获客成本','已验证试用','每位试用成本','实际付费','首次付费成本','已关联净扣款'],metaAcquisitionRows(data,metaFilters,metaReport.breakdown))}`:''}
   <h3>UTC 导入数据与获客归因</h3><p class="scope-note">点击来源继续下钻。Meta 账户日花费见上表。此表花费取 UTC 成本记录；素材花费按实际导入层级显示。${h('归因范围','coverage')}</p>
   ${table(['来源',h('花费','spend'),'展示','点击',h('点击率','ctr'),'报表安装',h('安装成本','cpi'),h('新增用户（按安装 ID 去重）','users'),'试用',h('实际付费','paid'),h('首次付费成本','cpp'),h('已关联净扣款','net')],r.groups.map((g,i)=>`<tr><td><button class="market-link" data-market="drill" data-row="${i}">${esc(title(g))}</button></td><td>${g.costRows?money(g.spend):'未导入'}${g.missingCostCohorts?'<small>部分日期缺成本</small>':''}</td><td>${g.costRows?g.impressions:'—'}</td><td>${g.costRows?g.clicks:'—'}</td><td>${pct(g.costRows?ratio(g.clicks,g.impressions):null)}</td><td>${g.costRows?g.installs:'—'}</td><td>${money(g.costRows&&g.installs?g.spend/g.installs:null)}</td><td>${g.users}</td><td>${g.trial}</td><td>${g.paid}</td><td>${money(g.costRows&&!g.missingCostCohorts&&g.matchedPayers?g.spend/g.matchedPayers:null)}</td><td>${money(g.net)}</td></tr>`))}</section>
   ${growthHTML(data,s)}
@@ -256,8 +272,12 @@ document.addEventListener('click',async event=>{
   if(action==='more')s.limit+=30;
   if(action==='clear-path'){s.channel='';s.campaignId='';s.adGroupId='';s.creativeId='';}
   if(action==='reset'){savePreference(product,'marketing',{});states.delete(product);}
-  if(action==='drill'){
-    const row=buildMarketingReport(data,s).groups[Number(b.dataset.row)];if(!row)return;
+  if(action==='drill'||action==='drill-meta'){
+    const index=Number(b.dataset.row);
+    const metaRow=action==='drill-meta'
+      ?buildMarketingPathsReport(data.metaReports,platformDateFilters(data,s),data.users).breakdown[index]:null;
+    const row=action==='drill-meta'?(metaRow&&{...metaRow,channel:'facebook'}):buildMarketingReport(data,s).groups[index];
+    if(!row)return;
     s.channel=row.channel;
     if(s.level==='channel')s.level='campaign';
     else if(s.level==='campaign'&&row.campaignId){s.campaignId=row.campaignId;s.level='adGroup';}
