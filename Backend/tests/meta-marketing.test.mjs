@@ -91,3 +91,20 @@ test('batch metadata error 100 still synchronizes verified Cleaner spend via ind
  assert.equal(root.cleanerMetaReports.rows[0].route, 'web_to_app');
  assert.equal(root.cleanerMetaReports.rows[0].spendMilliunits, 50250);
 });
+test('Meta spend and device-linked Singular users share ad IDs and local reporting dates',()=>{
+ const [meta]=rows();
+ const attribution={acquiredAt:'2026-10-31T17:30:00Z',channel:'facebook',
+  campaignId:meta.campaignId,adGroupId:meta.adGroupId,creativeId:meta.adId,creativeName:'Singular ad name'};
+ const linked={id:'linked',singularDeviceAttributed:true,attribution};
+ const users=[linked,linked,
+  {...linked,id:'outside',attribution:{...attribution,acquiredAt:'2026-11-01T16:00:00Z'}},
+  {id:'not-device-linked',attribution},
+  {...linked,id:'missing-detail',attribution:{...attribution,creativeId:''}},
+  {...linked,id:'different-ad',attribution:{...attribution,creativeId:'999999'}}];
+ const filters={start:'2026-11-01',end:'2026-11-01',timezone:'Asia/Shanghai'};
+ const {breakdown,totals}=buildMarketingPathsReport({rows:[{...meta,timezone:filters.timezone}]},{...filters,level:'creative'},users);
+ assert.deepEqual(breakdown.map(row=>[row.spendMilliunits,row.appInstalls,row.singularUsers]),[[50250,0,1],[null,null,1]]);
+ assert.equal(totals.appInstalls,0);
+ assert.equal(buildMarketingPathsReport({rows:[meta]},filters,users).breakdown[0].singularUsers,3);
+ assert.equal(buildMarketingPathsReport({rows:[meta]},{...filters,creativeId:meta.adId,level:'creative'},users).breakdown.length,1);
+});

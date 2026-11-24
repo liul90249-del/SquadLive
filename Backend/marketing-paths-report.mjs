@@ -1,11 +1,14 @@
+import {reportingDate} from './marketing-time.mjs';
+
 // Advertising-platform outcomes remain separate from first-party associations
 // and Apple-verified orders. Never add overlapping Meta action aliases.
 export const ROUTE_NAMES={web:'Web · 网页内转化',web_to_app:'Web → App · 网页引导下载',app_direct:'App · 直接投放',unknown:'目的地待核对'};
-export function buildMarketingPathsReport(data,{start='',end='',currency='USD',channel='',campaignId='',adGroupId='',creativeId='',level='campaign'}={}){
+const isMetaChannel=channel=>['facebook','meta','facebook ads'].includes(channel?.toLowerCase());
+export function buildMarketingPathsReport(data,{start='',end='',currency='USD',channel='',campaignId='',adGroupId='',creativeId='',level='campaign',timezone}={},users=[]){
  const conversionFields=['landingPageViews','webCheckouts','webPurchases','webPurchaseMilliunits','appInstalls','appPurchases','appPurchaseMilliunits'];
  const groups=new Map();
  for(const r of data?.rows||[]){
-  if(r.currency!==currency||start&&r.date<start||end&&r.date>end||channel&&!['facebook','meta','facebook ads'].includes(channel.toLowerCase())||campaignId&&r.campaignId!==campaignId||adGroupId&&r.adGroupId!==adGroupId||creativeId&&r.adId!==creativeId)continue;
+  if(r.currency!==currency||start&&r.date<start||end&&r.date>end||channel&&!isMetaChannel(channel)||campaignId&&r.campaignId!==campaignId||adGroupId&&r.adGroupId!==adGroupId||creativeId&&r.adId!==creativeId)continue;
   const key=JSON.stringify([r.date,r.timezone,r.route,r.campaignId,r.adGroupId,r.adId]);
   if(groups.has(key))continue;
   const a=r.actions||{},v=r.actionValues||{};
@@ -28,11 +31,30 @@ export function buildMarketingPathsReport(data,{start='',end='',currency='USD',c
   const ids=[row.campaignId,row.adGroupId,row.adId].slice(0,depth);
   const names=[row.campaignName,row.adGroupName,row.adName].slice(0,depth);
   const key=JSON.stringify(ids);
-  if(!platformGroups.has(key))platformGroups.set(key,{ids,names,rows:[]});
+  if(!platformGroups.has(key))platformGroups.set(key,{ids,names,rows:[],singularUsers:new Set()});
   platformGroups.get(key).rows.push(row);
+ }
+ // Compare the same local dates, joining strictly by IDs at the selected level.
+ for(const user of users){
+  const a=user.attribution;
+  if(!user.singularDeviceAttributed||!user.id||!isMetaChannel(a?.channel)||channel&&!isMetaChannel(channel))continue;
+  if(campaignId&&a.campaignId!==campaignId||adGroupId&&a.adGroupId!==adGroupId||creativeId&&a.creativeId!==creativeId)continue;
+  const acquiredAt=new Date(a.acquiredAt);
+  if(!a.acquiredAt||!Number.isFinite(acquiredAt.getTime()))continue;
+  const date=reportingDate(acquiredAt,timezone);
+  if(start&&date<start||end&&date>end)continue;
+  const ids=[a.campaignId,a.adGroupId,a.creativeId].slice(0,depth);
+  if(ids.some(id=>!id))continue;
+  const key=JSON.stringify(ids);
+  if(!platformGroups.has(key)){
+   const names=[a.campaignName,a.adGroupName,a.creativeName].slice(0,depth);
+   platformGroups.set(key,{ids,names,rows:[],singularUsers:new Set()});
+  }
+  platformGroups.get(key).singularUsers.add(user.id);
  }
  const breakdown=[...platformGroups.values()].map(group=>({
   label:['Meta',...group.ids.map((id,i)=>group.names[i]||id)].join(' / '),
+  singularUsers:group.singularUsers.size,
   ...summarize(group.rows)
  })).sort((a,b)=>b.spendMilliunits-a.spendMilliunits||a.label.localeCompare(b.label));
 

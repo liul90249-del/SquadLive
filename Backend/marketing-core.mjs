@@ -18,8 +18,9 @@ export function marketingDataset(store,product,operations,now=Date.now()) {
     imports:(state.imports||[]).slice(-12).reverse(),
     users:operations.users.map(u=>{
       const account=accounts[u.id]||{}, a=state.attributions?.[u.id];
+      const {singularSdid,...attribution}=a||{};
       return {id:u.id,createdAt:u.createdAt,acquiredAt:a?.acquiredAt||u.createdAt,
-        attribution:a||null,events:account.funnelEvents||{},trackedFrom:account.funnelTrackedFrom||null,
+        singularDeviceAttributed:Boolean(singularSdid),attribution:a?attribution:null,events:account.funnelEvents||{},trackedFrom:account.funnelTrackedFrom||null,
         lastSeenAt:u.lastSeenAt||null,
         identityLinkStatus:!account.singularSdid?'missing':links.get(String(account.singularSdid).toLowerCase())>1?'ambiguous':'ready',
         activityTrackedFrom:account.activityTrackedFrom||null,

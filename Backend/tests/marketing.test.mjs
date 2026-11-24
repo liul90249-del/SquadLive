@@ -73,7 +73,9 @@ test('attribution imports require same-product user, timezone, first acquisition
 });
 test('dataset exposes only allowlisted marketing identity data, never credential or Singular device ID',()=>{
   const store=root();store.sharedPartnerReferrals.cleaner.accounts.u1.singularSdid='private';store.sharedPartnerReferrals.cleaner.accounts.u1.accountToken='secret';
+  store.marketing={cleaner:{attributions:{u1:{channel:'facebook',singularSdid:'imported-private-id'}}}};
   const data=marketingDataset(store,'cleaner',{users:[{id:'u1',createdAt:new Date(start).toISOString()}],orders:[]},now);
+  assert.equal(data.users[0].singularDeviceAttributed,true);
   assert.equal(JSON.stringify(data).includes('private'),false);assert.equal(JSON.stringify(data).includes('secret'),false);
 });
 test('authenticated session first events are allowlisted, monotonic and cannot mutate another identity',async()=>{
