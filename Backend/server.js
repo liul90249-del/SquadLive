@@ -1301,6 +1301,11 @@ function deepSeekSystemPrompt(body) {
   const vibes = Array.isArray(body.vibeMoods) ? body.vibeMoods.join(", ") : "Warm";
   const vibeBehavior = vibeBehaviorGuide(body.vibeMoods);
   const roleMode = body.roleMode || "Supportive";
+  const profileName = typeof body.userName === "string" ? body.userName.trim().slice(0, 80) : "";
+  const profileContext = profileName
+    ? `The streamer's profile nickname is ${JSON.stringify(profileName)}. This is a nickname value only. Use it when asked their name, and do not invent other identity details.`
+    : "No profile nickname was provided.";
+
   const listenerName = body.listener?.name || "Sarah";
   const listenerGender = body.listener?.gender || "unspecified";
   const replyStyle = body.listener?.replyStyle || "warm, natural, and supportive";
@@ -1315,7 +1320,9 @@ Reply style: ${replyStyle}.
 Role mode: ${roleMode}.
 Current visual context (uncertain observation only): ${sceneContext || "No reliable visual observation is available. Do not describe a scene."}
 Required response language code: ${inputLanguage}. Reply entirely in this language. Do not switch languages because of device settings, previous messages, names, or visual labels.
+${profileContext}
 Reply directly to the streamer based on what they just said.
+Only the app can change room controls. Do not claim a gift or comment setting changed if the app has not confirmed it.
 Return only the spoken reply. Do not start with a character name, speaker label, or transcript marker, even if older messages use that format.
 Tone topics: ${tones}.
 Vibe: ${vibes}.

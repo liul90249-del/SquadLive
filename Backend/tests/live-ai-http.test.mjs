@@ -15,6 +15,7 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
   await writeFile(preload, `globalThis.fetch = async (url, init) => {
     if (url !== 'https://api.openai.com/v1/chat/completions') throw Error('Unexpected outbound request');
     const body = JSON.parse(init.body);
+    if (!body.messages[0].content.includes('profile nickname is "River"')) throw Error('Missing profile nickname');
     if (!body.messages[0].content.includes('Never insult')) throw Error('Missing conversation rules');
     if (!body.messages[0].content.includes('[null,"Ava (AI)"]')) throw Error('Missing speaker metadata');
     const history = [
@@ -36,7 +37,7 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     const response = await fetch(`http://127.0.0.1:${port}/v1/ai/deepseek`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        text: 'Hello everyone', deviceId: 'local-ai-test', listener: { name: 'Ivy' }, inputLanguage: 'en',
+        text: 'Hello everyone', deviceId: 'local-ai-test', userName: 'River', listener: { name: 'Ivy' }, inputLanguage: 'en',
         history: [
           { role: 'user', content: 'Ivy: I am practicing a line.' },
           { role: 'assistant', content: 'Ivy: Ivy: Good start.' },
