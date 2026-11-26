@@ -2517,7 +2517,7 @@ async function route(req, res) {
       const users = Object.values(store.users)
         .map((user) => ({
           ...adminUserPublic(user),
-          activity: activity.byUser.get(user.id),
+          activity: { sevenDays: activity.byUser.get(user.id).sevenDays },
           ...userLiveSummary(store, user.id),
           aiConversationCount: Object.values(store.aiConversations).filter((item) => item.userId === user.id && item.interactionType !== "system_opening").length
         }))

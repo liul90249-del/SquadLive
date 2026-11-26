@@ -12,11 +12,10 @@ test("foreground retries and overlap are counted once and split at UTC midnight"
   recordForeground(user, { startMs: midnight + 10_000, endMs: now }, now);
   assert.deepEqual(recordForeground(user, { startMs: now - 120_000, endMs: now }, now), []);
   assert.deepEqual(recordForeground(user, { startMs: now, endMs: now + 20_000 }, now), []);
-  const report = userActivityReport({ users: { u: user } }, now);
-  assert.equal(report.byUser.get("u").today.foregroundMs, 30_000);
-  assert.equal(report.byUser.get("u").yesterday.foregroundMs, 10_000);
-  assert.equal(report.overview.totals.sevenDays.foregroundUsers, 1);
-  assert.equal(report.overview.totals.sevenDays.foregroundMs, 40_000);
+  assert.deepEqual(user.foregroundByDay, {
+    "2026-11-25": [[midnight - 10_000, midnight]],
+    "2026-11-26": [[midnight, now]]
+  });
 });
 
 test("retention uses closed UTC days, and totals use completed lives and actual spending", () => {
@@ -35,14 +34,27 @@ test("retention uses closed UTC days, and totals use completed lives and actual 
   ];
   const liveSessions = [
     { userId: "u", startedAt: "2026-11-25T23:59:50Z", endedAt: "2026-11-26T00:00:20Z", durationSeconds: 30 },
-    { userId: "v", startedAt: at, durationSeconds: 0 }
+    { userId: "u", startedAt: at, endedAt: "2026-11-26T11:02:00Z", durationSeconds: 120 },
+    { userId: "v", startedAt: at, endedAt: "2026-11-26T11:01:00Z", durationSeconds: 60 },
+    { userId: "v", startedAt: at, durationSeconds: 0 },
+    { userId: "v", startFailedAt: at, durationSeconds: 0 }
   ];
   const dailyUsage = { "2026-11-25": { activeUserIds: { u: true } }, "2026-11-26": { activeUserIds: { w: true } } };
   const { byUser, overview } = userActivityReport({ users, coinTransactions, liveSessions, dailyUsage }, now);
-  assert.deepEqual(byUser.get("u").today, { foregroundMs: null, liveMs: 20_000, coinsSpent: 30 });
-  assert.equal(byUser.get("u").yesterday.liveMs, 10_000);
-  assert.equal(byUser.get("v").today.liveMs, null);
-  assert.equal(overview.totals.sevenDays.coinsSpent, 30);
+  assert.equal(byUser.get("u").today.coinsSpent, 30);
+  assert.equal(byUser.get("u").yesterday.liveMs, 30_000);
+  assert.equal(byUser.get("v").today.liveCount, 2);
+  assert.equal(byUser.get("v").today.timedLiveCount, 1);
+  assert.equal(byUser.get("v").today.averageLiveMs, 60_000);
+  assert.equal(byUser.get("w").today.liveCount, 0);
+  assert.equal(byUser.get("w").today.shortestLiveMs, null);
+  assert.deepEqual(overview.totals.sevenDays, {
+    liveCount: 4, timedLiveCount: 3, liveMs: 210_000, longestLiveMs: 120_000,
+    shortestLiveMs: 30_000, averageLiveMs: 70_000, coinsSpent: 30
+  });
+  assert.equal(overview.totals.daily.length, 7);
+  assert.equal(overview.totals.daily[1].liveCount, 1);
+  assert.equal(overview.totals.daily.at(-1).coinsSpent, 0);
   assert.deepEqual([overview.retention[1].returned, overview.retention[1].registered], [0, 1]);
   assert.deepEqual([overview.retention[7].returned, overview.retention[7].registered], [1, 1]);
 });

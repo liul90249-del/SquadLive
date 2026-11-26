@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-test("authenticated foreground activity and wallet spending agree in the admin list and profile", { timeout: 15000 }, async () => {
+test("live counts and wallet spending agree in the admin list and profile", { timeout: 15000 }, async () => {
   const probe = createServer().listen(0, "127.0.0.1");
   await once(probe, "listening");
   const { port } = probe.address();
@@ -57,13 +57,20 @@ test("authenticated foreground activity and wallet spending agree in the admin l
     const spent = await call("/v1/audience/commit", spend);
     assert.equal(spent.status, 200);
     assert.equal((await spent.json()).cost, 15);
+    for (const type of ["live_started", "live_start_failed"]) {
+      const event = { deviceId, type, sessionId: type, eventId: type };
+      assert.equal((await call("/v1/live/events", event)).status, 200);
+      assert.equal((await call("/v1/live/events", event)).status, 200);
+    }
     assert.equal((await call("/v1/admin/users")).status, 401);
     const list = await (await call("/v1/admin/users?query=no-match", null, admin)).json();
     assert.deepEqual(list.users, []);
-    assert.equal(list.activity.totals.sevenDays.foregroundMs, 20_000);
+    assert.equal(list.activity.totals.sevenDays.liveCount, 1);
     assert.equal(list.activity.totals.sevenDays.coinsSpent, 15);
     const profile = await (await call("/v1/admin/users/" + user.id, null, admin)).json();
-    assert.deepEqual(profile.user.activity.sevenDays, { foregroundMs: 20_000, liveMs: null, coinsSpent: 15 });
+    assert.deepEqual(profile.user.activity.sevenDays, list.activity.totals.sevenDays);
+    assert.equal(profile.user.activity.sevenDays.averageLiveMs, null);
+    assert.equal(profile.user.activity.daily.length, 7);
   } finally {
     if (child.exitCode === null) {
       child.kill("SIGTERM");

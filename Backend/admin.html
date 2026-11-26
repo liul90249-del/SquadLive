@@ -1091,13 +1091,22 @@
       return hours ? `${hours} 小时 ${minutes} 分` : `${minutes} 分 ${seconds % 60} 秒`;
     }
 
-    function activityTable(periods, aggregate = false) {
+    function activityTable(periods) {
       if (!periods) return '<div class="empty">暂无统计</div>';
-      return table(["时间范围", "App 前台停留", "已结束直播时长", "金币消耗"], Object.entries(activityPeriods).map(([key, label]) => {
-        const row = periods[key];
-        const coverage = aggregate && row.foregroundUsers ? `<br><small>${row.foregroundUsers} 位用户已上报</small>` : "";
-        return `<tr><th scope="row">${label}</th><td>${trackedDuration(row.foregroundMs)}${coverage}</td><td>${trackedDuration(row.liveMs)}</td><td>${row.coinsSpent.toLocaleString("zh-CN")}</td></tr>`;
-      }));
+      const headers = ["时间范围", "直播次数", "直播总时长", "最长直播", "最短直播", "平均直播", "金币消耗"];
+      const rowHTML = (label, row) => `<tr><th scope="row">${label}</th>
+        <td>${row.liveCount.toLocaleString("zh-CN")}</td>
+        <td>${trackedDuration(row.liveMs)}</td>
+        <td>${trackedDuration(row.longestLiveMs)}</td>
+        <td>${trackedDuration(row.shortestLiveMs)}</td>
+        <td>${trackedDuration(row.averageLiveMs)}</td>
+        <td>${row.coinsSpent.toLocaleString("zh-CN")}</td></tr>`;
+      const summary = table(headers, Object.entries(activityPeriods).map(([key, label]) => rowHTML(label, periods[key])));
+      return `${summary}
+        <details style="margin:12px 20px">
+          <summary>查看近 7 日每天的直播与金币数据</summary>
+          ${table(["日期（UTC）", ...headers.slice(1)], periods.daily.map(row => rowHTML(escapeHTML(row.date), row)))}
+        </details>`;
     }
 
     function renderUserActivityOverview(activity) {
@@ -1112,14 +1121,14 @@
           const rate = row.registered ? `${(100 * row.returned / row.registered).toFixed(1)}%` : "—";
           return `<tr><th scope="row">${label}</th><td>${rate}</td><td>${row.returned} / ${row.registered}</td><td>${escapeHTML(row.cohortStart)} 至 ${escapeHTML(row.cohortEnd)}</td></tr>`;
         }));
-      target.innerHTML = `${retention}${activityTable(activity.totals, true)}
-        <p class="sub" style="padding:0 20px">留存各取最近 7 个已完成观察的注册日，按对应日期的回访记录计算。停留时长仅汇总已上报的记录，“—”表示暂无记录。金币消耗按实际消费扣账统计。</p>`;
+      target.innerHTML = `${retention}${activityTable(activity.totals)}
+        <p class="sub" style="padding:0 20px">留存各取最近 7 个已完成观察的注册日，按对应日期的回访记录计算。直播按开播日期统计。时长按已结束且上报有效时长的直播计算，“—”表示暂无时长。金币消耗按实际消费扣账统计。</p>`;
     }
 
     function renderUsers(targetId, users) {
       const showActivity = targetId === "usersTable";
       document.getElementById(targetId).innerHTML = table(
-        ["用户", "设备 ID", "IP / 地区", "金币", ...(showActivity ? ["近 7 日前台停留", "近 7 日金币消耗"] : []), "VIP", "直播/互动", "AI 对话", "注册时间", "最后活跃"],
+        ["用户", "设备 ID", "IP / 地区", "金币", ...(showActivity ? ["近 7 日直播次数", "近 7 日金币消耗"] : []), "VIP", "直播/互动", "AI 对话", "注册时间", "最后活跃"],
         users.map((user) => `
           <tr onclick="loadUserDetail('${user.id}')">
             <td>${user.displayName ? `<strong>${escapeHTML(user.displayName)}</strong><br>` : ""}<code title="${user.id}">${user.id}</code></td>
@@ -1130,7 +1139,7 @@
               <br><small>${window.appleReviewIPLabel(user)}</small>
             </td>
             <td>${user.coins}</td>
-            ${showActivity ? `<td>${trackedDuration(user.activity?.sevenDays?.foregroundMs)}</td><td>${user.activity?.sevenDays?.coinsSpent?.toLocaleString("zh-CN") ?? "—"}</td>` : ""}
+            ${showActivity ? `<td>${user.activity?.sevenDays?.liveCount?.toLocaleString("zh-CN") ?? "—"}</td><td>${user.activity?.sevenDays?.coinsSpent?.toLocaleString("zh-CN") ?? "—"}</td>` : ""}
             <td>${user.isPremium ? '<span class="pill vip">VIP</span>' : '<span class="pill">普通</span>'}</td>
             <td>${user.liveSessionCount || 0} / ${user.engagedLiveSessionCount || 0}${user.liveSessionCount ? `<br><span class="pill ${user.lastLiveUserInteracted ? "active" : ""}">${user.lastLiveUserInteracted ? "最近有互动" : "最近未互动"}</span>` : ""}</td>
             <td><span class="pill active">${user.aiConversationCount || 0}</span></td>
@@ -1159,7 +1168,7 @@
       document.getElementById("selectedUserLabel").textContent = userId;
       document.getElementById("userDetail").innerHTML = `
         <div class="panel">
-          <div class="panel-head"><h2>该用户停留与金币消耗</h2><span class="sub">UTC</span></div>
+          <div class="panel-head"><h2>该用户直播与金币消耗</h2><span class="sub">UTC</span></div>
           ${activityTable(data.user.activity)}
         </div>
         <div class="detail-grid">
