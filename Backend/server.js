@@ -1,3 +1,4 @@
+import { recordForeground, userActivityReport } from "./user-activity.mjs";
 import { createSandBusPlayers, sandBusPlayersReport } from './sandbus-players.mjs';
 import { catSwipeActivity } from './catswipe-events.mjs';
 import { createCatSwipeAnalytics, CATSWIPE_REPORT_DAYS } from './catswipe-analytics.mjs';
@@ -415,9 +416,9 @@ function recordDailyMetric(store, field, amount = 1) {
   return usage;
 }
 
-function recordDailyActiveUser(store, userId) {
+function recordDailyActiveUser(store, userId, date = new Date()) {
   if (!userId) return;
-  dailyUsage(store).activeUserIds[userId] = true;
+  dailyUsage(store, date).activeUserIds[userId] = true;
   scheduleMetricsSave(store);
 }
 
@@ -1192,6 +1193,7 @@ function userDetail(store, userId) {
     user: {
       ...adminUserPublic(user),
       ...userLiveSummary(store, userId),
+      activity: userActivityReport(store).byUser.get(userId),
       firstIPAddress: user.firstIPAddress || "",
       ipHistory: Array.isArray(user.ipHistory) ? user.ipHistory.slice(0, 10) : []
     },
@@ -1856,6 +1858,25 @@ async function route(req, res) {
     return jsonResponse(res, 200, { received: true, duplicate: false });
   }
 
+  if (req.method === "POST" && url.pathname === "/v1/activity/foreground") {
+    let identity;
+    try {
+      identity = await verifyPartnerIdentity(new Request("https://app.local", {
+        headers: { authorization: req.headers.authorization || "" }
+      }));
+    } catch {
+      return jsonResponse(res, 401, { error: "Installation authorization required" });
+    }
+    const user = store.users[identity.walletUserId || identity.customerId];
+    if (!user) return jsonResponse(res, 404, { error: "User not found" });
+    const now = Date.now();
+    const dates = recordForeground(user, await readJSON(req) || {}, now);
+    if (!dates.length) return jsonResponse(res, 400, { error: "Invalid foreground interval" });
+    user.lastSeenAt = new Date(now).toISOString();
+    for (const date of dates) recordDailyActiveUser(store, user.id, new Date(date));
+    return jsonResponse(res, 200, { received: true });
+  }
+
   if (req.method === "POST" && url.pathname === "/v1/activity/ping") {
     const body = await readJSON(req);
     const user = store.users[body.userId];
@@ -2492,9 +2513,11 @@ async function route(req, res) {
     if (req.method === "GET" && url.pathname === "/v1/admin/users") {
       backfillUserNetworks(store, Object.values(store.users));
       const query = (url.searchParams.get("query") || "").trim().toLowerCase();
+      const activity = userActivityReport(store);
       const users = Object.values(store.users)
         .map((user) => ({
           ...adminUserPublic(user),
+          activity: activity.byUser.get(user.id),
           ...userLiveSummary(store, user.id),
           aiConversationCount: Object.values(store.aiConversations).filter((item) => item.userId === user.id && item.interactionType !== "system_opening").length
         }))
@@ -2505,7 +2528,7 @@ async function route(req, res) {
             || user.displayName.toLowerCase().includes(query);
         })
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      return jsonResponse(res, 200, { users });
+      return jsonResponse(res, 200, { users, activity: activity.overview });
     }
 
     const adminUserMatch = url.pathname.match(/^\/v1\/admin\/users\/([^/]+)$/);
