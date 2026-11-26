@@ -1296,6 +1296,38 @@ function localAIReply(text, inputLanguage = "en") {
   return variants[index];
 }
 
+const practiceScenarios = new Map([
+  ["casual", "Casual conversation. Engage with the host’s topic."],
+  ["qa", "Creator Q&A. Engage as an audience member interested in what the host creates."],
+  ["show", "Show and tell. Ask about what the host describes and avoid claiming to see anything unconfirmed."]
+]);
+const liveStreamerContexts = new Map();
+
+function readStreamerContext(input) {
+  const nickname = typeof input?.nickname === "string" ? input.nickname.trim().slice(0, 80) : "";
+  const scenario = practiceScenarios.get(input?.scenarioId);
+  return nickname || scenario ? { nickname, scenario } : null;
+}
+
+function liveStreamerContext(user, body) {
+  const key = `${user.id}:${body.liveSessionId}`;
+  const stored = liveStreamerContexts.get(key);
+  if (stored && stored.expiresAt > Date.now()) return stored.context;
+  if (stored) liveStreamerContexts.delete(key);
+  return readStreamerContext(body.streamerContext);
+}
+
+async function verifiedLiveWallet(store, req) {
+  try {
+    const identity = await verifyPartnerIdentity(new Request("https://app.local", {
+      headers: { authorization: req.headers.authorization || "" }
+    }));
+    return store.users[identity.walletUserId || identity.customerId] || null;
+  } catch {
+    return null;
+  }
+}
+
 function deepSeekSystemPrompt(body) {
   const directions = Array.isArray(body.activeDirections) ? body.activeDirections : [];
   const tones = Array.isArray(body.toneTopics) ? body.toneTopics.join(", ") : "General";
@@ -1322,6 +1354,7 @@ Role mode: ${roleMode}.
 Current visual context (uncertain observation only): ${sceneContext || "No reliable visual observation is available. Do not describe a scene."}
 Required response language code: ${inputLanguage}. Reply entirely in this language. Do not switch languages because of device settings, previous messages, names, or visual labels.
 ${profileContext}
+${body.practiceScenario ? "Host’s selected practice scenario: " + body.practiceScenario : ""}
 Reply directly to the streamer based on what they just said.
 Only the app can change room controls. Do not claim a gift or comment setting changed if the app has not confirmed it.
 Return only the spoken reply. Do not start with a character name, speaker label, or transcript marker, even if older messages use that format.
@@ -1514,7 +1547,12 @@ async function completeLiveAIReply(store, user, body, req) {
 
 const liveAIBillingEnabled = process.env.SQUADLIVE_AI_BILLING_ENABLED !== "false";
 const liveAIRounds = createLiveAIRounds({
-  complete: (store, user, { request, ...body }) => completeLiveAIReply(store, user, body, request),
+  complete: (store, user, { request, ...body }) => {
+    const context = liveStreamerContext(user, body);
+    return completeLiveAIReply(store, user, { ...body,
+      userName: context?.nickname || body.userName, practiceScenario: context?.scenario
+    }, request);
+  },
   spend: spendWalletCoins,
   save: saveStore,
   isPremium: (store, user) => {
@@ -1794,15 +1832,7 @@ async function route(req, res) {
   if (req.method === "POST" && url.pathname === "/v1/ai/deepseek") {
     const body = await readJSON(req);
     if (liveAIBillingEnabled && body.roundId !== undefined) {
-      let identity;
-      try {
-        identity = await verifyPartnerIdentity(new Request("https://app.local", {
-          headers: { authorization: req.headers.authorization || "" }
-        }));
-      } catch {
-        return jsonResponse(res, 401, { error: "Installation authorization required" });
-      }
-      const user = store.users[identity.walletUserId || identity.customerId];
+      const user = await verifiedLiveWallet(store, req);
       if (!user) return jsonResponse(res, 401, { error: "Wallet authorization required" });
       if (body.deviceId && store.userIdsByDevice[body.deviceId] !== user.id) {
         return jsonResponse(res, 403, { error: "Installation and wallet do not match" });
@@ -1828,6 +1858,8 @@ async function route(req, res) {
     if (!eventId || !sessionId || !supportedTypes.has(type)) {
       return jsonResponse(res, 400, { error: "Invalid live event" });
     }
+    const streamerContext = type === "live_started" ? readStreamerContext(body.streamerContext) : null;
+    const canSetContext = streamerContext && (await verifiedLiveWallet(store, req))?.id === user.id;
     if (store.liveEvents[eventId]) {
       return jsonResponse(res, 200, { received: true, duplicate: true });
     }
@@ -1853,6 +1885,11 @@ async function route(req, res) {
     };
     store.liveSessions[sessionId] = session;
     if (type === "live_started") {
+      const contextKey = `${user.id}:${sessionId}`;
+      if (canSetContext && !session.endedAt && !liveStreamerContexts.has(contextKey)) {
+        if (liveStreamerContexts.size >= 2_000) liveStreamerContexts.delete(liveStreamerContexts.keys().next().value);
+        liveStreamerContexts.set(contextKey, { context: streamerContext, expiresAt: receivedAt + 86_400_000 });
+      }
       session.startedAt ||= eventAt;
       dailyUsage(store, new Date(session.startedAt)).liveStartedUserIds[user.id] = true;
       if (user.firstLiveFreeEligible === true && !user.firstLiveFreeUsedAt && Number(user.liveSessionsStarted || 0) === 0) {
@@ -1886,6 +1923,7 @@ async function route(req, res) {
       session.firstAIReplyAt ||= now;
     }
     if (type === "live_ended") {
+      liveStreamerContexts.delete(`${user.id}:${sessionId}`);
       const previousDuration = Math.max(0, Number(session.durationSeconds || 0));
       const reportedDuration = Number(body.durationSeconds);
       const durationSeconds = Number.isFinite(reportedDuration) && reportedDuration > 0
