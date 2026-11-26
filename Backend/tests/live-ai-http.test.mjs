@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +12,15 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
   const probe = createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening');
   const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
   const directory = await mkdtemp(join(tmpdir(), 'squad-ai-http-'));
+  const deviceId = '10000000-0000-4000-8000-000000000001';
+  const credential = 'anon_' + 'a'.repeat(43);
+  const wallet = { id: 'paying-wallet', deviceId, coins: 300, createdAt: '2026-01-01T00:00:00Z' };
+  await writeFile(join(directory, 'store.json'), JSON.stringify({
+    users: { [wallet.id]: wallet },
+    aiRoundAccounts: { [wallet.id]: { usage: {}, rounds: {}, firstPracticeDay: '2026-01-01' } },
+    partnerAnonymousAccounts: { anon_fixture: { walletUserId: wallet.id, createdAt: wallet.createdAt } },
+    partnerAnonymousCredentials: { [createHash('sha256').update(credential).digest('hex')]: 'anon_fixture' }
+  }));
   const preload = join(directory, 'provider.mjs');
   await writeFile(preload, `globalThis.fetch = async (url, init) => {
     if (url !== 'https://api.openai.com/v1/chat/completions') throw Error('Unexpected outbound request');
@@ -55,6 +65,50 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     assert.ok(!JSON.stringify(disk).includes('fake-key-for-local-test'));
     const metrics = Object.values(disk.dailyUsage || {});
     assert.ok(metrics.some(day => day.aiSuccesses === 1 && day.aiFallbacks === 0));
+    const base = `http://127.0.0.1:${port}`;
+    const pricing = await fetch(base + '/v1/ai/round-policy');
+    assert.equal(pricing.status, 200);
+    assert.deepEqual(await pricing.json(), { introRounds: 10, freeRounds: 5, proRounds: 30, coinPrice: 10, timeZone: 'UTC' });
+    const send = async (body, token = credential) => {
+      const response = await fetch(base + '/v1/ai/deepseek', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          text: 'Hello everyone', deviceId, userName: 'River', listener: { name: 'Ivy' }, inputLanguage: 'en',
+          history: [
+            { role: 'user', content: 'Ivy: I am practicing a line.' },
+            { role: 'assistant', content: 'Good start.' },
+            { role: 'assistant', content: 'Keep going.', speaker: 'Ava (AI)' }
+          ], ...body
+        })
+      });
+      return { status: response.status, data: await response.json() };
+    };
+    assert.equal((await send({ roundId: randomUUID() }, 'invalid')).status, 401);
+    assert.equal((await send({ roundId: randomUUID(), deviceId: 'another-device' })).status, 403);
+    for (let n = 0; n < 5; n++) {
+      const included = await send({ roundId: randomUUID() });
+      assert.equal(included.status, 200);
+      assert.equal(included.data.remainingRounds, 4 - n);
+      assert.equal(included.data.coinBalance, 300);
+    }
+    const roundId = randomUUID();
+    const quote = await send({ roundId });
+    assert.equal(quote.data.reason, 'authorize_round');
+    assert.equal(quote.data.coinPrice, 10);
+    assert.equal(quote.data.answer, '');
+    assert.equal((await send({ roundId, unlockRound: true })).data.coinBalance, 300);
+    for (let retry = 0; retry < 2; retry++) {
+      const paid = await send({ roundId, unlockRound: true, authorizedCoinPrice: 10 });
+      assert.equal(paid.data.answer, 'Hello, welcome back!');
+      assert.equal(paid.data.coinBalance, 290);
+    }
+    const paidStore = JSON.parse(await readFile(join(directory, 'store.json'), 'utf8'));
+    const charges = Object.values(paidStore.coinTransactions).filter(item => item.userId === wallet.id && item.type === 'coin_spend');
+    assert.equal(charges.length, 1);
+    assert.equal(charges[0].coins, -10);
+    assert.equal(charges[0].note, 'AI reply unlock');
+    assert.equal(paidStore.users[wallet.id].coins, 290);
   } finally {
     child.kill('SIGTERM'); await once(child, 'exit'); await rm(directory, { recursive: true, force: true });
   }

@@ -1,3 +1,4 @@
+import { createLiveAIRounds, liveAIRoundPolicy } from "./live-ai-rounds.mjs";
 import { recordForeground, userActivityReport } from "./user-activity.mjs";
 import { createSandBusPlayers, sandBusPlayersReport } from './sandbus-players.mjs';
 import { catSwipeActivity } from './catswipe-events.mjs';
@@ -1458,6 +1459,70 @@ function allowWebReturnRequest(req, namespace = ''){
  if(webReturnLimits.size>10000&&!webReturnLimits.has(key))return false;
  const entry=webReturnLimits.get(key)||{until:now+60000,count:0};entry.count++;webReturnLimits.set(key,entry);return entry.count<=30;
 }
+async function completeLiveAIReply(store, user, body, req) {
+  const requestStartedAt = Date.now();
+  recordDailyMetric(store, "aiRequests");
+  if (user) {
+    user.lastSeenAt = new Date().toISOString();
+    recordUserNetwork(store, user, req);
+    if (typeof body.userName === "string" && body.userName.trim()) {
+      user.displayName = body.userName.trim().slice(0, 80);
+    }
+  }
+  recordDailyActiveUser(store, user?.id);
+
+  let result;
+  try {
+    result = await runQueuedAIRequest(() => callDeepSeek(body));
+  } catch (error) {
+    if (error.status === 503) recordDailyMetric(store, "aiQueueRejected");
+    throw error;
+  }
+
+  const latencyMs = Date.now() - requestStartedAt;
+  const usage = dailyUsage(store);
+  usage.aiLatencyTotalMs += latencyMs;
+  usage.aiLatencyMaxMs = Math.max(Number(usage.aiLatencyMaxMs || 0), latencyMs);
+  usage.peakAIConcurrency = Math.max(Number(usage.peakAIConcurrency || 0), runtimeMetrics.maxActiveAIRequests);
+  if (result.source === "deepseek" || result.source === "openai") {
+    usage.aiSuccesses += 1;
+  } else {
+    usage.aiFallbacks += 1;
+    if (result.reason === "timeout") usage.aiTimeouts += 1;
+    if (["missing_key", "provider_error", "empty_response", "network_error"].includes(result.reason)) {
+      usage.aiUnavailable += 1;
+    }
+    runtimeMetrics.lastAIErrorAt = new Date().toISOString();
+    runtimeMetrics.lastAIErrorReason = result.reason || "unknown";
+  }
+  scheduleMetricsSave(store);
+  if (user) {
+    recordAIConversation(store, {
+      userId: user.id,
+      userText: body.text,
+      aiText: result.answer,
+      listenerName: body.listener?.name,
+      source: result.source,
+      model: result.model,
+      latencyMs,
+      providerAttempts: result.attempts,
+      interactionType: body.interactionType === "system_opening" ? "system_opening" : "user"
+    });
+  }
+  return result;
+}
+
+const liveAIBillingEnabled = process.env.SQUADLIVE_AI_BILLING_ENABLED !== "false";
+const liveAIRounds = createLiveAIRounds({
+  complete: (store, user, { request, ...body }) => completeLiveAIReply(store, user, body, request),
+  spend: spendWalletCoins,
+  save: saveStore,
+  isPremium: (store, user) => {
+    refreshUserPremiumStatus(store, user);
+    return user.isPremium;
+  }
+});
+
 async function route(req, res) {
   if (req.method === "OPTIONS") return jsonResponse(res, 204, {});
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -1721,62 +1786,34 @@ async function route(req, res) {
     return user ? jsonResponse(res, 200, { user: userPublic(user) }) : jsonResponse(res, 404, { error: "User not found" });
   }
 
+  if (req.method === "GET" && url.pathname === "/v1/ai/round-policy") {
+    if (!liveAIBillingEnabled) return jsonResponse(res, 503, { error: "AI reply billing is unavailable" });
+    return jsonResponse(res, 200, liveAIRoundPolicy);
+  }
+
   if (req.method === "POST" && url.pathname === "/v1/ai/deepseek") {
     const body = await readJSON(req);
-    const requestStartedAt = Date.now();
-    recordDailyMetric(store, "aiRequests");
+    if (liveAIBillingEnabled && body.roundId !== undefined) {
+      let identity;
+      try {
+        identity = await verifyPartnerIdentity(new Request("https://app.local", {
+          headers: { authorization: req.headers.authorization || "" }
+        }));
+      } catch {
+        return jsonResponse(res, 401, { error: "Installation authorization required" });
+      }
+      const user = store.users[identity.walletUserId || identity.customerId];
+      if (!user) return jsonResponse(res, 401, { error: "Wallet authorization required" });
+      if (body.deviceId && store.userIdsByDevice[body.deviceId] !== user.id) {
+        return jsonResponse(res, 403, { error: "Installation and wallet do not match" });
+      }
+      const result = await liveAIRounds(store, user, { ...body, request: req });
+      return jsonResponse(res, 200, result);
+    }
     let user = body.userId ? store.users[body.userId] : null;
-    if (!user && body.deviceId) {
-      user = getOrCreateUser(store, String(body.deviceId).slice(0, 200), req);
-    }
-    if (user) {
-      user.lastSeenAt = new Date().toISOString();
-      recordUserNetwork(store, user, req);
-      if (typeof body.userName === "string" && body.userName.trim()) {
-        user.displayName = body.userName.trim().slice(0, 80);
-      }
-    }
-    recordDailyActiveUser(store, user?.id);
-
-    let result;
-    try {
-      result = await runQueuedAIRequest(() => callDeepSeek(body));
-    } catch (error) {
-      if (error.status === 503) recordDailyMetric(store, "aiQueueRejected");
-      throw error;
-    }
-
-    const latencyMs = Date.now() - requestStartedAt;
-    const usage = dailyUsage(store);
-    usage.aiLatencyTotalMs += latencyMs;
-    usage.aiLatencyMaxMs = Math.max(Number(usage.aiLatencyMaxMs || 0), latencyMs);
-    usage.peakAIConcurrency = Math.max(Number(usage.peakAIConcurrency || 0), runtimeMetrics.maxActiveAIRequests);
-    if (result.source === "deepseek" || result.source === "openai") {
-      usage.aiSuccesses += 1;
-    } else {
-      usage.aiFallbacks += 1;
-      if (result.reason === "timeout") usage.aiTimeouts += 1;
-      if (["missing_key", "provider_error", "empty_response", "network_error"].includes(result.reason)) {
-        usage.aiUnavailable += 1;
-      }
-      runtimeMetrics.lastAIErrorAt = new Date().toISOString();
-      runtimeMetrics.lastAIErrorReason = result.reason || "unknown";
-    }
-    scheduleMetricsSave(store);
-    if (user) {
-      recordAIConversation(store, {
-        userId: user.id,
-        userText: body.text,
-        aiText: result.answer,
-        listenerName: body.listener?.name,
-        source: result.source,
-        model: result.model,
-        latencyMs,
-        providerAttempts: result.attempts,
-        interactionType: body.interactionType === "system_opening" ? "system_opening" : "user"
-      });
-      await saveStore(store);
-    }
+    if (!user && body.deviceId) user = getOrCreateUser(store, String(body.deviceId).slice(0, 200), req);
+    const result = await completeLiveAIReply(store, user, body, req);
+    if (user) await saveStore(store);
     return jsonResponse(res, 200, result);
   }
 
