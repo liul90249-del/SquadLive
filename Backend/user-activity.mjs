@@ -77,8 +77,8 @@ export function userActivityReport(store, now = Date.now()) {
     const day = daily(session.userId, dateKey(started));
     day.liveCount += 1;
     const ended = Date.parse(session.endedAt);
-    const duration = Math.min(Number(session.durationSeconds) * 1000, ended - started);
-    if (!(ended <= now && duration > 0)) continue;
+    const duration = Number(session.durationSeconds) * 1000;
+    if (!(ended <= now && duration > 0 && duration <= dayMs)) continue;
     day.timedLiveCount += 1;
     day.liveMs = (day.liveMs || 0) + duration;
     day.longestLiveMs = Math.max(day.longestLiveMs ?? 0, duration);

@@ -58,3 +58,17 @@ test("retention uses closed UTC days, and totals use completed lives and actual 
   assert.deepEqual([overview.retention[1].returned, overview.retention[1].registered], [0, 1]);
   assert.deepEqual([overview.retention[7].returned, overview.retention[7].registered], [1, 1]);
 });
+
+test("five starts with one valid 126-second end report expose partial duration, even if events arrived out of order", () => {
+  const now = Date.parse("2026-11-26T12:00:00Z");
+  const users = { u: { id: "u" } };
+  const liveSessions = Array.from({ length: 5 }, () => ({
+    userId: "u", startedAt: "2026-11-26T11:00:01Z"
+  }));
+  liveSessions[0].endedAt = "2026-11-26T11:00:00Z";
+  liveSessions[0].durationSeconds = 126;
+  const report = userActivityReport({ users, liveSessions }, now);
+  const { liveCount, timedLiveCount, liveMs, longestLiveMs, shortestLiveMs, averageLiveMs } = report.byUser.get("u").today;
+  assert.deepEqual([liveCount, timedLiveCount], [5, 1]);
+  assert.deepEqual([liveMs, longestLiveMs, shortestLiveMs, averageLiveMs], Array(4).fill(126_000));
+});

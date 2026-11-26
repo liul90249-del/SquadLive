@@ -1093,9 +1093,10 @@
 
     function activityTable(periods) {
       if (!periods) return '<div class="empty">暂无统计</div>';
-      const headers = ["时间范围", "直播次数", "直播总时长", "最长直播", "最短直播", "平均直播", "金币消耗"];
+      const headers = ["时间范围", "直播次数", "时长已记录", "已记录总时长", "最长直播", "最短直播", "平均直播", "金币消耗"];
       const rowHTML = (label, row) => `<tr><th scope="row">${label}</th>
         <td>${row.liveCount.toLocaleString("zh-CN")}</td>
+        <td>${row.liveCount ? `${row.timedLiveCount.toLocaleString("zh-CN")} / ${row.liveCount.toLocaleString("zh-CN")} 场` : "—"}</td>
         <td>${trackedDuration(row.liveMs)}</td>
         <td>${trackedDuration(row.longestLiveMs)}</td>
         <td>${trackedDuration(row.shortestLiveMs)}</td>
@@ -1122,7 +1123,7 @@
           return `<tr><th scope="row">${label}</th><td>${rate}</td><td>${row.returned} / ${row.registered}</td><td>${escapeHTML(row.cohortStart)} 至 ${escapeHTML(row.cohortEnd)}</td></tr>`;
         }));
       target.innerHTML = `${retention}${activityTable(activity.totals)}
-        <p class="sub" style="padding:0 20px">留存各取最近 7 个已完成观察的注册日，按对应日期的回访记录计算。直播按开播日期统计。时长按已结束且上报有效时长的直播计算，“—”表示暂无时长。金币消耗按实际消费扣账统计。</p>`;
+        <p class="sub" style="padding:0 20px">留存各取最近 7 个已完成观察的注册日，按对应日期的回访记录计算。直播按开播日期统计。时长只统计收到有效结束时长的场次。记录不足时，总时长、最长、最短和平均只反映已记录场次。金币消耗按实际消费扣账统计。</p>`;
     }
 
     function renderUsers(targetId, users) {

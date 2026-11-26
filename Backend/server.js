@@ -1791,7 +1791,13 @@ async function route(req, res) {
     if (existingSession && existingSession.userId !== user.id) {
       return jsonResponse(res, 409, { error: "Live session belongs to another account" });
     }
-    const now = new Date().toISOString();
+    const receivedAt = Date.now();
+    const now = new Date(receivedAt).toISOString();
+    const occurredAtMs = body.occurredAtMs;
+    const eventAt = Number.isSafeInteger(occurredAtMs) &&
+      occurredAtMs >= receivedAt - 7 * 86_400_000 && occurredAtMs <= receivedAt
+      ? new Date(occurredAtMs).toISOString()
+      : now;
     const session = existingSession || {
       id: sessionId,
       userId: user.id,
@@ -1803,8 +1809,8 @@ async function route(req, res) {
     };
     store.liveSessions[sessionId] = session;
     if (type === "live_started") {
-      session.startedAt ||= now;
-      dailyUsage(store).liveStartedUserIds[user.id] = true;
+      session.startedAt ||= eventAt;
+      dailyUsage(store, new Date(session.startedAt)).liveStartedUserIds[user.id] = true;
       if (user.firstLiveFreeEligible === true && !user.firstLiveFreeUsedAt && Number(user.liveSessionsStarted || 0) === 0) {
         user.liveSessionsStarted = 1;
         user.firstLiveFreeUsedAt = now;
@@ -1837,14 +1843,19 @@ async function route(req, res) {
     }
     if (type === "live_ended") {
       const previousDuration = Math.max(0, Number(session.durationSeconds || 0));
-      const durationSeconds = Math.max(previousDuration, Math.min(86_400, Number(body.durationSeconds || 0)));
+      const reportedDuration = Number(body.durationSeconds);
+      const durationSeconds = Number.isFinite(reportedDuration) && reportedDuration > 0
+        ? Math.max(previousDuration, Math.min(86_400, reportedDuration))
+        : previousDuration;
       session.durationSeconds = durationSeconds;
-      session.endedAt = now;
-      const usage = dailyUsage(store);
+      session.endedAt ||= eventAt;
+      const usage = dailyUsage(store, new Date(session.endedAt));
       if (!session.endCountedAt) {
         usage.liveSessionsEnded = Number(usage.liveSessionsEnded || 0) + 1;
         usage.liveDurationTotalSeconds = Number(usage.liveDurationTotalSeconds || 0) + durationSeconds;
         session.endCountedAt = now;
+      } else if (durationSeconds > previousDuration) {
+        usage.liveDurationTotalSeconds = Number(usage.liveDurationTotalSeconds || 0) + durationSeconds - previousDuration;
       }
     }
     store.liveEvents[eventId] = { id: eventId, sessionId, userId: user.id, type, createdAt: now };

@@ -71,6 +71,20 @@ test("live counts and wallet spending agree in the admin list and profile", { ti
     assert.deepEqual(profile.user.activity.sevenDays, list.activity.totals.sevenDays);
     assert.equal(profile.user.activity.sevenDays.averageLiveMs, null);
     assert.equal(profile.user.activity.daily.length, 7);
+    const yesterday = new Date(Date.now() - 86_400_000);
+    yesterday.setUTCHours(12, 0, 0, 0);
+    const yesterdayStart = yesterday.getTime();
+    const delayedSession = { deviceId, sessionId: "offline-live" };
+    const endEvent = { ...delayedSession, type: "live_ended", eventId: "offline-end", occurredAtMs: yesterdayStart + 126_000, durationSeconds: 126 };
+    assert.equal((await call("/v1/live/events", endEvent)).status, 200);
+    assert.equal((await call("/v1/live/events", endEvent)).status, 200);
+    const startEvent = { ...delayedSession, type: "live_started", eventId: "offline-start", occurredAtMs: yesterdayStart };
+    assert.equal((await call("/v1/live/events", startEvent)).status, 200);
+    const after = await (await call("/v1/admin/users/" + user.id, null, admin)).json();
+    assert.equal(after.user.activity.yesterday.liveCount, 1);
+    assert.equal(after.user.activity.yesterday.timedLiveCount, 1);
+    assert.equal(after.user.activity.yesterday.averageLiveMs, 126_000);
+
   } finally {
     if (child.exitCode === null) {
       child.kill("SIGTERM");
