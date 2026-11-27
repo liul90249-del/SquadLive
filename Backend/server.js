@@ -1328,6 +1328,18 @@ async function verifiedLiveWallet(store, req) {
   }
 }
 
+function recentGiftContext(gifts) {
+  if (!Array.isArray(gifts)) return "";
+  const cleanLabel = value => typeof value === "string" ? value.trim().slice(0, 80) : "";
+  const events = gifts.slice(-4).map(gift => ({
+    sender: cleanLabel(gift?.sender),
+    giftName: cleanLabel(gift?.giftName),
+    chineseName: cleanLabel(gift?.chineseName),
+    liveSecond: gift?.liveSecond
+  })).filter(gift => gift.sender && gift.giftName && Number.isSafeInteger(gift.liveSecond) && gift.liveSecond >= 0);
+  return events.length ? `Recent simulated gift events in this live session, oldest first: ${JSON.stringify(events)}` : "";
+}
+
 function deepSeekSystemPrompt(body) {
   const directions = Array.isArray(body.activeDirections) ? body.activeDirections : [];
   const tones = Array.isArray(body.toneTopics) ? body.toneTopics.join(", ") : "General";
@@ -1355,6 +1367,8 @@ Current visual context (uncertain observation only): ${sceneContext || "No relia
 Required response language code: ${inputLanguage}. Reply entirely in this language. Do not switch languages because of device settings, previous messages, names, or visual labels.
 ${profileContext}
 ${body.practiceScenario ? "Host’s selected practice scenario: " + body.practiceScenario : ""}
+${recentGiftContext(body.recentGifts)}
+When the host mentions a gift, use the recorded sender and gift name when available. Use the Chinese gift label in Chinese replies. Do not claim you personally sent it unless the recorded sender is your own name. If the referent is unclear, ask which gift they mean. Never invent a gift or a sender.
 Reply directly to the streamer based on what they just said.
 Only the app can change room controls. Do not claim a gift or comment setting changed if the app has not confirmed it.
 Return only the spoken reply. Do not start with a character name, speaker label, or transcript marker, even if older messages use that format.

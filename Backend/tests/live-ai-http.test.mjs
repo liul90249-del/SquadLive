@@ -28,6 +28,8 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     if (!body.messages[0].content.includes('profile nickname is "River"')) throw Error('Missing profile nickname');
     if (body.messages.at(-1).content === 'First question after opening') {
       if (!body.messages[0].content.includes('selected practice scenario: Creator Q&A')) throw Error('Missing opening scenario');
+      if (!body.messages[0].content.includes('"sender":"Emma","giftName":"Rose Bouquet","chineseName":"玫瑰花束","liveSecond":17')) throw Error('Missing observed gift event');
+      if (body.messages[0].content.includes('Unrecorded Gift')) throw Error('Invalid gift event was read as room context');
     }
     if (!body.messages[0].content.includes('Never insult')) throw Error('Missing conversation rules');
     if (!body.messages[0].content.includes('[null,"Ava (AI)"]')) throw Error('Missing speaker metadata');
@@ -99,7 +101,11 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     assert.equal(started.status, 200);
     for (let n = 0; n < 5; n++) {
       const included = await send(n === 0
-        ? { roundId: randomUUID(), liveSessionId, userName: undefined, text: 'First question after opening' }
+        ? { roundId: randomUUID(), liveSessionId, userName: undefined, text: 'First question after opening',
+          recentGifts: [
+            { sender: 'Emma', giftName: 'Rose Bouquet', chineseName: '玫瑰花束', liveSecond: 17 },
+            { sender: '', giftName: 'Unrecorded Gift', liveSecond: -1 }
+          ] }
         : { roundId: randomUUID() });
       assert.equal(included.status, 200);
       assert.equal(included.data.remainingRounds, 4 - n);
