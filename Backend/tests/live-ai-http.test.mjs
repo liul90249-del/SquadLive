@@ -30,10 +30,15 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     if (url !== 'https://api.openai.com/v1/chat/completions') throw Error('Unexpected outbound request');
     const body = JSON.parse(init.body);
     if (!body.messages[0].content.includes('profile nickname is "River"')) throw Error('Missing profile nickname');
-    if (body.messages.at(-1).content === '你看我戴着眼镜吗') {
+    const last = body.messages.at(-1).content;
+    const text = typeof last === 'string' ? last : last[0].text;
+    if (text === 'First question after opening') {
+      if (last[1]?.image_url?.url !== 'data:image/jpeg;base64,/9j/2Q==') throw Error('Missing authenticated JPEG');
+    } else if (typeof last !== 'string') throw Error('Unexpected image on text-only request');
+    if (text === '你看我戴着眼镜吗') {
       if (!body.messages[0].content.includes('Required response language code: zh-Hans')) throw Error('Ignored Chinese transcript');
       if (!body.messages[0].content.includes('eyewear observation: glasses likely')) throw Error('Missing eyewear observation');
-    } else if (body.messages.at(-1).content === 'First question after opening') {
+    } else if (text === 'First question after opening') {
       if (!body.messages[0].content.includes('selected practice scenario: Creator Q&A')) throw Error('Missing opening scenario');
       if (!body.messages[0].content.includes('"sender":"Emma","giftName":"Rose Bouquet","chineseName":"玫瑰花束","liveSecond":17')) throw Error('Missing observed gift event');
       if (body.messages[0].content.includes('Unrecorded Gift')) throw Error('Invalid gift event was read as room context');
@@ -41,7 +46,7 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
       if (!body.messages[0].content.includes('Simulated gifts are off.')) throw Error('Missing room gift preference');
       if (!body.messages[0].content.includes('If the host corrects the observation, follow their correction')) throw Error('Missing guidance for camera corrections');
     } else {
-      if (!body.messages[0].content.includes('No reliable visual observation is available')) throw Error('Invented a visual observation');
+      if (!body.messages[0].content.includes('No reliable on-device summary is available')) throw Error('Invented a visual observation');
     }
     if (!body.messages[0].content.includes('Never insult')) throw Error('Missing conversation rules');
     if (!body.messages[0].content.includes('[null,"Ava (AI)"]')) throw Error('Missing speaker metadata');
@@ -64,7 +69,7 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     const response = await fetch(`http://127.0.0.1:${port}/v1/ai/deepseek`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        text: 'Hello everyone', deviceId: 'local-ai-test', userName: 'River', listener: { name: 'Ivy' }, inputLanguage: 'en',
+        text: 'Hello everyone', frameJPEG: '/9j/2Q==', deviceId: 'local-ai-test', userName: 'River', listener: { name: 'Ivy' }, inputLanguage: 'en',
         history: [
           { role: 'user', content: 'Ivy: I am practicing a line.' },
           { role: 'assistant', content: 'Ivy: Ivy: Good start.' },
@@ -80,6 +85,7 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     assert.equal(conversation.source, 'openai'); assert.equal(conversation.model, 'test-openai');
     assert.equal(conversation.interactionType, 'user'); assert.ok(conversation.latencyMs >= 0);
     assert.ok(!JSON.stringify(disk).includes('fake-key-for-local-test'));
+    assert.ok(!JSON.stringify(disk).includes('/9j/2Q=='));
     const metrics = Object.values(disk.dailyUsage || {});
     assert.ok(metrics.some(day => day.aiSuccesses === 1 && day.aiFallbacks === 0));
     const base = `http://127.0.0.1:${port}`;
@@ -91,7 +97,7 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          text: 'Hello everyone', deviceId, userName: 'River', listener: { name: 'Ivy' }, inputLanguage: 'en',
+          text: 'Hello everyone', frameJPEG: 'https://example.invalid/image.jpg', interactionType: 'user', deviceId, userName: 'River', listener: { name: 'Ivy' }, inputLanguage: 'en',
           history: [
             { role: 'user', content: 'Ivy: I am practicing a line.' },
             { role: 'assistant', content: 'Good start.' },
@@ -114,7 +120,7 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     for (let n = 0; n < 5; n++) {
       const included = await send(n === 0
         ? { roundId: randomUUID(), liveSessionId, userName: undefined, text: 'First question after opening',
-          sceneContext: 'likely objects or scene: mug 42%', giftsEnabled: false,
+          sceneContext: 'likely objects or scene: mug 42%', interactionType: 'user', frameJPEG: '/9j/2Q==', giftsEnabled: false,
           recentGifts: [
             { sender: 'Emma', giftName: 'Rose Bouquet', chineseName: '玫瑰花束', liveSecond: 17 },
             { sender: '', giftName: 'Unrecorded Gift', liveSecond: -1 }
@@ -152,6 +158,7 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     assert.equal(mismatch.data.reason, 'language_mismatch');
     assert.match(mismatch.data.answer, /[\u3400-\u9fff]/u);
     assert.equal(mismatch.data.coinBalance, 280);
+    assert.ok(!JSON.stringify(JSON.parse(await readFile(join(directory, 'store.json'), 'utf8'))).includes('/9j/2Q=='));
     const spendingURL = base + '/v1/wallet/spending';
     assert.equal((await fetch(spendingURL)).status, 401);
     const history = await fetch(spendingURL, { headers: { authorization: `Bearer ${credential}` } });

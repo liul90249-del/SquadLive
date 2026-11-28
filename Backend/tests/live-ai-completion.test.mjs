@@ -59,3 +59,31 @@ test('no configured credentials never calls the network', async () => {
   const result = await requestLiveCompletion({ env: {}, messages, fetchImpl: async () => { throw Error('must not call'); } });
   assert.equal(result.reason, 'missing_key'); assert.equal(result.source, 'fallback');
 });
+
+test('a live snapshot goes only to OpenAI and never to the text fallback', async () => {
+  const sceneMessages = [{ role: 'system', content: 'Reply in Chinese' }, ...messages];
+  const frameJPEG = '/9j/2Q==';
+  let attempts = 0;
+  const result = await requestLiveCompletion({ env, messages: sceneMessages, frameJPEG,
+    fetchImpl: async (url, init) => {
+      attempts++;
+      const payload = JSON.parse(init.body);
+      if (attempts === 1) {
+        assert.match(url, /api\.openai\.com/);
+        assert.match(payload.messages[0].content, /current camera still/);
+        assert.deepEqual(payload.messages.at(-1).content, [
+          { type: 'text', text: messages[0].content },
+          { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${frameJPEG}`, detail: 'low' } }
+        ]);
+        assert.equal(payload.store, false);
+        return new Response('unavailable', { status: 503 });
+      }
+      assert.match(url, /api\.deepseek\.com/);
+      assert.deepEqual(payload.messages, sceneMessages);
+      assert.doesNotMatch(init.body, /data:image|camera still/);
+      return success('Text-only reply');
+    }
+  });
+  assert.equal(attempts, 2);
+  assert.equal(result.source, 'deepseek');
+});
