@@ -17,6 +17,10 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
   const wallet = { id: 'paying-wallet', deviceId, coins: 300, createdAt: '2026-01-01T00:00:00Z' };
   await writeFile(join(directory, 'store.json'), JSON.stringify({
     users: { [wallet.id]: wallet },
+    coinTransactions: {
+      old: { id: 'old', userId: wallet.id, type: 'coin_spend', coins: -15, createdAt: '2026-01-01T00:00:00Z' },
+      other: { id: 'other', userId: 'different-wallet', type: 'coin_spend', coins: -25, createdAt: '2026-01-01T00:00:00Z' }
+    },
     aiRoundAccounts: { [wallet.id]: { usage: {}, rounds: {}, firstPracticeDay: '2026-01-01' } },
     partnerAnonymousAccounts: { anon_fixture: { walletUserId: wallet.id, createdAt: wallet.createdAt } },
     partnerAnonymousCredentials: { [createHash('sha256').update(credential).digest('hex')]: 'anon_fixture' }
@@ -26,10 +30,18 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     if (url !== 'https://api.openai.com/v1/chat/completions') throw Error('Unexpected outbound request');
     const body = JSON.parse(init.body);
     if (!body.messages[0].content.includes('profile nickname is "River"')) throw Error('Missing profile nickname');
-    if (body.messages.at(-1).content === 'First question after opening') {
+    if (body.messages.at(-1).content === '你看我戴着眼镜吗') {
+      if (!body.messages[0].content.includes('Required response language code: zh-Hans')) throw Error('Ignored Chinese transcript');
+      if (!body.messages[0].content.includes('eyewear observation: glasses likely')) throw Error('Missing eyewear observation');
+    } else if (body.messages.at(-1).content === 'First question after opening') {
       if (!body.messages[0].content.includes('selected practice scenario: Creator Q&A')) throw Error('Missing opening scenario');
       if (!body.messages[0].content.includes('"sender":"Emma","giftName":"Rose Bouquet","chineseName":"玫瑰花束","liveSecond":17')) throw Error('Missing observed gift event');
       if (body.messages[0].content.includes('Unrecorded Gift')) throw Error('Invalid gift event was read as room context');
+      if (!body.messages[0].content.includes('"likely objects or scene: mug 42%"')) throw Error('Missing current camera observation');
+      if (!body.messages[0].content.includes('Simulated gifts are off.')) throw Error('Missing room gift preference');
+      if (!body.messages[0].content.includes('If the host corrects the observation, follow their correction')) throw Error('Missing guidance for camera corrections');
+    } else {
+      if (!body.messages[0].content.includes('No reliable visual observation is available')) throw Error('Invented a visual observation');
     }
     if (!body.messages[0].content.includes('Never insult')) throw Error('Missing conversation rules');
     if (!body.messages[0].content.includes('[null,"Ava (AI)"]')) throw Error('Missing speaker metadata');
@@ -102,6 +114,7 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
     for (let n = 0; n < 5; n++) {
       const included = await send(n === 0
         ? { roundId: randomUUID(), liveSessionId, userName: undefined, text: 'First question after opening',
+          sceneContext: 'likely objects or scene: mug 42%', giftsEnabled: false,
           recentGifts: [
             { sender: 'Emma', giftName: 'Rose Bouquet', chineseName: '玫瑰花束', liveSecond: 17 },
             { sender: '', giftName: 'Unrecorded Gift', liveSecond: -1 }
@@ -123,11 +136,31 @@ test('legacy AI endpoint returns OpenAI, counts success and preserves provider d
       assert.equal(paid.data.coinBalance, 290);
     }
     const paidStore = JSON.parse(await readFile(join(directory, 'store.json'), 'utf8'));
-    const charges = Object.values(paidStore.coinTransactions).filter(item => item.userId === wallet.id && item.type === 'coin_spend');
+    const charges = Object.values(paidStore.coinTransactions).filter(item => item.userId === wallet.id && item.note === 'AI reply unlock');
     assert.equal(charges.length, 1);
     assert.equal(charges[0].coins, -10);
     assert.equal(charges[0].note, 'AI reply unlock');
     assert.equal(paidStore.users[wallet.id].coins, 290);
+    const automatic = { roundId: randomUUID(), automaticCoinPrice: 10 };
+    for (let retry = 0; retry < 2; retry++) {
+      const result = await send(automatic);
+      assert.equal(result.data.chargedCoins, 10);
+      assert.equal(result.data.coinBalance, 280);
+    }
+    const mismatch = await send({ roundId: randomUUID(), text: '你看我戴着眼镜吗',
+      inputLanguage: 'en', automaticCoinPrice: 10, sceneContext: 'eyewear observation: glasses likely' });
+    assert.equal(mismatch.data.reason, 'language_mismatch');
+    assert.match(mismatch.data.answer, /[\u3400-\u9fff]/u);
+    assert.equal(mismatch.data.coinBalance, 280);
+    const spendingURL = base + '/v1/wallet/spending';
+    assert.equal((await fetch(spendingURL)).status, 401);
+    const history = await fetch(spendingURL, { headers: { authorization: `Bearer ${credential}` } });
+    assert.equal(history.status, 200);
+    const items = await history.json();
+    assert.equal(items.balance, 280);
+    assert.deepEqual(items.entries.map(({kind, coins, balanceAfter}) => [kind, coins, balanceAfter]), [
+      ['ai_reply', 10, 280], ['ai_reply', 10, 290], ['other', 15, undefined]
+    ]);
   } finally {
     child.kill('SIGTERM'); await once(child, 'exit'); await rm(directory, { recursive: true, force: true });
   }

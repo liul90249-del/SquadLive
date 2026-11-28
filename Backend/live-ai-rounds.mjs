@@ -56,8 +56,9 @@ export function createLiveAIRounds({ complete, spend, save, isPremium, now = Dat
 
     if (!previous && body.unlockRound === true) throw failure(409, "Open the reply quote again before unlocking");
     let hasAllowance = remaining(account, user, day, store) > 0;
-    const payApproved = previous?.quoted === true && body.unlockRound === true
-      && body.authorizedCoinPrice === liveAIRoundPolicy.coinPrice;
+    const autoPayApproved = body.automaticCoinPrice === liveAIRoundPolicy.coinPrice;
+    const payApproved = autoPayApproved || (previous?.quoted === true && body.unlockRound === true
+      && body.authorizedCoinPrice === liveAIRoundPolicy.coinPrice);
     if (!hasAllowance && !payApproved) {
       if (!previous) {
         // Quotes never invoke the AI provider. Bound their storage independently of delivered replies.
@@ -77,17 +78,19 @@ export function createLiveAIRounds({ complete, spend, save, isPremium, now = Dat
     }
     // Membership and the wallet can change while waiting for the provider.
     hasAllowance = remaining(account, user, day, store) > 0;
+    let chargedCoins = 0;
     if (hasAllowance) {
       account.usage[day] = Number(account.usage[day] || 0) + 1;
     } else if (payApproved && user.coins >= liveAIRoundPolicy.coinPrice) {
       spend(store, user, liveAIRoundPolicy.coinPrice, operationId, "AI reply unlock");
+      chargedCoins = liveAIRoundPolicy.coinPrice;
     } else {
       account.rounds[id] = { signature, day, quoted: true };
       await save(store);
       return locked(payApproved ? "insufficient_round_coins" : "authorize_round");
     }
     account.firstPracticeDay ||= day;
-    account.rounds[id] = { signature, day, result: { answer: result.answer, source: result.source, model: result.model } };
+    account.rounds[id] = { signature, day, result: { answer: result.answer, source: result.source, model: result.model, chargedCoins } };
     await save(store);
     return response(account.rounds[id].result);
   }

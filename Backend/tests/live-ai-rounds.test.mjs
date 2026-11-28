@@ -103,3 +103,24 @@ test("concurrent requests cannot double-use an allowance", async () => {
   assert.equal((await pending).remainingRounds, 4);
   assert.equal(x.attempts(), 1);
 });
+
+test("automatic spend uses allowance first, honors the agreed price, and only charges for delivered replies", async () => {
+  const x = fixture({ coins: 10 });
+  const auto = { automaticCoinPrice: liveAIRoundPolicy.coinPrice };
+  for (let n = 1; n <= 5; n++) {
+    assert.equal((await x.call(n, auto)).chargedCoins, 0);
+  }
+  assert.equal((await x.call(6, { automaticCoinPrice: 3 })).reason, "authorize_round");
+  assert.equal(x.attempts(), 5);
+  x.provider(async () => ({ source: "fallback", answer: "Free practice" }));
+  assert.equal((await x.call(7, auto)).coinBalance, 10);
+  x.provider(async () => generated);
+  for (let retry = 0; retry < 2; retry++) {
+    const paid = await x.call(8, auto);
+    assert.equal(paid.chargedCoins, 10);
+    assert.equal(paid.coinBalance, 0);
+  }
+  assert.equal((await x.call(9, auto)).reason, "insufficient_round_coins");
+  assert.equal(x.attempts(), 7);
+  assert.equal(Object.keys(x.store.walletOperations).length, 1);
+});
